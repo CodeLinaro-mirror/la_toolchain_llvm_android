@@ -573,7 +573,13 @@ class AndroidConfig(_BaseConfig):
     @property
     def base_llvm_triple(self) -> str:
         """Get base LLVM triple (without API level)."""
-        return f'{self.target_arch.llvm_arch}-linux-android'
+        if self.target_arch == hosts.Arch.ARM:
+            # AndroidARMConfig specifies a "-march=armv7-a" cflag, but including
+            # armv7a in the triple is necessary to build libc++ tests correctly,
+            # which do not allow adding arbitrary cflags.
+            return 'armv7a-linux-androideabi'
+        else:
+            return f'{self.target_arch.llvm_arch}-linux-android'
 
     @property
     def llvm_triple(self) -> str:
