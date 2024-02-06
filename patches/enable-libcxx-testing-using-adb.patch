@@ -2441,7 +2441,7 @@ new file mode 100644
 index 000000000000..6dbcd7b6b2af
 --- /dev/null
 +++ b/libcxx/test/configs/llvm-libc++-android-ndk.cfg.in
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,41 @@
 +# This testing configuration handles running the test suite against LLVM's libc++
 +# using a shared library and an Android-specific rpath.
 +
@@ -2455,7 +2455,9 @@ index 000000000000..6dbcd7b6b2af
 +if target_api is not None:
 +    config.target_triple = re.sub('\d+$', '', config.target_triple) + str(target_api)
 +
-+config.substitutions.append(('%{flags}', ''))
++config.substitutions.append(('%{flags}',
++    '--sysroot @CMAKE_SYSROOT@' if '@CMAKE_SYSROOT@' else ''
++))
 +config.substitutions.append(('%{compile_flags}',
 +    '-nostdinc++ -I %{include} -I %{target-include} -I %{libcxx}/test/support'
 +))
@@ -2474,8 +2476,8 @@ index 000000000000..6dbcd7b6b2af
 +
 +import os, site
 +site.addsitedir(os.path.join('@LIBCXX_SOURCE_DIR@', 'utils'))
-+import libcxx.test.params, libcxx.test.newconfig
-+libcxx.test.newconfig.configure(
++import libcxx.test.params, libcxx.test.config
++libcxx.test.config.configure(
 +    libcxx.test.params.DEFAULT_PARAMETERS,
 +    libcxx.test.features.DEFAULT_FEATURES,
 +    config,
@@ -2858,7 +2860,7 @@ new file mode 100644
 index 000000000000..51c98faad7a2
 --- /dev/null
 +++ b/libcxxabi/test/configs/llvm-libc++abi-android-ndk.cfg.in
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,37 @@
 +# This testing configuration handles running the test suite against LLVM's libc++
 +# using a shared library and an Android-specific rpath.
 +
@@ -2872,7 +2874,9 @@ index 000000000000..51c98faad7a2
 +if target_api is not None:
 +    config.target_triple = re.sub('\d+$', '', config.target_triple) + str(target_api)
 +
-+config.substitutions.append(('%{flags}', ''))
++config.substitutions.append(('%{flags}',
++    '--sysroot @CMAKE_SYSROOT@' if '@CMAKE_SYSROOT@' else ''
++))
 +config.substitutions.append(('%{compile_flags}',
 +    '-nostdinc++ -I %{include} -I %{cxx-include} -I %{cxx-target-include} %{maybe-include-libunwind} -I %{libcxx}/test/support -I %{libcxx}/src -D_LIBCPP_ENABLE_CXX17_REMOVED_UNEXPECTED_FUNCTIONS'
 +))
@@ -2887,8 +2891,8 @@ index 000000000000..51c98faad7a2
 +
 +import os, site
 +site.addsitedir(os.path.join('@LIBCXX_SOURCE_DIR@', 'utils'))
-+import libcxx.test.params, libcxx.test.newconfig
-+libcxx.test.newconfig.configure(
++import libcxx.test.params, libcxx.test.config
++libcxx.test.config.configure(
 +    libcxx.test.params.DEFAULT_PARAMETERS,
 +    libcxx.test.features.DEFAULT_FEATURES,
 +    config,

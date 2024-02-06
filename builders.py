@@ -1137,27 +1137,41 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
     @property
     def cmake_defines(self) -> Dict[str, str]:
+        executor = paths.LLVM_PATH / 'libcxx' / 'utils' / 'adb_run.py'
+
         defines: Dict[str, str] = super().cmake_defines
         defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi'
+
+        # When the libc++ lit tests invoke clang, they set the triple and
+        # sysroot using these generic CMake flags.
+        defines['CMAKE_C_COMPILER_TARGET'] = self._config.llvm_triple
+        defines['CMAKE_CXX_COMPILER_TARGET'] = self._config.llvm_triple
+        defines['CMAKE_SYSROOT'] = self._config.sysroot
+
         defines['LIBCXXABI_ENABLE_SHARED'] = 'OFF'
-        defines['LIBCXXABI_TARGET_TRIPLE'] = self._config.llvm_triple
+        defines['LIBCXXABI_EXECUTOR'] = executor
         if self._config.platform:
             defines['LIBCXXABI_NON_DEMANGLING_TERMINATE'] = 'ON'
             defines['LIBCXXABI_STATIC_DEMANGLE_LIBRARY'] = 'ON'
+            # TODO: Set LIBCXXABI_TEST_CONFIG for the platform libc++.so.
+        else:
+            defines['LIBCXXABI_TEST_CONFIG'] = 'llvm-libc++abi-android-ndk.cfg.in'
 
         defines['LIBCXX_ENABLE_SHARED'] = 'ON'
-        defines['LIBCXX_TARGET_TRIPLE'] = self._config.llvm_triple
         defines['LIBCXX_ENABLE_ABI_LINKER_SCRIPT'] = 'OFF'
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'
         defines['LIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY'] = 'ON'
         defines['LIBCXX_STATIC_OUTPUT_NAME'] = 'c++_static'
+        defines['LIBCXX_EXECUTOR'] = executor
         if self._config.platform:
             defines['LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY'] = 'ON'
+            # TODO: Set LIBCXX_TEST_CONFIG for the platform libc++.so.
         else:
             defines['LIBCXX_SHARED_OUTPUT_NAME'] = 'c++_shared'
             defines['LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY'] = 'OFF'
             defines['LIBCXX_ABI_VERSION'] = '1'
             defines['LIBCXX_ABI_NAMESPACE'] = '__ndk1'
+            defines['LIBCXX_TEST_CONFIG'] = 'llvm-libc++-android-ndk.cfg.in'
 
         # There is a check for ANDROID_NATIVE_API_LEVEL in
         # HandleLLVMOptions.cmake that determines the value of
