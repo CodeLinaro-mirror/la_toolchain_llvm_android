@@ -1,0 +1,202 @@
+From 1b87ebce924e507cbc27c2e0dc623941d16388c9 Mon Sep 17 00:00:00 2001
+From: Yi Kong <yikong@google.com>
+Date: Wed, 7 Feb 2024 17:38:09 +0900
+Subject: [PATCH] [llvm-objcopy] Add --remove-symbol-prefix (#79415)
+
+---
+ llvm/docs/CommandGuide/llvm-objcopy.rst       |  5 ++
+ llvm/include/llvm/ObjCopy/CommonConfig.h      |  1 +
+ llvm/lib/ObjCopy/ConfigManager.cpp            |  4 ++
+ llvm/lib/ObjCopy/ELF/ELFObjcopy.cpp           |  5 ++
+ .../ELF/prefix-symbols-remove.test            | 65 +++++++++++++++++++
+ llvm/tools/llvm-objcopy/ObjcopyOptions.cpp    |  4 ++
+ llvm/tools/llvm-objcopy/ObjcopyOpts.td        |  5 ++
+ 7 files changed, 89 insertions(+)
+ create mode 100644 llvm/test/tools/llvm-objcopy/ELF/prefix-symbols-remove.test
+
+diff --git a/llvm/docs/CommandGuide/llvm-objcopy.rst b/llvm/docs/CommandGuide/llvm-objcopy.rst
+index 6e13cd94b92f..42d11fa17cca 100644
+--- a/llvm/docs/CommandGuide/llvm-objcopy.rst
++++ b/llvm/docs/CommandGuide/llvm-objcopy.rst
+@@ -117,6 +117,11 @@ multiple file formats.
+  If specified, symbol and section names specified by other switches are treated
+  as extended POSIX regular expression patterns.
+ 
++.. option:: --remove-symbol-prefix <prefix>
++
++Remove ``<prefix>`` from the start of every symbol name. No-op for symbols that do
++not start with ``<prefix>``.
++
+ .. option:: --remove-section <section>, -R
+ 
+  Remove the specified section from the output. Can be specified multiple times
+diff --git a/llvm/include/llvm/ObjCopy/CommonConfig.h b/llvm/include/llvm/ObjCopy/CommonConfig.h
+index 386c20aec184..0d9320ec2efd 100644
+--- a/llvm/include/llvm/ObjCopy/CommonConfig.h
++++ b/llvm/include/llvm/ObjCopy/CommonConfig.h
+@@ -218,6 +218,7 @@ struct CommonConfig {
+   uint64_t PadTo = 0;
+   StringRef SplitDWO;
+   StringRef SymbolsPrefix;
++  StringRef SymbolsPrefixRemove;
+   StringRef AllocSectionsPrefix;
+   DiscardType DiscardMode = DiscardType::None;
+ 
+diff --git a/llvm/lib/ObjCopy/ConfigManager.cpp b/llvm/lib/ObjCopy/ConfigManager.cpp
+index 10ece49028f2..e46b595a56dc 100644
+--- a/llvm/lib/ObjCopy/ConfigManager.cpp
++++ b/llvm/lib/ObjCopy/ConfigManager.cpp
+@@ -15,6 +15,7 @@ namespace objcopy {
+ 
+ Expected<const COFFConfig &> ConfigManager::getCOFFConfig() const {
+   if (!Common.SplitDWO.empty() || !Common.SymbolsPrefix.empty() ||
++      !Common.SymbolsPrefixRemove.empty() ||
+       !Common.AllocSectionsPrefix.empty() || !Common.KeepSection.empty() ||
+       !Common.SymbolsToGlobalize.empty() || !Common.SymbolsToKeep.empty() ||
+       !Common.SymbolsToLocalize.empty() || !Common.SymbolsToWeaken.empty() ||
+@@ -33,6 +34,7 @@ Expected<const COFFConfig &> ConfigManager::getCOFFConfig() const {
+ 
+ Expected<const MachOConfig &> ConfigManager::getMachOConfig() const {
+   if (!Common.SplitDWO.empty() || !Common.SymbolsPrefix.empty() ||
++      !Common.SymbolsPrefixRemove.empty() ||
+       !Common.AllocSectionsPrefix.empty() || !Common.KeepSection.empty() ||
+       !Common.SymbolsToGlobalize.empty() || !Common.SymbolsToKeep.empty() ||
+       !Common.SymbolsToLocalize.empty() ||
+@@ -54,6 +56,7 @@ Expected<const MachOConfig &> ConfigManager::getMachOConfig() const {
+ Expected<const WasmConfig &> ConfigManager::getWasmConfig() const {
+   if (!Common.AddGnuDebugLink.empty() || Common.ExtractPartition ||
+       !Common.SplitDWO.empty() || !Common.SymbolsPrefix.empty() ||
++      !Common.SymbolsPrefixRemove.empty() ||
+       !Common.AllocSectionsPrefix.empty() ||
+       Common.DiscardMode != DiscardType::None || !Common.SymbolsToAdd.empty() ||
+       !Common.SymbolsToGlobalize.empty() || !Common.SymbolsToLocalize.empty() ||
+@@ -74,6 +77,7 @@ Expected<const WasmConfig &> ConfigManager::getWasmConfig() const {
+ Expected<const XCOFFConfig &> ConfigManager::getXCOFFConfig() const {
+   if (!Common.AddGnuDebugLink.empty() || Common.ExtractPartition ||
+       !Common.SplitDWO.empty() || !Common.SymbolsPrefix.empty() ||
++      !Common.SymbolsPrefixRemove.empty() ||
+       !Common.AllocSectionsPrefix.empty() ||
+       Common.DiscardMode != DiscardType::None || !Common.AddSection.empty() ||
+       !Common.DumpSection.empty() || !Common.SymbolsToAdd.empty() ||
+diff --git a/llvm/lib/ObjCopy/ELF/ELFObjcopy.cpp b/llvm/lib/ObjCopy/ELF/ELFObjcopy.cpp
+index b6d77d17bae3..36f799446a04 100644
+--- a/llvm/lib/ObjCopy/ELF/ELFObjcopy.cpp
++++ b/llvm/lib/ObjCopy/ELF/ELFObjcopy.cpp
+@@ -329,6 +329,11 @@ static Error updateAndRemoveSymbols(const CommonConfig &Config,
+     if (I != Config.SymbolsToRename.end())
+       Sym.Name = std::string(I->getValue());
+ 
++    if (!Config.SymbolsPrefixRemove.empty() && Sym.Type != STT_SECTION)
++      if (Sym.Name.compare(0, Config.SymbolsPrefixRemove.size(),
++                           Config.SymbolsPrefixRemove) == 0)
++        Sym.Name = Sym.Name.substr(Config.SymbolsPrefixRemove.size());
++
+     if (!Config.SymbolsPrefix.empty() && Sym.Type != STT_SECTION)
+       Sym.Name = (Config.SymbolsPrefix + Sym.Name).str();
+   });
+diff --git a/llvm/test/tools/llvm-objcopy/ELF/prefix-symbols-remove.test b/llvm/test/tools/llvm-objcopy/ELF/prefix-symbols-remove.test
+new file mode 100644
+index 000000000000..59bddb08beb8
+--- /dev/null
++++ b/llvm/test/tools/llvm-objcopy/ELF/prefix-symbols-remove.test
+@@ -0,0 +1,65 @@
++# RUN: yaml2obj %s -o %t
++# RUN: llvm-objcopy --remove-symbol-prefix __pf_ %t %t2
++# RUN: llvm-readelf --symbols %t2 | FileCheck %s
++
++## Show that an empty string is permitted as the argument to
++## --remove-symbol-prefix.
++# RUN: llvm-objcopy --remove-symbol-prefix= %t2 %t3
++# RUN: cmp %t2 %t3
++
++## When both options are present, llvm-objcopy should remove
++## prefixes first, before adding prefixes.
++# RUN: llvm-objcopy --prefix-symbols=__1_ %t %t4
++# RUN: llvm-objcopy --prefix-symbols=__2_ %t %t5
++# RUN: llvm-objcopy --remove-symbol-prefix=__1_ --prefix-symbols=__2_ %t4 %t6
++# RUN: cmp %t5 %t6
++
++## Show that the last --remove-symbol-prefix option wins.
++# RUN: llvm-objcopy --remove-symbol-prefix=__pf_ --remove-symbol-prefix=__ %t %7
++# RUN: llvm-objcopy --remove-symbol-prefix=__ %t %8
++# RUN: cmp %7 %8
++
++!ELF
++FileHeader:
++  Class:           ELFCLASS64
++  Data:            ELFDATA2LSB
++  Type:            ET_REL
++  Machine:         EM_X86_64
++Sections:
++  - Name:            .text
++    Type:            SHT_PROGBITS
++    Flags:           [ SHF_ALLOC, SHF_EXECINSTR ]
++    Address:         0x1000
++    AddressAlign:    0x0000000000000010
++    Size:            64
++Symbols:
++  - Name:     __pf_foo
++    Type:     STT_SECTION
++    Section:  .text
++  - Name:     __pf_bar
++    Type:     STT_FILE
++    Section:  .text
++  - Name:     foobar
++    Type:     STT_FUNC
++    Section:  .text
++    Binding:  STB_GLOBAL
++  - Name:     foo__pf_bar1
++    Type:     STT_FUNC
++    Section:  .text
++    Binding:  STB_GLOBAL
++  - Name:     __pf_foo__pf_bar2
++    Type:     STT_FUNC
++    Section:  .text
++    Binding:  STB_GLOBAL
++  - Name:     undef
++    Binding:  STB_GLOBAL
++
++# CHECK:      Symbol table '.symtab' contains 7 entries:
++# CHECK-NEXT: Name
++# CHECK-NEXT: {{ $}}
++# CHECK-NEXT: __pf_foo
++# CHECK-NEXT: bar
++# CHECK-NEXT: foobar
++# CHECK-NEXT: foo__pf_bar1
++# CHECK-NEXT: foo__pf_bar2
++# CHECK-NEXT: undef
+diff --git a/llvm/tools/llvm-objcopy/ObjcopyOptions.cpp b/llvm/tools/llvm-objcopy/ObjcopyOptions.cpp
+index f15307181fad..394eacacb57e 100644
+--- a/llvm/tools/llvm-objcopy/ObjcopyOptions.cpp
++++ b/llvm/tools/llvm-objcopy/ObjcopyOptions.cpp
+@@ -731,7 +731,11 @@ objcopy::parseObjcopyOptions(ArrayRef<const char *> RawArgsArr,
+         llvm::crc32(arrayRefFromStringRef(Debug->getBuffer()));
+   }
+   Config.SplitDWO = InputArgs.getLastArgValue(OBJCOPY_split_dwo);
++
+   Config.SymbolsPrefix = InputArgs.getLastArgValue(OBJCOPY_prefix_symbols);
++  Config.SymbolsPrefixRemove =
++      InputArgs.getLastArgValue(OBJCOPY_remove_symbol_prefix);
++
+   Config.AllocSectionsPrefix =
+       InputArgs.getLastArgValue(OBJCOPY_prefix_alloc_sections);
+   if (auto Arg = InputArgs.getLastArg(OBJCOPY_extract_partition))
+diff --git a/llvm/tools/llvm-objcopy/ObjcopyOpts.td b/llvm/tools/llvm-objcopy/ObjcopyOpts.td
+index ead8cd28d387..bd041fabbdd7 100644
+--- a/llvm/tools/llvm-objcopy/ObjcopyOpts.td
++++ b/llvm/tools/llvm-objcopy/ObjcopyOpts.td
+@@ -203,6 +203,11 @@ defm dump_section
+ defm prefix_symbols
+     : Eq<"prefix-symbols", "Add <prefix> to the start of every symbol name">,
+       MetaVarName<"prefix">;
++defm remove_symbol_prefix
++    : Eq<"remove-symbol-prefix",
++         "Remove <prefix> from the start of every symbol name. No-op for symbols that do not start "
++         "with <prefix>">,
++      MetaVarName<"prefix">;
+ 
+ defm prefix_alloc_sections
+     : Eq<"prefix-alloc-sections", "Add <prefix> to the start of every allocated section name">,
+-- 
+2.43.0.594.gd9cf4e227d-goog
+

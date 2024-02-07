@@ -408,6 +408,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISCV] Correct copyPhysReg for GPRPF64. (#70419)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/116eb323b15c4bd616775dfb59e2e81badc1453a.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 516802
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"Revert \"Inlining: Run the legacy AlwaysInliner before the regular inliner.\"\""
         },
         "platforms": [
@@ -459,6 +473,20 @@
         "version_range": {
             "from": 510928,
             "until": 518131
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [RISCV] Use Align(8) for the stack temporary created for SPLAT_VECTOR_SPLIT_I64_VL."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/aae30f9e2c25e2a4bada91a290c9beb530a75571.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 518264
         }
     },
     {
@@ -548,29 +576,15 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] [RISCV] Correct copyPhysReg for GPRPF64. (#70419)"
+            "title": "[UPSTREAM] [llvm-objcopy] Add --remove-symbol-prefix (#79415)"
         },
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/116eb323b15c4bd616775dfb59e2e81badc1453a.patch",
+        "rel_patch_path": "cherry/1b87ebce924e507cbc27c2e0dc623941d16388c9.patch",
         "version_range": {
             "from": 510928,
-            "until": 516802
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[UPSTREAM] [RISCV] Use Align(8) for the stack temporary created for SPLAT_VECTOR_SPLIT_I64_VL."
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/aae30f9e2c25e2a4bada91a290c9beb530a75571.patch",
-        "version_range": {
-            "from": 510928,
-            "until": 518264
+            "until": 526891
         }
     },
     {
