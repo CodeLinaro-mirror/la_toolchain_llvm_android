@@ -81,11 +81,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
-        if isinstance(self._config, configs.LinuxMuslConfig):
-            # libcxx builds against libunwind when building for musl
-            proj.add('libunwind')
-        return proj
+        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
 
     @property
     def ldflags(self) -> List[str]:
@@ -163,11 +159,7 @@ class Stage2Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
-        if isinstance(self._config, configs.LinuxMuslConfig):
-            # libcxx builds against libunwind when building for musl
-            proj.add('libunwind')
-        return proj
+        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
 
     @property
     def ld_library_path_env_name(self) -> str:
@@ -1140,7 +1132,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         executor = paths.LLVM_PATH / 'libcxx' / 'utils' / 'adb_run.py'
 
         defines: Dict[str, str] = super().cmake_defines
-        defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi'
+        defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi;libunwind'
 
         # When the libc++ lit tests invoke clang, they set the triple and
         # sysroot using these generic CMake flags.
@@ -1244,7 +1236,7 @@ class WinLibCxxBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines: Dict[str, str] = super().cmake_defines
-        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi'
+        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi;libunwind'
         defines['LLVM_ENABLE_PER_TARGET_RUNTIME_DIR'] = 'ON'
 
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'
