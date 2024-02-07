@@ -310,13 +310,6 @@ class LinuxConfig(_GccConfig):
     def cflags(self) -> List[str]:
         cflags = super().cflags
         if self.is_32_bit and not self.is_musl:
-            # compiler-rt/lib/gwp_asan uses PRIu64 and similar format-specifier macros.
-            # Add __STDC_FORMAT_MACROS so their definition gets included from
-            # inttypes.h.  This explicit flag is only needed here.  64-bit host runtimes
-            # are built in stage1/stage2 and get it from the LLVM CMake configuration.
-            # These are defined unconditionaly in bionic and newer glibc
-            # (https://sourceware.org/git/gitweb.cgi?p=glibc.git;h=1ef74943ce2f114c78b215af57c2ccc72ccdb0b7)
-            cflags.append('-D__STDC_FORMAT_MACROS')
             cflags.append('-march=i686')
         return cflags
 
