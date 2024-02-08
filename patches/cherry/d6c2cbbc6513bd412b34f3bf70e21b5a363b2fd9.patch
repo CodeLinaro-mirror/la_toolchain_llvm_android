@@ -1,0 +1,25 @@
+From d6c2cbbc6513bd412b34f3bf70e21b5a363b2fd9 Mon Sep 17 00:00:00 2001
+From: Yi Kong <yikong@google.com>
+Date: Thu, 8 Feb 2024 07:31:34 +0900
+Subject: [PATCH] Fix test failure if CLANG_VENDOR contains spaces (#81017)
+
+---
+ llvm/utils/UpdateTestChecks/common.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/llvm/utils/UpdateTestChecks/common.py b/llvm/utils/UpdateTestChecks/common.py
+index 0fe0dfc506b0..75c6e4385563 100644
+--- a/llvm/utils/UpdateTestChecks/common.py
++++ b/llvm/utils/UpdateTestChecks/common.py
+@@ -1701,7 +1701,7 @@ def filter_globals_according_to_preference(
+ 
+ METADATA_FILTERS = [
+     (
+-        r"(?<=\")(\w+ )?(\w+ version )[\d.]+(?:[^\" ]*)(?: \([^)]+\))?",
++        r"(?<=\")(.+ )?(\w+ version )[\d.]+(?:[^\" ]*)(?: \([^)]+\))?",
+         r"{{.*}}\2{{.*}}",
+     ),  # preface with glob also, to capture optional CLANG_VENDOR
+     (r'(!DIFile\(filename: ".+", directory: )".+"', r"\1{{.*}}"),
+-- 
+2.43.0.594.gd9cf4e227d-goog
+
