@@ -590,6 +590,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Fix test failure if CLANG_VENDOR contains spaces (#81017)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d6c2cbbc6513bd412b34f3bf70e21b5a363b2fd9.patch",
+        "version_range": {
+            "from": 518518,
+            "until": 526967
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
