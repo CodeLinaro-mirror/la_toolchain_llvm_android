@@ -1056,14 +1056,15 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
     src_dir: Path = paths.LLVM_PATH / 'runtimes'
 
     config_list: List[configs.Config] = (
-        configs.android_configs(platform=True, extra_config={'hwasan': False}) +
-        configs.android_configs(platform=False, extra_config={'hwasan': False})
+        configs.android_configs(platform=True, extra_config={'hwasan': False, 'noexcept': False}) +
+        configs.android_configs(platform=True, extra_config={'hwasan': False, 'noexcept': True}) +
+        configs.android_configs(platform=False, extra_config={'hwasan': False, 'noexcept': False})
     )
 
-    def _hwasan_config(platform: bool) -> configs.Config:
+    def _hwasan_config(platform: bool, noexcept: bool) -> configs.Config:
         result = configs.AndroidAArch64Config()
         result.platform = platform
-        result.extra_config = {'hwasan': True}
+        result.extra_config = {'hwasan': True, 'noexcept': noexcept}
         # Increase the NDK's API level to the minimum API level for HWASan.
         if not platform:
             result.override_api_level = 29
@@ -1072,18 +1073,30 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
     # Use a separate config list so that HWASan libc++ can be built after
     # compiler-rt, so that libc++.so can be linked against the HWASan lib.
     hwasan_config_list: List[configs.Config] = [
-        _hwasan_config(platform=True), _hwasan_config(platform=False)
+        _hwasan_config(platform=True, noexcept=False),
+        _hwasan_config(platform=True, noexcept=True),
+        _hwasan_config(platform=False, noexcept=False),
     ]
 
     @property
     def _is_hwasan(self) -> bool:
         return self._config.extra_config['hwasan']
 
+    # A special build of libc++_static.a with exceptions turned off, for use in
+    # the Bionic loader where ELF TLS isn't available for accessing EH globals.
+    @property
+    def _is_noexcept(self) -> bool:
+        return self._config.extra_config['noexcept']
+
     @property
     def output_dir(self) -> Path:
         old_path = super().output_dir
-        suffix = '-hwasan' if self._is_hwasan else ''
-        return old_path.parent / (old_path.name + suffix)
+        name = old_path.name
+        if self._is_noexcept:
+            name += '-noexcept'
+        if self._is_hwasan:
+            name += '-hwasan'
+        return old_path.parent / name
 
     @property
     def cflags(self) -> list[str]:
@@ -1149,11 +1162,20 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         else:
             defines['LIBCXXABI_TEST_CONFIG'] = 'llvm-libc++abi-android-ndk.cfg.in'
 
-        defines['LIBCXX_ENABLE_SHARED'] = 'ON'
+        if self._is_noexcept:
+            defines['LIBCXX_ENABLE_SHARED'] = 'OFF'
+            defines['LIBCXXABI_ENABLE_EXCEPTIONS'] = 'OFF'
+            defines['LIBCXX_ENABLE_EXCEPTIONS'] = 'OFF'
+            defines['LIBCXX_STATIC_OUTPUT_NAME'] = 'c++_static_noexcept'
+            defines['LIBCXXABI_STATIC_OUTPUT_NAME'] = 'c++abi_noexcept'
+            defines['LIBCXXABI_DEMANGLE_STATIC_OUTPUT_NAME'] = 'c++demangle_noexcept'
+        else:
+            defines['LIBCXX_ENABLE_SHARED'] = 'ON'
+            defines['LIBCXX_STATIC_OUTPUT_NAME'] = 'c++_static'
+
         defines['LIBCXX_ENABLE_ABI_LINKER_SCRIPT'] = 'OFF'
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'
         defines['LIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY'] = 'ON'
-        defines['LIBCXX_STATIC_OUTPUT_NAME'] = 'c++_static'
         defines['LIBCXX_EXECUTOR'] = executor
         if self._config.platform:
             defines['LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY'] = 'ON'
@@ -1177,7 +1199,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         arch = self._config.target_arch
         sysroot_lib = self._config.sysroot / 'usr' / 'lib'
 
-        if not self._is_hwasan:
+        if not self._is_hwasan and not self._is_noexcept:
             # Copy libc++ headers into the NDK+platform sysroot.
             shutil.copytree(self.output_dir / 'include',
                             self._config.sysroot / 'usr' / 'include',
@@ -1203,9 +1225,14 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         # NDK but omit it from the platform because we want to discourage
         # platform developers from using unstable APIs.
         if self._config.platform:
-            kind = 'platform'
-            libs = ['libc++abi.a', 'libc++_static.a', 'libc++.so', 'libc++demangle.a']
+            if self._is_noexcept:
+                kind = 'platform_noexcept'
+                libs = ['libc++abi_noexcept.a', 'libc++_static_noexcept.a', 'libc++demangle_noexcept.a']
+            else:
+                kind = 'platform'
+                libs = ['libc++abi.a', 'libc++_static.a', 'libc++.so', 'libc++demangle.a']
         else:
+            assert not self._is_noexcept
             kind = 'ndk'
             libs = ['libc++abi.a', 'libc++_static.a', 'libc++_shared.so', 'libc++experimental.a']
         if self._is_hwasan:
