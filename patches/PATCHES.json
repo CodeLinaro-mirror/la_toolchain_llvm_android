@@ -604,6 +604,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISCV] Check type is legal before combining mgather to vlse intrinsic (#81107)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/06c89bd59ca2279f76a41e851b7b2df634a6191e.patch",
+        "version_range": {
+            "from": 513157,
+            "until": 527083
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
