@@ -548,6 +548,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[RISCV][ISel] Combine scalable vector add/sub/mul with zero/sign extension (#72340)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4e347b4e38b95bc455d0e620e11ac58fc0172a94.patch",
+        "version_range": {
+            "from": 522809,
+            "until": 522987
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [lld] [MTE] Allow android note for static executables. (#77078)"
         },
         "platforms": [
