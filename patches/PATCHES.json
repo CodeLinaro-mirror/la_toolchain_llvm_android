@@ -576,6 +576,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Fix missing and incorrect push/pop macros (#79204)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7b4622514d232ce5f7110dd8b20d90e81127c467.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 525596
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [llvm-objcopy] Add --remove-symbol-prefix (#79415)"
         },
         "platforms": [
