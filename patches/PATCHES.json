@@ -752,6 +752,20 @@
         "rel_patch_path": "Wasm-omit-64-bit-function-pointer-cast.patch",
         "version_range": {
             "from": 487747,
+            "until": 510927
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Support WASM as native IR"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Support-for-WASM-as-native-IR.patch",
+        "version_range": {
+            "from": 510928,
             "until": null
         }
     },

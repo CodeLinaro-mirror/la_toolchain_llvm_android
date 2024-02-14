@@ -1,0 +1,263 @@
+From fcd3b13ab6193d93ded8f042c36967839026b514 Mon Sep 17 00:00:00 2001
+From: Matthias Blume <blume@google.com>
+Date: Tue, 13 Feb 2024 15:25:05 -0600
+Subject: [PATCH] Support WASM as a native IR.
+
+Includes supporting code generation changes,
+all gated on the new target triple
+wasm64-unknown-unknown-nativeandroid:
+
+  * Varargs support.
+  * Suppression of the 64->32 bit function pointer cast.
+
+Change-Id: I486416f60f02600ede4aa2cfa6e5fd643d1dec2c
+---
+ clang/lib/Basic/Targets/WebAssembly.h         |   3 +
+ llvm/include/llvm/TargetParser/Triple.h       |   7 ++
+ .../WebAssembly/WebAssemblyFastISel.cpp       |   3 +-
+ .../WebAssembly/WebAssemblyISelLowering.cpp   | 109 ++++++++++++++----
+ .../WebAssembly/WebAssemblyTargetMachine.cpp  |  12 +-
+ llvm/lib/TargetParser/Triple.cpp              |   2 +
+ 6 files changed, 106 insertions(+), 30 deletions(-)
+
+diff --git a/clang/lib/Basic/Targets/WebAssembly.h b/clang/lib/Basic/Targets/WebAssembly.h
+index 83b1711f9fdf..4ad7d000bc79 100644
+--- a/clang/lib/Basic/Targets/WebAssembly.h
++++ b/clang/lib/Basic/Targets/WebAssembly.h
+@@ -202,6 +202,9 @@ public:
+     if (T.isOSEmscripten())
+       resetDataLayout("e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-f128:64-n32:64-"
+                       "S128-ni:1:10:20");
++    else if (T.isNativeAndroid())
++      resetDataLayout("e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-f128:64-n32:64-"
++                      "S64-ni:1:10:20");
+     else
+       resetDataLayout(
+           "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20");
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index fce3ab69d533..5934d4ebae80 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -270,6 +270,11 @@ public:
+     Callable,
+     Mesh,
+     Amplification,
++    // As in wasm64-unknown-unknown-nativeandroid.
++    // Turns off 64->32 function pointer cast on indirect
++    // lookup and compiles varargs calls using intrinsics
++    // for varargs allocation:
++    NativeAndroid,
+     OpenHOS,
+     LastEnvironmentType = OpenHOS
+   };
+@@ -750,6 +755,8 @@ public:
+ 
+   bool isOSLiteOS() const { return getOS() == Triple::LiteOS; }
+ 
++  bool isNativeAndroid() const { return getEnvironment() == Triple::NativeAndroid; }
++
+   /// Tests whether the target is DXIL.
+   bool isDXIL() const {
+     return getArch() == Triple::dxil;
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
+index 37abbb072cdd..51b3f4cb1296 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
+@@ -885,7 +885,8 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
+     // CALL_INDIRECT takes an i32, but in wasm64 we represent function pointers
+     // as 64-bit for uniformity with other pointer types.
+     // See also: WebAssemblyISelLowering.cpp: LowerCallResults
+-    if (Subtarget->hasAddr64()) {
++    if (!Subtarget->getTargetTriple().isNativeAndroid() &&
++        Subtarget->hasAddr64()) {
+       auto Wrap = BuildMI(*FuncInfo.MBB, std::prev(FuncInfo.InsertPt), MIMD,
+                           TII.get(WebAssembly::I32_WRAP_I64));
+       Register Reg32 = createResultReg(&WebAssembly::I32RegClass);
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
+index fd154a90edef..da3cc482cfe2 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
+@@ -580,7 +580,8 @@ LowerCallResults(MachineInstr &CallResults, DebugLoc DL, MachineBasicBlock *BB,
+   // CALL_INDIRECT takes an i32, but in wasm64 we represent function pointers
+   // as 64-bit for uniformity with other pointer types.
+   // See also: WebAssemblyFastISel::selectCall
+-  if (IsIndirect && MF.getSubtarget<WebAssemblySubtarget>().hasAddr64()) {
++  if (!Subtarget->getTargetTriple().isNativeAndroid() && IsIndirect &&
++      MF.getSubtarget<WebAssemblySubtarget>().hasAddr64()) {
+     Register Reg32 =
+         MF.getRegInfo().createVirtualRegister(&WebAssembly::I32RegClass);
+     auto &FnPtr = CallParams.getOperand(0);
+@@ -1003,6 +1004,22 @@ static bool callingConvSupported(CallingConv::ID CallConv) {
+          CallConv == CallingConv::Swift;
+ }
+ 
++static Function *getVarArgsAllocator(std::string &Name, ArrayRef<Type *> ArgTys,
++                                     Module *M) {
++  Function *F = M->getFunction(Name);
++  if (F != nullptr) {
++    return F;
++  }
++  PointerType *ResTy = PointerType::getUnqual(M->getContext());
++  FunctionType *Ty = FunctionType::get(ResTy, ArgTys, false);
++  F = Function::Create(Ty, GlobalValue::ExternalLinkage, Name, M);
++  llvm::AttrBuilder B(M->getContext());
++  B.addAttribute("wasm-import-module", "env");
++  B.addAttribute("wasm-import-name", F->getName());
++  F->addFnAttrs(B);
++  return F;
++}
++
+ SDValue
+ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+                                      SmallVectorImpl<SDValue> &InVals) const {
+@@ -1170,30 +1187,72 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+ 
+   unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
+ 
+-  SDValue FINode;
+-  if (IsVarArg && NumBytes) {
+-    // For non-fixed arguments, next emit stores to store the argument values
+-    // to the stack buffer at the offsets computed above.
+-    int FI = MF.getFrameInfo().CreateStackObject(NumBytes,
+-                                                 Layout.getStackAlignment(),
+-                                                 /*isSS=*/false);
+-    unsigned ValNo = 0;
+-    SmallVector<SDValue, 8> Chains;
+-    for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
+-      assert(ArgLocs[ValNo].getValNo() == ValNo &&
+-             "ArgLocs should remain in order and only hold varargs args");
+-      unsigned Offset = ArgLocs[ValNo++].getLocMemOffset();
+-      FINode = DAG.getFrameIndex(FI, getPointerTy(Layout));
+-      SDValue Add = DAG.getNode(ISD::ADD, DL, PtrVT, FINode,
+-                                DAG.getConstant(Offset, DL, PtrVT));
+-      Chains.push_back(
+-          DAG.getStore(Chain, DL, Arg, Add,
+-                       MachinePointerInfo::getFixedStack(MF, FI, Offset)));
++  const GlobalValue *GV = (Callee->getOpcode() == ISD::GlobalAddress)
++                            ? cast<GlobalAddressSDNode>(Callee)->getGlobal()
++                            : nullptr;
++
++  SDValue VANode;  // represents variable portion of argument list
++  if (IsVarArg) {
++    if (Subtarget->getTargetTriple().isNativeAndroid()) {
++      // Use an intrinsic to allocate the variable portion of the arguments.
++      // First make sure we have a module:
++      Module *M = MF.getFunction().getParent();
++      if (M == nullptr) {
++        fail(DL, DAG, "varargs intrinsics require a module");
++      }
++
++      // Obtain the correctly typed intrinsic.
++      SmallVector<Type *, 16> ArgTypes;
++      std::string AllocatorFunName = "__wasm_allocate_varargs";
++      for (SDValue &Arg : drop_begin(OutVals, NumFixedArgs)) {
++        EVT VT = Arg.getValueType();
++        AllocatorFunName += "_" + VT.getEVTString();
++        ArgTypes.push_back(VT.getTypeForEVT(*DAG.getContext()));
++      }
++      if (GV && GV->hasName()) {
++        AllocatorFunName += "%" + GV->getName().str();
++      }
++      Function *AllocatorFun =
++          getVarArgsAllocator(AllocatorFunName, ArgTypes, M);
++
++      // Construct the call of the intrinsic.
++      SmallVector<SDValue, 16> VaOps;
++      VaOps.push_back(Chain);
++      VaOps.push_back(DAG.getGlobalAddress(AllocatorFun, DL, PtrVT));
++      for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
++        VaOps.push_back(Arg);
++      }
++      SDVTList VaInTyList = DAG.getVTList({PtrVT, MVT::Other});
++      SDValue VaRes = DAG.getNode(WebAssemblyISD::CALL, DL, VaInTyList, VaOps);
++
++      // Result is the pointer to allocated varargs.  The secord result
++      // is the chain.
++      VANode = VaRes.getValue(0);
++      Chain = VaRes.getValue(1);
++    } else if (NumBytes) {
++      // For non-fixed arguments, next emit stores to store the argument values
++      // to the stack buffer at the offsets computed above.
++      int FI = MF.getFrameInfo().CreateStackObject(NumBytes,
++                                                   Layout.getStackAlignment(),
++                                                   /*isSS=*/false);
++      unsigned ValNo = 0;
++      SmallVector<SDValue, 8> Chains;
++      for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
++        assert(ArgLocs[ValNo].getValNo() == ValNo &&
++               "ArgLocs should remain in order and only hold varargs args");
++        unsigned Offset = ArgLocs[ValNo++].getLocMemOffset();
++        VANode = DAG.getFrameIndex(FI, getPointerTy(Layout));
++        SDValue Add = DAG.getNode(ISD::ADD, DL, PtrVT, VANode,
++                                  DAG.getConstant(Offset, DL, PtrVT));
++        Chains.push_back(
++            DAG.getStore(Chain, DL, Arg, Add,
++                         MachinePointerInfo::getFixedStack(MF, FI, Offset)));
++      }
++      if (!Chains.empty())
++        Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
++    } else {
++      VANode = DAG.getIntPtrConstant(0, DL);
+     }
+-    if (!Chains.empty())
+-      Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
+-  } else if (IsVarArg) {
+-    FINode = DAG.getIntPtrConstant(0, DL);
+   }
+ 
+   if (Callee->getOpcode() == ISD::GlobalAddress) {
+@@ -1219,7 +1278,7 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+              IsVarArg ? OutVals.begin() + NumFixedArgs : OutVals.end());
+   // Add a pointer to the vararg buffer.
+   if (IsVarArg)
+-    Ops.push_back(FINode);
++    Ops.push_back(VANode);
+ 
+   SmallVector<EVT, 8> InTys;
+   for (const auto &In : Ins) {
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
+index 44ef14e13d2b..0c3c83917919 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
+@@ -111,10 +111,14 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
+     : LLVMTargetMachine(
+           T,
+           TT.isArch64Bit()
+-              ? (TT.isOSEmscripten() ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
+-                                       "f128:64-n32:64-S128-ni:1:10:20"
+-                                     : "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
+-                                       "n32:64-S128-ni:1:10:20")
++              ? (TT.isOSEmscripten()
++                     ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                       "f128:64-n32:64-S128-ni:1:10:20"
++                     : (TT.isNativeAndroid()
++                            ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                              "f128:64-n32:64-S64-ni:1:10:20"
++                            : "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                              "n32:64-S128-ni:1:10:20"))
+               : (TT.isOSEmscripten() ? "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-"
+                                        "f128:64-n32:64-S128-ni:1:10:20"
+                                      : "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-"
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index 5eea4acd1c6b..ea77d70b1c49 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -287,6 +287,7 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
+   case Callable: return "callable";
+   case Mesh: return "mesh";
+   case Amplification: return "amplification";
++  case NativeAndroid: return "nativeandroid";
+   case OpenHOS: return "ohos";
+   }
+ 
+@@ -650,6 +651,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
+       .StartsWith("callable", Triple::Callable)
+       .StartsWith("mesh", Triple::Mesh)
+       .StartsWith("amplification", Triple::Amplification)
++      .StartsWith("nativeandroid", Triple::NativeAndroid)
+       .StartsWith("ohos", Triple::OpenHOS)
+       .Default(Triple::UnknownEnvironment);
+ }
+-- 
+2.43.0.687.g38aa6559b0-goog
+
