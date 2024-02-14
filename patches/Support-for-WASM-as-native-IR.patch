@@ -1,24 +1,73 @@
-From fcd3b13ab6193d93ded8f042c36967839026b514 Mon Sep 17 00:00:00 2001
+From 368c9afb590545ea238af62d0efd7f164a785685 Mon Sep 17 00:00:00 2001
 From: Matthias Blume <blume@google.com>
-Date: Tue, 13 Feb 2024 15:25:05 -0600
-Subject: [PATCH] Support WASM as a native IR.
+Date: Fri, 9 Feb 2024 11:45:11 -0600
+Subject: [PATCH] Squashed commit of the following:
 
-Includes supporting code generation changes,
-all gated on the new target triple
-wasm64-unknown-unknown-nativeandroid:
+commit 596898a763140d335aba3d20c4f84683cdbea205
+Author: Matthias Blume <blume@google.com>
+Date:   Thu Feb 8 11:55:37 2024 -0600
 
-  * Varargs support.
-  * Suppression of the 64->32 bit function pointer cast.
+    Zero-args varargs handling.
 
-Change-Id: I486416f60f02600ede4aa2cfa6e5fd643d1dec2c
+    Now uses a varargs allocator intrinsic also for the case where
+    the variable portion is empty.
+
+commit 370fa6d4d66016acf1e0fb07e71eda94a2cbfd7f
+Author: Matthias Blume <blume@google.com>
+Date:   Tue Feb 6 16:00:55 2024 -0600
+
+    Introduces target triple (quadruple?) for native WASM.
+
+    --target=wasm64-unknown-emscripten-nativeandroid
+
+commit 9c44e5009b8b04a2846fdcdb07e5d050e96fc05d
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 15:48:15 2024 -0600
+
+    Some mostly cosmetic improvements.
+
+commit 215fd4a72b44db90cd776d55c8ae68ae3a1c4bfa
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 14:44:26 2024 -0600
+
+    Add missing call to addFnAttrs.
+
+commit 72ea3ee7be301602132243bba3d02ad5f486117e
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 12:59:12 2024 -0600
+
+    Varargs allocation using intrisics.
+
+    Flag-controlled (-mllvm -intrinsic-varargs-allocation).
+    Type-specific intrinsics of the form __wasm_allocate_varargs.*
+    get generated on demand.
+
+commit e7a749538d4a6c52790381bc1e8f196879acb386
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Jan 29 11:35:28 2024 -0600
+
+    Omit function pointer 32-bit cast patch.
+
+Data layout logic for nativeandroid.
+
+Don't nest it under isOSEmscripten() since we are not actually
+using emscripten as our "OS".
+
+Adjust stack alignment to be 8-byte (64 bit) to be conservative.
+(We expect alloca() to return 8-byte aligned pointers because
+that is the strictest requirement across all types.)
+
+Restore original code ordering in varargs code.
+
+Should leave original behavior unchanged.
 ---
  clang/lib/Basic/Targets/WebAssembly.h         |   3 +
- llvm/include/llvm/TargetParser/Triple.h       |   7 ++
+ llvm/include/llvm/TargetParser/Triple.h       |   8 ++
  .../WebAssembly/WebAssemblyFastISel.cpp       |   3 +-
  .../WebAssembly/WebAssemblyISelLowering.cpp   | 109 ++++++++++++++----
  .../WebAssembly/WebAssemblyTargetMachine.cpp  |  12 +-
  llvm/lib/TargetParser/Triple.cpp              |   2 +
- 6 files changed, 106 insertions(+), 30 deletions(-)
+ 6 files changed, 107 insertions(+), 30 deletions(-)
 
 diff --git a/clang/lib/Basic/Targets/WebAssembly.h b/clang/lib/Basic/Targets/WebAssembly.h
 index 83b1711f9fdf..4ad7d000bc79 100644
@@ -35,22 +84,23 @@ index 83b1711f9fdf..4ad7d000bc79 100644
        resetDataLayout(
            "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20");
 diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
-index fce3ab69d533..5934d4ebae80 100644
+index e73207021392..d18707cfd7a4 100644
 --- a/llvm/include/llvm/TargetParser/Triple.h
 +++ b/llvm/include/llvm/TargetParser/Triple.h
-@@ -270,6 +270,11 @@ public:
-     Callable,
-     Mesh,
-     Amplification,
+@@ -250,6 +250,12 @@ public:
+     MuslEABIHF,
+     MuslX32,
+ 
 +    // As in wasm64-unknown-unknown-nativeandroid.
 +    // Turns off 64->32 function pointer cast on indirect
 +    // lookup and compiles varargs calls using intrinsics
 +    // for varargs allocation:
 +    NativeAndroid,
-     OpenHOS,
-     LastEnvironmentType = OpenHOS
-   };
-@@ -750,6 +755,8 @@ public:
++
+     MSVC,
+     Itanium,
+     Cygnus,
+@@ -772,6 +778,8 @@ public:
  
    bool isOSLiteOS() const { return getOS() == Triple::LiteOS; }
  
@@ -60,10 +110,10 @@ index fce3ab69d533..5934d4ebae80 100644
    bool isDXIL() const {
      return getArch() == Triple::dxil;
 diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
-index 37abbb072cdd..51b3f4cb1296 100644
+index 1c62290704fe..cd3d9b0f7c19 100644
 --- a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
 +++ b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
-@@ -885,7 +885,8 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
+@@ -889,7 +889,8 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
      // CALL_INDIRECT takes an i32, but in wasm64 we represent function pointers
      // as 64-bit for uniformity with other pointer types.
      // See also: WebAssemblyISelLowering.cpp: LowerCallResults
@@ -74,7 +124,7 @@ index 37abbb072cdd..51b3f4cb1296 100644
                            TII.get(WebAssembly::I32_WRAP_I64));
        Register Reg32 = createResultReg(&WebAssembly::I32RegClass);
 diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
-index fd154a90edef..da3cc482cfe2 100644
+index 7c47790d1e35..baff53953d88 100644
 --- a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
 +++ b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
 @@ -580,7 +580,8 @@ LowerCallResults(MachineInstr &CallResults, DebugLoc DL, MachineBasicBlock *BB,
@@ -216,10 +266,10 @@ index fd154a90edef..da3cc482cfe2 100644
    SmallVector<EVT, 8> InTys;
    for (const auto &In : Ins) {
 diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
-index 44ef14e13d2b..0c3c83917919 100644
+index 42043a7b8680..d47839fbe856 100644
 --- a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
 +++ b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
-@@ -111,10 +111,14 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
+@@ -117,10 +117,14 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
      : LLVMTargetMachine(
            T,
            TT.isArch64Bit()
@@ -239,25 +289,25 @@ index 44ef14e13d2b..0c3c83917919 100644
                                         "f128:64-n32:64-S128-ni:1:10:20"
                                       : "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-"
 diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
-index 5eea4acd1c6b..ea77d70b1c49 100644
+index 96dbd5ca673b..e45f8570e4c8 100644
 --- a/llvm/lib/TargetParser/Triple.cpp
 +++ b/llvm/lib/TargetParser/Triple.cpp
-@@ -287,6 +287,7 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
-   case Callable: return "callable";
-   case Mesh: return "mesh";
-   case Amplification: return "amplification";
+@@ -299,6 +299,7 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
+   case GNUF64: return "gnuf64";
+   case GNUSF: return "gnusf";
+   case GNUX32: return "gnux32";
 +  case NativeAndroid: return "nativeandroid";
-   case OpenHOS: return "ohos";
-   }
- 
-@@ -650,6 +651,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
-       .StartsWith("callable", Triple::Callable)
-       .StartsWith("mesh", Triple::Mesh)
-       .StartsWith("amplification", Triple::Amplification)
+   case GNUILP32: return "gnu_ilp32";
+   case Itanium: return "itanium";
+   case MSVC: return "msvc";
+@@ -672,6 +673,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
+       .StartsWith("musleabihf", Triple::MuslEABIHF)
+       .StartsWith("musleabi", Triple::MuslEABI)
+       .StartsWith("muslx32", Triple::MuslX32)
 +      .StartsWith("nativeandroid", Triple::NativeAndroid)
-       .StartsWith("ohos", Triple::OpenHOS)
-       .Default(Triple::UnknownEnvironment);
- }
+       .StartsWith("musl", Triple::Musl)
+       .StartsWith("msvc", Triple::MSVC)
+       .StartsWith("itanium", Triple::Itanium)
 -- 
 2.43.0.687.g38aa6559b0-goog
 
