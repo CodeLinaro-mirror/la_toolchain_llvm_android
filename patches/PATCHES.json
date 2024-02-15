@@ -352,6 +352,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Fix non-determinism in debuginfo (#68332)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5619e1b813f3fa7d67b7a85a177d72ccb5d709cb.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 514979
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[SCEV] Don't invalidate past dependency-breaking instructions\""
         },
         "platforms": [

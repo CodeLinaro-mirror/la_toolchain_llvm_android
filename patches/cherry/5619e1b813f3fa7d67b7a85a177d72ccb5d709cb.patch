@@ -1,0 +1,84 @@
+From 5619e1b813f3fa7d67b7a85a177d72ccb5d709cb Mon Sep 17 00:00:00 2001
+From: Paul Kirth <paulkirth@google.com>
+Date: Fri, 6 Oct 2023 15:21:20 -0700
+Subject: [PATCH] Fix non-determinism in debuginfo (#68332)
+
+Assignment tracking iterates over a SmallSet when adding metadata, which
+eventually results in debug metadata being added to the module in
+non-deterministic order.
+
+As reported in #63921, we saw some cases where DWARF DebugLoc entries
+could have their order reversed, even though there was no functional
+difference.
+
+This patch replaces the `SmallSet` with a `SmallVector`, and adds the
+required `DenseMapInfo` specialization to make the ordering
+deterministic.
+
+Fixes #63921
+---
+ llvm/include/llvm/IR/DebugInfo.h | 29 ++++++++++++++++++++++++++++-
+ 1 file changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/llvm/include/llvm/IR/DebugInfo.h b/llvm/include/llvm/IR/DebugInfo.h
+index 26a7cfbbb350..92beebed8ad5 100644
+--- a/llvm/include/llvm/IR/DebugInfo.h
++++ b/llvm/include/llvm/IR/DebugInfo.h
+@@ -16,7 +16,9 @@
+ #ifndef LLVM_IR_DEBUGINFO_H
+ #define LLVM_IR_DEBUGINFO_H
+ 
++#include "llvm/ADT/DenseMapInfo.h"
+ #include "llvm/ADT/STLExtras.h"
++#include "llvm/ADT/SetVector.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/ADT/SmallSet.h"
+ #include "llvm/ADT/SmallVector.h"
+@@ -259,11 +261,35 @@ struct VarRecord {
+   }
+ };
+ 
++} // namespace at
++
++template <> struct DenseMapInfo<at::VarRecord> {
++  static inline at::VarRecord getEmptyKey() {
++    return at::VarRecord(DenseMapInfo<DILocalVariable *>::getEmptyKey(),
++                         DenseMapInfo<DILocation *>::getEmptyKey());
++  }
++
++  static inline at::VarRecord getTombstoneKey() {
++    return at::VarRecord(DenseMapInfo<DILocalVariable *>::getTombstoneKey(),
++                         DenseMapInfo<DILocation *>::getTombstoneKey());
++  }
++
++  static unsigned getHashValue(const at::VarRecord &Var) {
++    return hash_combine(Var.Var, Var.DL);
++  }
++
++  static bool isEqual(const at::VarRecord &A, const at::VarRecord &B) {
++    return A == B;
++  }
++};
++
++namespace at {
+ /// Map of backing storage to a set of variables that are stored to it.
+ /// TODO: Backing storage shouldn't be limited to allocas only. Some local
+ /// variables have their storage allocated by the calling function (addresses
+ /// passed in with sret & byval parameters).
+-using StorageToVarsMap = DenseMap<const AllocaInst *, SmallSet<VarRecord, 2>>;
++using StorageToVarsMap =
++    DenseMap<const AllocaInst *, SmallSetVector<VarRecord, 2>>;
+ 
+ /// Track assignments to \p Vars between \p Start and \p End.
+ 
+@@ -314,6 +340,7 @@ public:
+ 
+ /// Return true if assignment tracking is enabled for module \p M.
+ bool isAssignmentTrackingEnabled(const Module &M);
++
+ } // end namespace llvm
+ 
+ #endif // LLVM_IR_DEBUGINFO_H
+-- 
+2.43.0.687.g38aa6559b0-goog
+
