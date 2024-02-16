@@ -1,0 +1,36 @@
+From 4967d98eda48bed4a6f382d240f5a33177bc654c Mon Sep 17 00:00:00 2001
+From: Heejin Ahn <aheejin@gmail.com>
+Date: Tue, 16 Jan 2024 05:48:50 -0800
+Subject: [PATCH] [libunwind][WebAssembly] Fix libunwind.cpp guard (#78230)
+
+This should have been `&&`, meaning neither SjLj nor Wasm uses this
+file.
+---
+ libunwind/src/libunwind.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libunwind/src/libunwind.cpp b/libunwind/src/libunwind.cpp
+index 723c8ceb5c8c..217dde909863 100644
+--- a/libunwind/src/libunwind.cpp
++++ b/libunwind/src/libunwind.cpp
+@@ -26,7 +26,7 @@
+ #include <sanitizer/asan_interface.h>
+ #endif
+ 
+-#if !defined(__USING_SJLJ_EXCEPTIONS__) || !defined(__USING_WASM_EXCEPTIONS__)
++#if !defined(__USING_SJLJ_EXCEPTIONS__) && !defined(__USING_WASM_EXCEPTIONS__)
+ #include "AddressSpace.hpp"
+ #include "UnwindCursor.hpp"
+ 
+@@ -347,7 +347,7 @@ void __unw_remove_dynamic_eh_frame_section(unw_word_t eh_frame_start) {
+ }
+ 
+ #endif // defined(_LIBUNWIND_SUPPORT_DWARF_UNWIND)
+-#endif // !defined(__USING_SJLJ_EXCEPTIONS__) ||
++#endif // !defined(__USING_SJLJ_EXCEPTIONS__) &&
+        // !defined(__USING_WASM_EXCEPTIONS__)
+ 
+ #ifdef __APPLE__
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+
