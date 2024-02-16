@@ -590,6 +590,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libunwind][WebAssembly] Fix libunwind.cpp guard (#78230)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4967d98eda48bed4a6f382d240f5a33177bc654c.patch",
+        "version_range": {
+            "from": 520136,
+            "until": 524265
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix MFS warning format"
         },
         "platforms": [
