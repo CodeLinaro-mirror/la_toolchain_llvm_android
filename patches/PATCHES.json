@@ -604,6 +604,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Driver] Add -fandroid-pad-segment/-fno-android-pad-segment (#77244)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5133a8f5590d74d9d15631742a3d84f978394dbd.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 524498
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix MFS warning format"
         },
         "platforms": [

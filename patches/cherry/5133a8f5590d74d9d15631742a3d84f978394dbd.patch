@@ -1,0 +1,96 @@
+From 5133a8f5590d74d9d15631742a3d84f978394dbd Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Wed, 17 Jan 2024 14:39:28 -0800
+Subject: [PATCH] [Driver] Add -fandroid-pad-segment/-fno-android-pad-segment
+ (#77244)
+
+-fandroid-pad-segment is an Android-specific opt-in option that
+links in crt_pad_segment.o (beside other crt*.o relocatable files).
+
+crt_pad_segment.o contains a note section, which will be included in the
+linker-created PT_NOTE segment. This PT_NOTE tell Bionic that: when
+create a map for a PT_LOAD segment, extend the end to cover the gap so
+that we will have fewer kernel 'struct vm_area_struct' objects when
+page_size < MAXPAGESIZE.
+
+See also https://sourceware.org/bugzilla/show_bug.cgi?id=31076
+
+Link: https://r.android.com/2902180
+---
+ clang/include/clang/Driver/Options.td         |  5 +++++
+ clang/lib/Driver/ToolChains/Gnu.cpp           |  5 +++++
+ .../sysroot/usr/lib/crt_pad_segment.o         |  0
+ clang/test/Driver/linux-ld.c                  | 19 ++++++++++++++++++-
+ 4 files changed, 28 insertions(+), 1 deletion(-)
+ create mode 100644 clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
+
+diff --git a/clang/include/clang/Driver/Options.td b/clang/include/clang/Driver/Options.td
+index a4a988c71ec4..e4fdad8265c8 100644
+--- a/clang/include/clang/Driver/Options.td
++++ b/clang/include/clang/Driver/Options.td
+@@ -6298,6 +6298,11 @@ def fno_sycl : Flag<["-"], "fno-sycl">,
+   Visibility<[ClangOption, CLOption]>,
+   Group<sycl_Group>, HelpText<"Disables SYCL kernels compilation for device">;
+ 
++// OS-specific options
++let Flags = [TargetSpecific] in {
++defm android_pad_segment : BooleanFFlag<"android-pad-segment">, Group<f_Group>;
++} // let Flags = [TargetSpecific]
++
+ //===----------------------------------------------------------------------===//
+ // FLangOption + NoXarchOption
+ //===----------------------------------------------------------------------===//
+diff --git a/clang/lib/Driver/ToolChains/Gnu.cpp b/clang/lib/Driver/ToolChains/Gnu.cpp
+index 330b103efdd6..e5e1b1d77269 100644
+--- a/clang/lib/Driver/ToolChains/Gnu.cpp
++++ b/clang/lib/Driver/ToolChains/Gnu.cpp
+@@ -508,6 +508,11 @@ void tools::gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+ 
+     // Add crtfastmath.o if available and fast math is enabled.
+     ToolChain.addFastMathRuntimeIfAvailable(Args, CmdArgs);
++
++    if (isAndroid && Args.hasFlag(options::OPT_fandroid_pad_segment,
++                                  options::OPT_fno_android_pad_segment, false))
++      CmdArgs.push_back(
++          Args.MakeArgString(ToolChain.GetFilePath("crt_pad_segment.o")));
+   }
+ 
+   Args.addAllArgs(CmdArgs, {options::OPT_L, options::OPT_u});
+diff --git a/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o b/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
+new file mode 100644
+index 000000000000..e69de29bb2d1
+@@ -0,0 +1 @@
++some text to retain this file when applying this patch with `patch -E`.
+diff --git a/clang/test/Driver/linux-ld.c b/clang/test/Driver/linux-ld.c
+index d5cc3103a3a7..b8efd64cd91f 100644
+--- a/clang/test/Driver/linux-ld.c
++++ b/clang/test/Driver/linux-ld.c
+@@ -1347,7 +1347,24 @@
+ // RUN:     --sysroot=%S/Inputs/basic_android_tree/sysroot \
+ // RUN:   | FileCheck --check-prefix=CHECK-ANDROID-PTHREAD-LINK %s
+ // CHECK-ANDROID-PTHREAD-LINK-NOT: argument unused during compilation: '-pthread'
+-//
++
++/// Check -fandroid-pad-segment.
++// RUN: %clang -### %s --target=aarch64-linux-android -rtlib=platform --unwindlib=platform \
++// RUN:   --gcc-toolchain="" --sysroot=%S/Inputs/basic_android_tree/sysroot \
++// RUN:   -fandroid-pad-segment 2>&1 | FileCheck --check-prefix=CHECK-ANDROID-PAD-PHDR %s
++// CHECK-ANDROID-PAD-PHDR: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
++// CHECK-ANDROID-PAD-PHDR: "[[SYSROOT]]/usr/lib/crtbegin_dynamic.o" "[[SYSROOT]]/usr/lib/crt_pad_segment.o"
++
++// RUN: %clang -### %s --target=aarch64-linux-android -rtlib=platform --unwindlib=platform \
++// RUN:   --gcc-toolchain="" --sysroot=%S/Inputs/basic_android_tree/sysroot \
++// RUN:   -fandroid-pad-segment -fno-android-pad-segment 2>&1 | FileCheck --check-prefix=CHECK-NO-ANDROID-PAD-PHDR %s
++// CHECK-NO-ANDROID-PAD-PHDR: "{{.*}}ld{{(.exe)?}}" "--sysroot=[[SYSROOT:[^"]+]]"
++// CHECK-NO-ANDROID-PAD-PHDR: "[[SYSROOT]]/usr/lib/crtbegin_dynamic.o"
++// CHECK-NO-ANDROID-PAD-PHDR-NOT: crt_pad_segment.o"
++
++// RUN: not %clang -### %s --target=aarch64-linux -fandroid-pad-segment 2>&1 | FileCheck --check-prefix=ERR-ANDROID-PAD-EHDR %s
++// ERR-ANDROID-PAD-EHDR: error: unsupported option '-fandroid-pad-segment' for target 'aarch64-linux'
++
+ // Check linker invocation on a Debian LoongArch sysroot.
+ // RUN: %clang -### %s -no-pie 2>&1 \
+ // RUN:     --target=loongarch64-linux-gnu -rtlib=platform --unwindlib=platform \
+-- 
+2.43.0.687.g38aa6559b0-goog
+
