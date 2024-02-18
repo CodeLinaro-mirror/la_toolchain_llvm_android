@@ -59,6 +59,8 @@ index 330b103efdd6..e5e1b1d77269 100644
 diff --git a/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o b/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
 new file mode 100644
 index 000000000000..e69de29bb2d1
+--- a/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
++++ b/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
 @@ -0,0 +1 @@
 +some text to retain this file when applying this patch with `patch -E`.
 diff --git a/clang/test/Driver/linux-ld.c b/clang/test/Driver/linux-ld.c
