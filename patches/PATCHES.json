@@ -590,6 +590,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [lld][ELF] Allow Arm PC-relative relocations in PIC links (#77304)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d21fb06a6e36048e6729c51c351ff8c4055e8381.patch",
+        "version_range": {
+            "from": 520377,
+            "until": 523844
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libunwind][WebAssembly] Fix libunwind.cpp guard (#78230)"
         },
         "platforms": [

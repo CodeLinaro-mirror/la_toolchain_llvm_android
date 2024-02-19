@@ -1,0 +1,51 @@
+From d21fb06a6e36048e6729c51c351ff8c4055e8381 Mon Sep 17 00:00:00 2001
+From: Eleanor Bonnici <eleanor.bonnici@arm.com>
+Date: Thu, 11 Jan 2024 16:49:14 +0000
+Subject: [PATCH] [lld][ELF] Allow Arm PC-relative relocations in PIC links
+ (#77304)
+
+The relocations that map to R_ARM_PCA are equivalent to R_PC. They are
+PC-relative and safe to use in shared libraries, but have a different
+relocation code as they are evaluated differently. Now that LLVM may
+generate these relocations in object files, they may occur in
+shared libraries or position-independent executables.
+---
+ lld/ELF/Relocations.cpp | 8 ++++----
+ lld/test/ELF/arm-adr.s  | 2 ++
+ 2 files changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/lld/ELF/Relocations.cpp b/lld/ELF/Relocations.cpp
+index 20eb02b87984..af974d0f90e1 100644
+--- a/lld/ELF/Relocations.cpp
++++ b/lld/ELF/Relocations.cpp
+@@ -210,10 +210,10 @@ bool lld::elf::needsGot(RelExpr expr) {
+ // True if this expression is of the form Sym - X, where X is a position in the
+ // file (PC, or GOT for example).
+ static bool isRelExpr(RelExpr expr) {
+-  return oneof<R_PC, R_GOTREL, R_GOTPLTREL, R_MIPS_GOTREL, R_PPC64_CALL,
+-               R_PPC64_RELAX_TOC, R_AARCH64_PAGE_PC, R_RELAX_GOT_PC,
+-               R_RISCV_PC_INDIRECT, R_PPC64_RELAX_GOT_PC, R_LOONGARCH_PAGE_PC>(
+-      expr);
++  return oneof<R_PC, R_GOTREL, R_GOTPLTREL, R_ARM_PCA, R_MIPS_GOTREL,
++               R_PPC64_CALL, R_PPC64_RELAX_TOC, R_AARCH64_PAGE_PC,
++               R_RELAX_GOT_PC, R_RISCV_PC_INDIRECT, R_PPC64_RELAX_GOT_PC,
++               R_LOONGARCH_PAGE_PC>(expr);
+ }
+ 
+ static RelExpr toPlt(RelExpr expr) {
+diff --git a/lld/test/ELF/arm-adr.s b/lld/test/ELF/arm-adr.s
+index 05e8cc2f92db..fee78f97a12e 100644
+--- a/lld/test/ELF/arm-adr.s
++++ b/lld/test/ELF/arm-adr.s
+@@ -1,6 +1,8 @@
+ // REQUIRES: arm
+ // RUN: llvm-mc --triple=armv7a-none-eabi --arm-add-build-attributes -filetype=obj -o %t.o %s
+ // RUN: ld.lld %t.o -o %t
++/// R_ARM_ALU_PC_G0 referencing a non-preemptible symbol can be used in PIC links.
++// RUN: ld.lld %t.o --shared -o /dev/null
+ // RUN: llvm-objdump -d --no-show-raw-insn --triple=armv7a-none-eabi %t | FileCheck %s
+ 
+ /// Test the short range cases of R_ARM_ALU_PC_G0. The range of the instruction
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+
