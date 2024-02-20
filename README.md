@@ -20,13 +20,35 @@ $ python toolchain/llvm_android/build.py
 
 The built toolchain will be installed to `out/install/$HOST/clang-dev`.
 
-If building on Linux, pass `--no-build windows` to `build.py` to skip
-building Clang for Windows.
+#### MLGO
 
-Pass the `--lto` option to `build.py` to build the toolchain with LTO.  LTO is
-enabled in official Android Clang/LLVM prebuilts but the flag is off by default.
-This option only affects the second stage Clang toolchain and not the on-device
-targets (compiler-rt, lldb-server etc).
+The Android LLVM team has an internal docker image with dependencies required to
+build LLVM with MLGO.  External users can create a docker image with this configuration from
+scratch:
+
+```
+# Googlers
+$ toolchain/llvm_android/docker/prod_env.sh
+# Other users
+$ toolchain/llvm_android/docker/test_env.sh
+
+# Build toolchain with mlgo
+$ toolchain/llvm_android/build.py --mlgo
+```
+
+> Use `--no-mlgo` option to build without MLGO.
+
+#### Convenience Options
+
+Some common options to `build.py`.  Use `build.py --help` for an updated list
+of convenience options:
+- `--no-build windows` skips building clang for Windows (relevant when building
+on Linux).
+- `--skip-tests` skips running tests in the LLVM projects.
+- `--lto` to build with ThinLTO.  LTO is enabled in official Android Clang/LLVM
+prebuilts but the flag is off by default.  This option only affects the second
+stage Clang toolchain and not the on-device targets (compiler-rt, lldb-server etc).
+- `--no-mlgo` to disable MLGO support (see [MLGO](#MLGO)).
 
 If you have an additional llvm tree built and present in your `$PATH`, then
 `build.py` might fail during the Windows build of libcxxabi with the error
