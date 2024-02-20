@@ -1006,5 +1006,19 @@
             "from": 510928,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert Recommit [DAGCombiner] Transform `(icmp eq/ne (and X,C0),(shift X,C1))` to use rotate or to getter constants. (2nd Try)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-Recommit-DAGCombiner-Transform-icmp-eq-ne-and.patch",
+        "version_range": {
+            "from": 522817,
+            "until": null
+        }
     }
 ]
