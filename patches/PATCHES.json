@@ -632,6 +632,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MTE] Disable all MTE protection of globals in sections (#78443)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c9f5b5c935bd12d76d4bafff61d8116cb3229972.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 524963
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix MFS warning format"
         },
         "platforms": [
