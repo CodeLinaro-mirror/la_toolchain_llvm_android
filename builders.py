@@ -183,7 +183,7 @@ class Stage2Builder(base_builders.LLVMBuilder):
 
     def _common_ldflags(self, config: configs.Config) -> List[str]:
         """Extra ldflags used for both the main LLVM stage2 and the runtimes builds."""
-        ldflags = ['-Wl,--compress-debug-sections=zstd']
+        ldflags = []
         # TODO: Turn on ICF for Darwin once it can be built with LLD.
         if not config.target_os.is_darwin:
             ldflags.append('-Wl,--icf=safe')
