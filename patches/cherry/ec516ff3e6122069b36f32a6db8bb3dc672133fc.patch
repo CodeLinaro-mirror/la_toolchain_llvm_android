@@ -1,0 +1,42 @@
+From ec516ff3e6122069b36f32a6db8bb3dc672133fc Mon Sep 17 00:00:00 2001
+From: Jooyung Han <jooyung.han@gmail.com>
+Date: Wed, 21 Feb 2024 14:46:25 +0900
+Subject: [PATCH] Fix __isOSVersionAtLeast for Android (#80496)
+
+Allow pre-release APIs on pre-release devices.
+
+The current implementation requires __ANDROID_API_FUTURE__ to use new
+APIs on pre-release system. This makes it hard to maintain the codebase
+because it should be switched a concrete version (e.g. __ANDROID_API_X__
+on release of X).
+
+Instead, we can just allow pre-release APIs on pre-release system
+without mandating the major version of __ANDROID_API_FUTURE__.
+
+Note that this doesn't make API guards just no-op in pre-release builds.
+We can still rely on its compile-time checks and it still works as
+expected with release builds. Even with pre-release builds, it's the
+same as before because we would pass __ANDROID_API_FUTURE__ to make the
+calls anyway.
+---
+ compiler-rt/lib/builtins/os_version_check.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/compiler-rt/lib/builtins/os_version_check.c b/compiler-rt/lib/builtins/os_version_check.c
+index 182eabe7a6ae..01fae834ab21 100644
+--- a/compiler-rt/lib/builtins/os_version_check.c
++++ b/compiler-rt/lib/builtins/os_version_check.c
+@@ -316,8 +316,8 @@ int32_t __isOSVersionAtLeast(int32_t Major, int32_t Minor, int32_t Subminor) {
+   static pthread_once_t once = PTHREAD_ONCE_INIT;
+   pthread_once(&once, readSystemProperties);
+ 
+-  return SdkVersion >= Major ||
+-         (IsPreRelease && Major == __ANDROID_API_FUTURE__);
++  // Allow all on pre-release. Note that we still rely on compile-time checks.
++  return SdkVersion >= Major || IsPreRelease;
+ }
+ 
+ #else
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+

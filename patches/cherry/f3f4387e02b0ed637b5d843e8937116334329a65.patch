@@ -1,0 +1,43 @@
+From f3f4387e02b0ed637b5d843e8937116334329a65 Mon Sep 17 00:00:00 2001
+From: gmh <13917777+gmh5225@users.noreply.github.com>
+Date: Thu, 4 Jan 2024 16:39:50 +0800
+Subject: [PATCH] [lldb][NFC] Fix compilation issue on windows (#76453)
+
+---
+ .../Plugins/Process/Windows/Common/TargetThreadWindows.cpp    | 4 ++--
+ lldb/unittests/Thread/ThreadTest.cpp                          | 4 ++--
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/lldb/source/Plugins/Process/Windows/Common/TargetThreadWindows.cpp b/lldb/source/Plugins/Process/Windows/Common/TargetThreadWindows.cpp
+index ad67e764fe10..a69c10081ff1 100644
+--- a/lldb/source/Plugins/Process/Windows/Common/TargetThreadWindows.cpp
++++ b/lldb/source/Plugins/Process/Windows/Common/TargetThreadWindows.cpp
+@@ -29,8 +29,8 @@
+ using namespace lldb;
+ using namespace lldb_private;
+ 
+-using GetThreadDescriptionFunctionPtr = HRESULT
+-WINAPI (*)(HANDLE hThread, PWSTR *ppszThreadDescription);
++using GetThreadDescriptionFunctionPtr =
++    HRESULT(WINAPI *)(HANDLE hThread, PWSTR *ppszThreadDescription);
+ 
+ TargetThreadWindows::TargetThreadWindows(ProcessWindows &process,
+                                          const HostThread &thread)
+diff --git a/lldb/unittests/Thread/ThreadTest.cpp b/lldb/unittests/Thread/ThreadTest.cpp
+index 4c660e9815c3..542585969c07 100644
+--- a/lldb/unittests/Thread/ThreadTest.cpp
++++ b/lldb/unittests/Thread/ThreadTest.cpp
+@@ -34,8 +34,8 @@ using namespace lldb;
+ namespace {
+ 
+ #ifdef _WIN32
+-using SetThreadDescriptionFunctionPtr = HRESULT
+-WINAPI (*)(HANDLE hThread, PCWSTR lpThreadDescription);
++using SetThreadDescriptionFunctionPtr =
++    HRESULT(WINAPI *)(HANDLE hThread, PCWSTR lpThreadDescription);
+ 
+ static SetThreadDescriptionFunctionPtr SetThreadName;
+ #endif
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+
