@@ -1,0 +1,1070 @@
+From c4146121e940b6b853148c780568dee38b97382f Mon Sep 17 00:00:00 2001
+From: Arthur Eubanks <aeubanks@google.com>
+Date: Wed, 3 Jan 2024 16:50:32 +0000
+Subject: [PATCH] Revert "Reapply "RegisterCoalescer: Add implicit-def of super
+ register when coalescing SUBREG_TO_REG""
+
+This reverts commit 0e46b49de43349f8cbb2a7d4c6badef6d16e31ae.
+
+Causes crashes, see repro on https://github.com/llvm/llvm-project/commit/0e46b49de43349f8cbb2a7d4c6badef6d16e31ae.
+---
+ llvm/lib/CodeGen/RegisterCoalescer.cpp        |  51 +--
+ .../AArch64/GlobalISel/arm64-pcsections.ll    |  92 ++---
+ ...coalescer-breaks-subreg-to-reg-liveness.ll | 185 ----------
+ ...icit-def-regression-imp-operand-assert.mir |   4 +-
+ ...subreg-to-reg-requires-subrange-update.mir |  47 ---
+ .../CodeGen/X86/subreg-to-reg-coalescing.mir  | 348 ------------------
+ 6 files changed, 57 insertions(+), 670 deletions(-)
+ delete mode 100644 llvm/test/CodeGen/X86/coalescer-breaks-subreg-to-reg-liveness.ll
+ delete mode 100644 llvm/test/CodeGen/X86/coalescing-subreg-to-reg-requires-subrange-update.mir
+ delete mode 100644 llvm/test/CodeGen/X86/subreg-to-reg-coalescing.mir
+
+diff --git a/llvm/lib/CodeGen/RegisterCoalescer.cpp b/llvm/lib/CodeGen/RegisterCoalescer.cpp
+index 3fbb93795075..cbb1a74049fb 100644
+--- a/llvm/lib/CodeGen/RegisterCoalescer.cpp
++++ b/llvm/lib/CodeGen/RegisterCoalescer.cpp
+@@ -305,11 +305,7 @@ namespace {
+     /// number if it is not zero. If DstReg is a physical register and the
+     /// existing subregister number of the def / use being updated is not zero,
+     /// make sure to set it to the correct physical subregister.
+-    ///
+-    /// If \p IsSubregToReg, we are coalescing a DstReg = SUBREG_TO_REG
+-    /// SrcReg. This introduces an implicit-def of DstReg on coalesced users.
+-    void updateRegDefsUses(Register SrcReg, Register DstReg, unsigned SubIdx,
+-                           bool IsSubregToReg);
++    void updateRegDefsUses(Register SrcReg, Register DstReg, unsigned SubIdx);
+ 
+     /// If the given machine operand reads only undefined lanes add an undef
+     /// flag.
+@@ -1347,7 +1343,8 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
+     if (DstReg.isPhysical()) {
+       Register NewDstReg = DstReg;
+ 
+-      unsigned NewDstIdx = TRI->composeSubRegIndices(CP.getSrcIdx(), DefSubIdx);
++      unsigned NewDstIdx = TRI->composeSubRegIndices(CP.getSrcIdx(),
++                                              DefMI->getOperand(0).getSubReg());
+       if (NewDstIdx)
+         NewDstReg = TRI->getSubReg(DstReg, NewDstIdx);
+ 
+@@ -1496,7 +1493,7 @@ bool RegisterCoalescer::reMaterializeTrivialDef(const CoalescerPair &CP,
+     MRI->setRegClass(DstReg, NewRC);
+ 
+     // Update machine operands and add flags.
+-    updateRegDefsUses(DstReg, DstReg, DstIdx, false);
++    updateRegDefsUses(DstReg, DstReg, DstIdx);
+     NewMI.getOperand(0).setSubReg(NewIdx);
+     // updateRegDefUses can add an "undef" flag to the definition, since
+     // it will replace DstReg with DstReg.DstIdx. If NewIdx is 0, make
+@@ -1816,7 +1813,7 @@ void RegisterCoalescer::addUndefFlag(const LiveInterval &Int, SlotIndex UseIdx,
+ }
+ 
+ void RegisterCoalescer::updateRegDefsUses(Register SrcReg, Register DstReg,
+-                                          unsigned SubIdx, bool IsSubregToReg) {
++                                          unsigned SubIdx) {
+   bool DstIsPhys = DstReg.isPhysical();
+   LiveInterval *DstInt = DstIsPhys ? nullptr : &LIS->getInterval(DstReg);
+ 
+@@ -1856,8 +1853,6 @@ void RegisterCoalescer::updateRegDefsUses(Register SrcReg, Register DstReg,
+     if (DstInt && !Reads && SubIdx && !UseMI->isDebugInstr())
+       Reads = DstInt->liveAt(LIS->getInstructionIndex(*UseMI));
+ 
+-    bool FullDef = true;
+-
+     // Replace SrcReg with DstReg in all UseMI operands.
+     for (unsigned i = 0, e = Ops.size(); i != e; ++i) {
+       MachineOperand &MO = UseMI->getOperand(Ops[i]);
+@@ -1865,13 +1860,9 @@ void RegisterCoalescer::updateRegDefsUses(Register SrcReg, Register DstReg,
+       // Adjust <undef> flags in case of sub-register joins. We don't want to
+       // turn a full def into a read-modify-write sub-register def and vice
+       // versa.
+-      if (SubIdx && MO.isDef()) {
++      if (SubIdx && MO.isDef())
+         MO.setIsUndef(!Reads);
+ 
+-        if (!Reads)
+-          FullDef = false;
+-      }
+-
+       // A subreg use of a partially undef (super) register may be a complete
+       // undef use now and then has to be marked that way.
+       if (MO.isUse() && !DstIsPhys) {
+@@ -1903,25 +1894,6 @@ void RegisterCoalescer::updateRegDefsUses(Register SrcReg, Register DstReg,
+         MO.substVirtReg(DstReg, SubIdx, *TRI);
+     }
+ 
+-    if (IsSubregToReg && !FullDef) {
+-      // If the coalesed instruction doesn't fully define the register, we need
+-      // to preserve the original super register liveness for SUBREG_TO_REG.
+-      //
+-      // We pretended SUBREG_TO_REG was a regular copy for coalescing purposes,
+-      // but it introduces liveness for other subregisters. Downstream users may
+-      // have been relying on those bits, so we need to ensure their liveness is
+-      // captured with a def of other lanes.
+-
+-      // FIXME: Need to add new subrange if tracking subranges. We could also
+-      // skip adding this if we knew the other lanes are dead, and only for
+-      // other lanes.
+-
+-      assert(!MRI->shouldTrackSubRegLiveness(DstReg) &&
+-             "this should update subranges");
+-      MachineInstrBuilder MIB(*MF, UseMI);
+-      MIB.addReg(DstReg, RegState::ImplicitDefine);
+-    }
+-
+     LLVM_DEBUG({
+       dbgs() << "\t\tupdated: ";
+       if (!UseMI->isDebugInstr())
+@@ -2121,8 +2093,6 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
+     });
+   }
+ 
+-  const bool IsSubregToReg = CopyMI->isSubregToReg();
+-
+   ShrinkMask = LaneBitmask::getNone();
+   ShrinkMainRange = false;
+ 
+@@ -2190,12 +2160,9 @@ bool RegisterCoalescer::joinCopy(MachineInstr *CopyMI, bool &Again) {
+ 
+   // Rewrite all SrcReg operands to DstReg.
+   // Also update DstReg operands to include DstIdx if it is set.
+-  if (CP.getDstIdx()) {
+-    assert(!IsSubregToReg && "can this happen?");
+-    updateRegDefsUses(CP.getDstReg(), CP.getDstReg(), CP.getDstIdx(), false);
+-  }
+-  updateRegDefsUses(CP.getSrcReg(), CP.getDstReg(), CP.getSrcIdx(),
+-                    IsSubregToReg);
++  if (CP.getDstIdx())
++    updateRegDefsUses(CP.getDstReg(), CP.getDstReg(), CP.getDstIdx());
++  updateRegDefsUses(CP.getSrcReg(), CP.getDstReg(), CP.getSrcIdx());
+ 
+   // Shrink subregister ranges if necessary.
+   if (ShrinkMask.any()) {
+diff --git a/llvm/test/CodeGen/AArch64/GlobalISel/arm64-pcsections.ll b/llvm/test/CodeGen/AArch64/GlobalISel/arm64-pcsections.ll
+index 8529dd388ba0..4c07081404c8 100644
+--- a/llvm/test/CodeGen/AArch64/GlobalISel/arm64-pcsections.ll
++++ b/llvm/test/CodeGen/AArch64/GlobalISel/arm64-pcsections.ll
+@@ -13,7 +13,7 @@ define i32 @val_compare_and_swap(ptr %p, i32 %cmp, i32 %new) {
+   ; CHECK-NEXT:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $w2, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w8, renamable $w1, 0, implicit-def $nzcv, pcsections !0
+   ; CHECK-NEXT:   Bcc 1, %bb.3, implicit killed $nzcv, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -47,13 +47,13 @@ define i32 @val_compare_and_swap_from_load(ptr %p, i32 %cmp, ptr %pnew) {
+   ; CHECK-NEXT:   successors: %bb.1(0x80000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0, $x2
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w9 = LDRWui killed renamable $x2, 0, implicit-def renamable $x9, pcsections !0 :: (load (s32) from %ir.pnew)
++  ; CHECK-NEXT:   renamable $w9 = LDRWui killed renamable $x2, 0, implicit-def $x9, pcsections !0 :: (load (s32) from %ir.pnew)
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.1.cmpxchg.start:
+   ; CHECK-NEXT:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0, $x9
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w8, renamable $w1, 0, implicit-def $nzcv, pcsections !0
+   ; CHECK-NEXT:   Bcc 1, %bb.3, implicit killed $nzcv, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -93,7 +93,7 @@ define i32 @val_compare_and_swap_rel(ptr %p, i32 %cmp, i32 %new) {
+   ; CHECK-NEXT:   successors: %bb.2(0x7c000000), %bb.3(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $w2, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w8, renamable $w1, 0, implicit-def $nzcv, pcsections !0
+   ; CHECK-NEXT:   Bcc 1, %bb.3, implicit killed $nzcv, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -249,7 +249,7 @@ define i32 @fetch_and_nand(ptr %p) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRW renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
++  ; CHECK-NEXT:   renamable $w8 = LDXRW renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
+   ; CHECK-NEXT:   renamable $w9 = ANDWri renamable $w8, 2, pcsections !0
+   ; CHECK-NEXT:   $w9 = ORNWrs $wzr, killed renamable $w9, 0, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRW killed renamable $w9, renamable $x0, pcsections !0 :: (volatile store (s32) into %ir.p)
+@@ -302,7 +302,7 @@ define i32 @fetch_and_or(ptr %p) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w9, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRW renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s32) from %ir.p)
+   ; CHECK-NEXT:   $w10 = ORRWrs renamable $w8, renamable $w9, 0, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w11 = STLXRW killed renamable $w10, renamable $x0, pcsections !0 :: (volatile store (s32) into %ir.p)
+   ; CHECK-NEXT:   CBNZW killed renamable $w11, %bb.1, pcsections !0
+@@ -735,8 +735,8 @@ define i8 @atomicrmw_add_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ADDWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ADDWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -761,7 +761,7 @@ define i8 @atomicrmw_xchg_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $x0, $x1
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   early-clobber renamable $w9 = STXRB renamable $w1, renamable $x0, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w9, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -785,8 +785,8 @@ define i8 @atomicrmw_sub_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = SUBWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = SUBWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -810,8 +810,8 @@ define i8 @atomicrmw_and_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ANDWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ANDWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -835,8 +835,8 @@ define i8 @atomicrmw_or_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ORRWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ORRWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -860,8 +860,8 @@ define i8 @atomicrmw_xor_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = EORWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = EORWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -885,10 +885,10 @@ define i8 @atomicrmw_min_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = SBFMWri renamable $w8, 0, 7, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 32, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 13, implicit killed $nzcv, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 13, implicit killed $nzcv, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -912,10 +912,10 @@ define i8 @atomicrmw_max_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = SBFMWri renamable $w8, 0, 7, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 32, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 12, implicit killed $nzcv, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 12, implicit killed $nzcv, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRB renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -940,10 +940,10 @@ define i8 @atomicrmw_umin_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w9, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w10 = ANDWri renamable $w8, 7
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w10, renamable $w9, 0, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 9, implicit killed $nzcv, implicit-def renamable $x10, pcsections !0
++  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 9, implicit killed $nzcv, implicit-def $x10, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w11 = STLXRB renamable $w10, renamable $x0, implicit killed $x10, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w11, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -968,10 +968,10 @@ define i8 @atomicrmw_umax_i8(ptr %ptr, i8 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w9, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRB renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w10 = ANDWri renamable $w8, 7
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w10, renamable $w9, 0, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 8, implicit killed $nzcv, implicit-def renamable $x10, pcsections !0
++  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 8, implicit killed $nzcv, implicit-def $x10, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w11 = STXRB renamable $w10, renamable $x0, implicit killed $x10, pcsections !0 :: (volatile store (s8) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w11, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -995,8 +995,8 @@ define i16 @atomicrmw_add_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ADDWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ADDWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1021,7 +1021,7 @@ define i16 @atomicrmw_xchg_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $x0, $x1
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   early-clobber renamable $w9 = STXRH renamable $w1, renamable $x0, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w9, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1045,8 +1045,8 @@ define i16 @atomicrmw_sub_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = SUBWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = SUBWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1070,8 +1070,8 @@ define i16 @atomicrmw_and_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ANDWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ANDWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1095,8 +1095,8 @@ define i16 @atomicrmw_or_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = ORRWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = ORRWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1120,8 +1120,8 @@ define i16 @atomicrmw_xor_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+-  ; CHECK-NEXT:   $w9 = EORWrs renamable $w8, renamable $w1, 0, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   $w9 = EORWrs renamable $w8, renamable $w1, 0, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1145,10 +1145,10 @@ define i16 @atomicrmw_min_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = SBFMWri renamable $w8, 0, 15, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 40, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 13, implicit killed $nzcv, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 13, implicit killed $nzcv, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1172,10 +1172,10 @@ define i16 @atomicrmw_max_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = SBFMWri renamable $w8, 0, 15, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 40, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 12, implicit killed $nzcv, implicit-def renamable $x9, pcsections !0
++  ; CHECK-NEXT:   renamable $w9 = CSELWr renamable $w8, renamable $w1, 12, implicit killed $nzcv, implicit-def $x9, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w10 = STLXRH renamable $w9, renamable $x0, implicit killed $x9, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w10, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1200,10 +1200,10 @@ define i16 @atomicrmw_umin_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w9, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDAXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w10 = ANDWri renamable $w8, 15
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w10, renamable $w9, 0, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 9, implicit killed $nzcv, implicit-def renamable $x10, pcsections !0
++  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 9, implicit killed $nzcv, implicit-def $x10, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w11 = STLXRH renamable $w10, renamable $x0, implicit killed $x10, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w11, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1228,10 +1228,10 @@ define i16 @atomicrmw_umax_i16(ptr %ptr, i16 %rhs) {
+   ; CHECK-NEXT:   successors: %bb.1(0x7c000000), %bb.2(0x04000000)
+   ; CHECK-NEXT:   liveins: $w9, $x0
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def renamable $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w8 = LDXRH renamable $x0, implicit-def $x8, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w10 = ANDWri renamable $w8, 15
+   ; CHECK-NEXT:   $wzr = SUBSWrs renamable $w10, renamable $w9, 0, implicit-def $nzcv, pcsections !0
+-  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 8, implicit killed $nzcv, implicit-def renamable $x10, pcsections !0
++  ; CHECK-NEXT:   renamable $w10 = CSELWr killed renamable $w10, renamable $w9, 8, implicit killed $nzcv, implicit-def $x10, pcsections !0
+   ; CHECK-NEXT:   early-clobber renamable $w11 = STXRH renamable $w10, renamable $x0, implicit killed $x10, pcsections !0 :: (volatile store (s16) into %ir.ptr)
+   ; CHECK-NEXT:   CBNZW killed renamable $w11, %bb.1, pcsections !0
+   ; CHECK-NEXT: {{  $}}
+@@ -1257,7 +1257,7 @@ define { i8, i1 } @cmpxchg_i8(ptr %ptr, i8 %desired, i8 %new) {
+   ; CHECK-NEXT:   successors: %bb.2(0x7c000000), %bb.4(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x2, $x8
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w0 = LDXRB renamable $x8, implicit-def renamable $x0, pcsections !0 :: (volatile load (s8) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w0 = LDXRB renamable $x8, implicit-def $x0, pcsections !0 :: (volatile load (s8) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = ANDWri renamable $w0, 7, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 0, implicit-def $nzcv, pcsections !0
+   ; CHECK-NEXT:   Bcc 1, %bb.4, implicit killed $nzcv, pcsections !0
+@@ -1300,7 +1300,7 @@ define { i16, i1 } @cmpxchg_i16(ptr %ptr, i16 %desired, i16 %new) {
+   ; CHECK-NEXT:   successors: %bb.2(0x7c000000), %bb.4(0x04000000)
+   ; CHECK-NEXT:   liveins: $w1, $x2, $x8
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   renamable $w0 = LDXRH renamable $x8, implicit-def renamable $x0, pcsections !0 :: (volatile load (s16) from %ir.ptr)
++  ; CHECK-NEXT:   renamable $w0 = LDXRH renamable $x8, implicit-def $x0, pcsections !0 :: (volatile load (s16) from %ir.ptr)
+   ; CHECK-NEXT:   renamable $w9 = ANDWri renamable $w0, 15, pcsections !0
+   ; CHECK-NEXT:   dead $wzr = SUBSWrx killed renamable $w9, renamable $w1, 8, implicit-def $nzcv, pcsections !0
+   ; CHECK-NEXT:   Bcc 1, %bb.4, implicit killed $nzcv, pcsections !0
+diff --git a/llvm/test/CodeGen/X86/coalescer-breaks-subreg-to-reg-liveness.ll b/llvm/test/CodeGen/X86/coalescer-breaks-subreg-to-reg-liveness.ll
+deleted file mode 100644
+index a3c3fc70e976..000000000000
+--- a/llvm/test/CodeGen/X86/coalescer-breaks-subreg-to-reg-liveness.ll
++++ /dev/null
+@@ -1,185 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 2
+-; RUN: llc -mtriple=x86_64-grtev4-linux-gnu < %s | FileCheck %s
+-
+-%struct.wibble = type { %struct.wombat }
+-%struct.wombat = type { %struct.ham, [3 x i8] }
+-%struct.ham = type { %struct.zot }
+-%struct.zot = type { %struct.blam }
+-%struct.blam = type { %struct.ham.0 }
+-%struct.ham.0 = type { %struct.bar }
+-%struct.bar = type { %struct.bar.1 }
+-%struct.bar.1 = type { %struct.baz, i8 }
+-%struct.baz = type { %struct.snork }
+-%struct.snork = type <{ %struct.spam, i8, [3 x i8] }>
+-%struct.spam = type { %struct.snork.2, %struct.snork.2 }
+-%struct.snork.2 = type { i32 }
+-%struct.snork.3 = type { %struct.baz, i8, [3 x i8] }
+-
+-define void @foo(ptr %arg, ptr %arg1, i40 %arg2, ptr %arg3, i32 %arg4) #0 {
+-; CHECK-LABEL: foo:
+-; CHECK:       # %bb.0: # %bb
+-; CHECK-NEXT:    pushq %rbp
+-; CHECK-NEXT:    .cfi_def_cfa_offset 16
+-; CHECK-NEXT:    .cfi_offset %rbp, -16
+-; CHECK-NEXT:    movq %rsp, %rbp
+-; CHECK-NEXT:    .cfi_def_cfa_register %rbp
+-; CHECK-NEXT:    pushq %r15
+-; CHECK-NEXT:    pushq %r14
+-; CHECK-NEXT:    pushq %r13
+-; CHECK-NEXT:    pushq %r12
+-; CHECK-NEXT:    pushq %rbx
+-; CHECK-NEXT:    subq $24, %rsp
+-; CHECK-NEXT:    .cfi_offset %rbx, -56
+-; CHECK-NEXT:    .cfi_offset %r12, -48
+-; CHECK-NEXT:    .cfi_offset %r13, -40
+-; CHECK-NEXT:    .cfi_offset %r14, -32
+-; CHECK-NEXT:    .cfi_offset %r15, -24
+-; CHECK-NEXT:    movl %r8d, %r14d
+-; CHECK-NEXT:    movq %rcx, {{[-0-9]+}}(%r{{[sb]}}p) # 8-byte Spill
+-; CHECK-NEXT:    movq %rdx, {{[-0-9]+}}(%r{{[sb]}}p) # 8-byte Spill
+-; CHECK-NEXT:    movq %rsi, %r13
+-; CHECK-NEXT:    movq %rdi, %r15
+-; CHECK-NEXT:    incl %r14d
+-; CHECK-NEXT:    xorl %ebx, %ebx
+-; CHECK-NEXT:    # implicit-def: $r12
+-; CHECK-NEXT:    movq %rsi, {{[-0-9]+}}(%r{{[sb]}}p) # 8-byte Spill
+-; CHECK-NEXT:    jmp .LBB0_3
+-; CHECK-NEXT:    .p2align 4, 0x90
+-; CHECK-NEXT:  .LBB0_1: # %bb17
+-; CHECK-NEXT:    # in Loop: Header=BB0_3 Depth=1
+-; CHECK-NEXT:    movq %r15, %r13
+-; CHECK-NEXT:    xorl %r15d, %r15d
+-; CHECK-NEXT:    testq %rbx, %rbx
+-; CHECK-NEXT:    sete %r15b
+-; CHECK-NEXT:    xorl %edi, %edi
+-; CHECK-NEXT:    callq _Znwm@PLT
+-; CHECK-NEXT:    shll $4, %r15d
+-; CHECK-NEXT:    addq {{[-0-9]+}}(%r{{[sb]}}p), %r15 # 8-byte Folded Reload
+-; CHECK-NEXT:    movq %r12, %rcx
+-; CHECK-NEXT:    shrq $32, %rcx
+-; CHECK-NEXT:    movb %cl, 12(%rax)
+-; CHECK-NEXT:    movl %r12d, 8(%rax)
+-; CHECK-NEXT:    movq %r15, %rbx
+-; CHECK-NEXT:    movq %r13, %r15
+-; CHECK-NEXT:    movq {{[-0-9]+}}(%r{{[sb]}}p), %r13 # 8-byte Reload
+-; CHECK-NEXT:    decl %r14d
+-; CHECK-NEXT:    je .LBB0_8
+-; CHECK-NEXT:  .LBB0_3: # %bb7
+-; CHECK-NEXT:    # =>This Inner Loop Header: Depth=1
+-; CHECK-NEXT:    callq widget@PLT
+-; CHECK-NEXT:    cmpb $-5, (%r13)
+-; CHECK-NEXT:    jae .LBB0_5
+-; CHECK-NEXT:  # %bb.4: # in Loop: Header=BB0_3 Depth=1
+-; CHECK-NEXT:    movl %r12d, %r12d
+-; CHECK-NEXT:    cmpq %r15, %rbx
+-; CHECK-NEXT:    jbe .LBB0_1
+-; CHECK-NEXT:    jmp .LBB0_7
+-; CHECK-NEXT:    .p2align 4, 0x90
+-; CHECK-NEXT:  .LBB0_5: # %bb12
+-; CHECK-NEXT:    # in Loop: Header=BB0_3 Depth=1
+-; CHECK-NEXT:    movq 0, %rax
+-; CHECK-NEXT:    movq 8, %rax
+-; CHECK-NEXT:    movq {{[-0-9]+}}(%r{{[sb]}}p), %r12 # 8-byte Reload
+-; CHECK-NEXT:    cmpq %r15, %rbx
+-; CHECK-NEXT:    jbe .LBB0_1
+-; CHECK-NEXT:  .LBB0_7: # in Loop: Header=BB0_3 Depth=1
+-; CHECK-NEXT:    xorl %eax, %eax
+-; CHECK-NEXT:    xorl %ebx, %ebx
+-; CHECK-NEXT:    decl %r14d
+-; CHECK-NEXT:    jne .LBB0_3
+-; CHECK-NEXT:  .LBB0_8: # %bb21
+-; CHECK-NEXT:    cmpb $0, 12(%rax)
+-; CHECK-NEXT:    jne .LBB0_10
+-; CHECK-NEXT:  # %bb.9: # %bb26
+-; CHECK-NEXT:    addq $24, %rsp
+-; CHECK-NEXT:    popq %rbx
+-; CHECK-NEXT:    popq %r12
+-; CHECK-NEXT:    popq %r13
+-; CHECK-NEXT:    popq %r14
+-; CHECK-NEXT:    popq %r15
+-; CHECK-NEXT:    popq %rbp
+-; CHECK-NEXT:    .cfi_def_cfa %rsp, 8
+-; CHECK-NEXT:    retq
+-; CHECK-NEXT:  .LBB0_10: # %bb25
+-; CHECK-NEXT:    .cfi_def_cfa %rbp, 16
+-; CHECK-NEXT:    movq %r15, %rdi
+-; CHECK-NEXT:    callq pluto@PLT
+-bb:
+-  br label %bb7
+-
+-bb5:                                              ; preds = %bb17, %bb14
+-  %phi = phi ptr [ %call19, %bb17 ], [ null, %bb14 ]
+-  %phi6 = phi ptr [ %getelementptr, %bb17 ], [ null, %bb14 ]
+-  %add = add i32 %phi9, 1
+-  %icmp = icmp eq i32 %phi9, %arg4
+-  br i1 %icmp, label %bb21, label %bb7
+-
+-bb7:                                              ; preds = %bb5, %bb
+-  %phi8 = phi ptr [ null, %bb ], [ %phi6, %bb5 ]
+-  %phi9 = phi i32 [ 0, %bb ], [ %add, %bb5 ]
+-  %phi10 = phi i40 [ undef, %bb ], [ %phi15, %bb5 ]
+-  %call = call ptr @widget()
+-  %load = load i8, ptr %arg1, align 8
+-  %icmp11 = icmp ult i8 %load, -5
+-  %and = and i40 %phi10, 4294967295
+-  br i1 %icmp11, label %bb14, label %bb12
+-
+-bb12:                                             ; preds = %bb7
+-  %load13 = load volatile { i64, i64 }, ptr null, align 4294967296
+-  br label %bb14
+-
+-bb14:                                             ; preds = %bb12, %bb7
+-  %phi15 = phi i40 [ %and, %bb7 ], [ %arg2, %bb12 ]
+-  %icmp16 = icmp ugt ptr %phi8, %arg
+-  br i1 %icmp16, label %bb5, label %bb17
+-
+-bb17:                                             ; preds = %bb14
+-  %icmp18 = icmp eq ptr %phi8, null
+-  %zext = zext i1 %icmp18 to i64
+-  %call19 = call ptr @_Znwm(i64 0)
+-  %getelementptr = getelementptr %struct.wibble, ptr %arg3, i64 %zext
+-  %getelementptr20 = getelementptr i8, ptr %call19, i64 8
+-  store i40 %phi15, ptr %getelementptr20, align 4
+-  br label %bb5
+-
+-bb21:                                             ; preds = %bb5
+-  %getelementptr22 = getelementptr %struct.snork.3, ptr %phi, i64 0, i32 1
+-  %load23 = load i8, ptr %getelementptr22, align 4
+-  %icmp24 = icmp eq i8 %load23, 0
+-  br i1 %icmp24, label %bb26, label %bb25
+-
+-bb25:                                             ; preds = %bb21
+-  call void @pluto(ptr %arg)
+-  unreachable
+-
+-bb26:                                             ; preds = %bb21
+-  ret void
+-}
+-
+-define void @eggs(ptr %arg, ptr %arg1) {
+-; CHECK-LABEL: eggs:
+-; CHECK:       # %bb.0: # %bb
+-; CHECK-NEXT:    pushq %rax
+-; CHECK-NEXT:    .cfi_def_cfa_offset 16
+-; CHECK-NEXT:    movq %rdi, %rax
+-; CHECK-NEXT:    movq %rsi, %rdi
+-; CHECK-NEXT:    movq %rax, %rsi
+-; CHECK-NEXT:    xorl %edx, %edx
+-; CHECK-NEXT:    xorl %ecx, %ecx
+-; CHECK-NEXT:    xorl %r8d, %r8d
+-; CHECK-NEXT:    callq foo@PLT
+-; CHECK-NEXT:    popq %rax
+-; CHECK-NEXT:    .cfi_def_cfa_offset 8
+-; CHECK-NEXT:    retq
+-bb:
+-  call void @foo(ptr %arg1, ptr %arg, i40 0, ptr null, i32 0)
+-  ret void
+-}
+-
+-declare ptr @widget()
+-
+-declare void @pluto(ptr)
+-
+-declare ptr @_Znwm(i64)
+-
+-attributes #0 = { noinline "frame-pointer"="all" }
+diff --git a/llvm/test/CodeGen/X86/coalescer-implicit-def-regression-imp-operand-assert.mir b/llvm/test/CodeGen/X86/coalescer-implicit-def-regression-imp-operand-assert.mir
+index 190b14052d9b..8241a1757af5 100644
+--- a/llvm/test/CodeGen/X86/coalescer-implicit-def-regression-imp-operand-assert.mir
++++ b/llvm/test/CodeGen/X86/coalescer-implicit-def-regression-imp-operand-assert.mir
+@@ -9,7 +9,7 @@ body:             |
+   ; CHECK-NEXT:   successors: %bb.1(0x2aaaaaab), %bb.2(0x55555555)
+   ; CHECK-NEXT:   liveins: $edi
+   ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   undef [[MOV32r0_:%[0-9]+]].sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def [[MOV32r0_]]
++  ; CHECK-NEXT:   undef [[MOV32r0_:%[0-9]+]].sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags
+   ; CHECK-NEXT:   JCC_1 %bb.2, 5, implicit killed undef $eflags
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.1:
+@@ -28,7 +28,7 @@ body:             |
+   ; CHECK-NEXT:   JCC_1 %bb.5, 5, implicit killed undef $eflags
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.4:
+-  ; CHECK-NEXT:   dead $eax = MOV32r0 implicit-def dead $eflags, implicit-def $al, implicit-def $al
++  ; CHECK-NEXT:   dead $eax = MOV32r0 implicit-def dead $eflags, implicit-def $al
+   ; CHECK-NEXT:   RET 0, killed undef $al
+   ; CHECK-NEXT: {{  $}}
+   ; CHECK-NEXT: bb.5:
+diff --git a/llvm/test/CodeGen/X86/coalescing-subreg-to-reg-requires-subrange-update.mir b/llvm/test/CodeGen/X86/coalescing-subreg-to-reg-requires-subrange-update.mir
+deleted file mode 100644
+index fe53aef86e83..000000000000
+--- a/llvm/test/CodeGen/X86/coalescing-subreg-to-reg-requires-subrange-update.mir
++++ /dev/null
+@@ -1,47 +0,0 @@
+-# NOTE: Assertions have been autogenerated by utils/update_mir_test_checks.py UTC_ARGS: --version 3
+-# RUN: llc -mtriple=x86_64-- -run-pass=register-coalescer -enable-subreg-liveness -verify-coalescing -o - %s | FileCheck %s
+-
+-
+-# FIXME: Need to handle subrange updates when coalescing with subreg_to_reg
+-# This will fail if x86 enables subregister liveness.
+----
+-name: requires_new_subrange_coalesce_subreg_to_reg
+-tracksRegLiveness: true
+-body:             |
+-  ; CHECK-LABEL: name: requires_new_subrange_coalesce_subreg_to_reg
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.2(0x40000000), %bb.1(0x40000000)
+-  ; CHECK-NEXT:   liveins: $eax
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   undef %a.sub_32bit:gr64_with_sub_8bit = COPY $eax
+-  ; CHECK-NEXT:   %b:gr32 = IMPLICIT_DEF
+-  ; CHECK-NEXT:   %c:gr64 = INSERT_SUBREG %a, %b, %subreg.sub_32bit
+-  ; CHECK-NEXT:   JCC_1 %bb.2, 4, implicit undef $eflags
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   successors: %bb.2(0x80000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   undef %a.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags
+-  ; CHECK-NEXT:   %c.sub_32bit:gr64 = COPY %a
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.2:
+-  ; CHECK-NEXT:   %c.sub_32bit:gr64 = SUBREG_TO_REG %a, %b, %subreg.sub_32bit
+-  ; CHECK-NEXT:   RET 0, implicit %c
+-  bb.0:
+-    liveins: $eax
+-    %init_eax:gr32 = COPY $eax
+-    %a:gr64 = SUBREG_TO_REG 0, %init_eax, %subreg.sub_32bit
+-    %b:gr32 = IMPLICIT_DEF
+-    %c:gr64 = INSERT_SUBREG %a, %b, %subreg.sub_32bit
+-    JCC_1 %bb.2, 4, implicit undef $eflags
+-
+-  bb.1:
+-    %imm0:gr32 = MOV32r0 implicit-def dead $eflags
+-    %a = SUBREG_TO_REG 0, %imm0, %subreg.sub_32bit
+-    %c.sub_32bit = COPY %a
+-
+-  bb.2:
+-    %c.sub_32bit = SUBREG_TO_REG %a, %b, %subreg.sub_32bit
+-    RET 0, implicit %c
+-
+-...
+diff --git a/llvm/test/CodeGen/X86/subreg-to-reg-coalescing.mir b/llvm/test/CodeGen/X86/subreg-to-reg-coalescing.mir
+deleted file mode 100644
+index 6121a0bcc564..000000000000
+--- a/llvm/test/CodeGen/X86/subreg-to-reg-coalescing.mir
++++ /dev/null
+@@ -1,348 +0,0 @@
+-# NOTE: Assertions have been autogenerated by utils/update_mir_test_checks.py UTC_ARGS: --version 2
+-# RUN: llc -mtriple=x86_64-- -run-pass=register-coalescer -o - %s | FileCheck %s
+-
+-# We cannot lose the liveness of the high subregister of %1 when
+-# coalesced with %0, so introduce an implicit-def of the super
+-# register on the MOV.
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %1
+-    ; CHECK-NEXT: dead $edi = MOV32r0 implicit-def dead $eflags, implicit-def $rdi
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %0:gr32 = MOV32r0 implicit-def dead $eflags
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: subreg_to_reg_folds_to_undef
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    liveins: $rax
+-
+-    ; CHECK-LABEL: name: subreg_to_reg_folds_to_undef
+-    ; CHECK: liveins: $rax
+-    ; CHECK-NEXT: {{  $}}
+-    ; CHECK-NEXT: [[COPY:%[0-9]+]]:gr64_with_sub_8bit = COPY $rax
+-    ; CHECK-NEXT: undef %4.sub_32bit:gr64_with_sub_8bit = MOV32rr [[COPY]].sub_32bit, implicit-def %4
+-    ; CHECK-NEXT: RET 0, implicit %4
+-    %0:gr64 = COPY killed $rax
+-    %1:gr32 = COPY killed %0.sub_32bit
+-    %2:gr32 = MOV32rr killed %1
+-    %3:gr64 = SUBREG_TO_REG 0, killed %2, %subreg.sub_32bit
+-    %4:gr64 = COPY killed %3
+-    RET 0, implicit %4
+-
+-...
+-
+----
+-name: coalesce_mov32r0_subreg_def_into_subreg_to_reg64
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_subreg_def_into_subreg_to_reg64
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags
+-    ; CHECK-NEXT: dead $edi = MOV32r0 implicit-def dead $eflags, implicit-def $rdi
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    undef %0.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0.sub_32bit, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_def_with_super_def_to_reg64
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_def_with_super_def_to_reg64
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %1
+-    ; CHECK-NEXT: dead $edi = MOV32r0 implicit-def dead $eflags, implicit-def $rdi
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    undef %0.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %0
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0.sub_32bit, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_already_defs_other_subreg
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_already_defs_other_subreg
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def undef %1.sub_8bit, implicit-def %1
+-    ; CHECK-NEXT: INLINEASM &"", 0 /* attdialect */, implicit %1
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit undef $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %0:gr32 = MOV32r0 implicit-def dead $eflags, implicit-def undef %0.sub_8bit
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    INLINEASM &"", 0, implicit %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit undef $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+-
+-# Reduced realistic case which was asserting after introducing new implicit-defs
+----
+-name: coalesce_needs_implicit_defs
+-tracksRegLiveness: true
+-body:             |
+-  ; CHECK-LABEL: name: coalesce_needs_implicit_defs
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.1(0x80000000)
+-  ; CHECK-NEXT:   liveins: $rdi
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   [[COPY:%[0-9]+]]:gr64 = COPY $rdi
+-  ; CHECK-NEXT:   undef %2.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %2
+-  ; CHECK-NEXT:   undef %3.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %3
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   successors: %bb.1(0x80000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   undef %10.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags
+-  ; CHECK-NEXT:   TEST64rr %3, %3, implicit-def $eflags
+-  ; CHECK-NEXT:   %10.sub_8bit:gr64_with_sub_8bit = SETCCr 4, implicit killed $eflags
+-  ; CHECK-NEXT:   ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   dead $edi = MOV32r0 implicit-def dead $eflags, implicit-def $rdi
+-  ; CHECK-NEXT:   CALL64r %2, csr_64, implicit $rsp, implicit $ssp, implicit $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-  ; CHECK-NEXT:   ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   [[SHL64ri:%[0-9]+]]:gr64_with_sub_8bit = SHL64ri [[SHL64ri]], 4, implicit-def dead $eflags
+-  ; CHECK-NEXT:   [[ADD64rr:%[0-9]+]]:gr64_with_sub_8bit = ADD64rr [[ADD64rr]], [[COPY]], implicit-def dead $eflags
+-  ; CHECK-NEXT:   [[COPY1:%[0-9]+]]:gr64_with_sub_8bit = COPY [[ADD64rr]]
+-  ; CHECK-NEXT:   JMP_1 %bb.1
+-  bb.0:
+-    liveins: $rdi
+-
+-    %0:gr64 = COPY killed $rdi
+-    %1:gr32 = MOV32r0 implicit-def dead $eflags
+-    %2:gr64 = SUBREG_TO_REG 0, %1, %subreg.sub_32bit
+-    %3:gr64 = COPY killed %2
+-
+-  bb.1:
+-    %4:gr64 = COPY killed %3
+-    %5:gr32 = MOV32r0 implicit-def dead $eflags
+-    TEST64rr killed %4, %4, implicit-def $eflags
+-    %6:gr8 = SETCCr 4, implicit killed $eflags
+-    %7:gr32 = COPY killed %5
+-    %7.sub_8bit:gr32 = COPY killed %6
+-    %8:gr64 = SUBREG_TO_REG 0, killed %7, %subreg.sub_32bit
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %9:gr64 = SUBREG_TO_REG 0, %1, %subreg.sub_32bit
+-    $rdi = COPY %9
+-    CALL64r killed %9, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %10:gr64 = COPY killed %8
+-    %10:gr64 = SHL64ri %10, 4, implicit-def dead $eflags
+-    %11:gr64 = COPY killed %10
+-    %11:gr64 = ADD64rr %11, %0, implicit-def dead $eflags
+-    %3:gr64 = COPY killed %11
+-    JMP_1 %bb.1
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_physreg_def
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_physreg_def
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: dead $edi = MOV32r0 implicit-def dead $eflags, implicit-def $rdi
+-    ; CHECK-NEXT: CALL64r killed $rdi, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %0:gr32 = MOV32r0 implicit-def dead $eflags
+-    $rdi = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    CALL64r killed $rdi, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_physreg_use
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    liveins: $eax
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_physreg_use
+-    ; CHECK: liveins: $eax
+-    ; CHECK-NEXT: {{  $}}
+-    ; CHECK-NEXT: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: $eax = MOV32r0 implicit-def dead $eflags
+-    ; CHECK-NEXT: [[SUBREG_TO_REG:%[0-9]+]]:gr64 = SUBREG_TO_REG 0, $eax, %subreg.sub_32bit
+-    ; CHECK-NEXT: $rdi = COPY [[SUBREG_TO_REG]]
+-    ; CHECK-NEXT: CALL64r [[SUBREG_TO_REG]], csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    $eax = MOV32r0 implicit-def dead $eflags
+-    %1:gr64 = SUBREG_TO_REG 0, killed $eax, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+-# Coalesced instruction is a copy with other implicit operands
+----
+-name: coalesce_copy_into_subreg_to_reg64
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    liveins: $eax
+-    ; CHECK-LABEL: name: coalesce_copy_into_subreg_to_reg64
+-    ; CHECK: liveins: $eax
+-    ; CHECK-NEXT: {{  $}}
+-    ; CHECK-NEXT: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = COPY $eax, implicit-def dead $eflags, implicit-def %1
+-    ; CHECK-NEXT: $rdi = COPY %1
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %0:gr32 = COPY $eax, implicit-def dead $eflags
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_multiple_redef_value
+-tracksRegLiveness: true
+-body:             |
+-  bb.0:
+-    ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_multiple_redef_value
+-    ; CHECK: ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: undef %1.sub_32bit:gr64_with_sub_8bit = MOV32r0 implicit-def dead $eflags, implicit-def %1
+-    ; CHECK-NEXT: INLINEASM &"", 0 /* attdialect */, implicit-def %1.sub_32bit, implicit %1.sub_32bit
+-    ; CHECK-NEXT: $rdi = COPY %1
+-    ; CHECK-NEXT: CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ; CHECK-NEXT: ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    ; CHECK-NEXT: RET 0
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    %0:gr32 = MOV32r0 implicit-def dead $eflags
+-    INLINEASM &"", 0, implicit-def %0, implicit %0
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_def_is_block_liveout
+-tracksRegLiveness: true
+-body:             |
+-  ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_def_is_block_liveout
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.1(0x40000000), %bb.2(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   INLINEASM &"", 0 /* attdialect */, implicit-def undef %1.sub_32bit, implicit-def %1
+-  ; CHECK-NEXT:   JCC_1 %bb.1, 4, implicit undef $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.2
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   $rdi = COPY %1
+-  ; CHECK-NEXT:   ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-  ; CHECK-NEXT:   ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   RET 0
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.2:
+-  bb.0:
+-    INLINEASM &"", 0, implicit-def %0:gr32
+-    JCC_1 %bb.1, 4, implicit undef $eflags
+-    JMP_1 %bb.2
+-
+-  bb.1:
+-    %1:gr64 = SUBREG_TO_REG 0, killed %0, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    CALL64r killed %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    RET 0
+-
+-  bb.2:
+-
+-...
+-
+----
+-name: coalesce_mov32r0_into_subreg_to_reg64_def_is_phi_def
+-tracksRegLiveness: true
+-body:             |
+-  ; CHECK-LABEL: name: coalesce_mov32r0_into_subreg_to_reg64_def_is_phi_def
+-  ; CHECK: bb.0:
+-  ; CHECK-NEXT:   successors: %bb.1(0x40000000), %bb.2(0x40000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   INLINEASM &"", 0 /* attdialect */, implicit-def undef %1.sub_32bit, implicit-def %1
+-  ; CHECK-NEXT:   JCC_1 %bb.1, 4, implicit undef $eflags
+-  ; CHECK-NEXT:   JMP_1 %bb.2
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.1:
+-  ; CHECK-NEXT:   successors: %bb.1(0x80000000)
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT:   $rdi = COPY %1
+-  ; CHECK-NEXT:   ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-  ; CHECK-NEXT:   ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-  ; CHECK-NEXT:   JMP_1 %bb.1
+-  ; CHECK-NEXT: {{  $}}
+-  ; CHECK-NEXT: bb.2:
+-  bb.0:
+-
+-    INLINEASM &"", 0, implicit-def %0:gr32
+-    JCC_1 %bb.1, 4, implicit undef $eflags
+-    JMP_1 %bb.2
+-
+-  bb.1:
+-    %1:gr64 = SUBREG_TO_REG 0, %0, %subreg.sub_32bit
+-    $rdi = COPY %1
+-    ADJCALLSTACKDOWN64 0, 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    CALL64r %1, csr_64, implicit $rsp, implicit $ssp, implicit killed $rdi, implicit-def $rsp, implicit-def $ssp, implicit-def dead $rax
+-    ADJCALLSTACKUP64 0, 0, implicit-def dead $rsp, implicit-def dead $eflags, implicit-def dead $ssp, implicit $rsp, implicit $ssp
+-    JMP_1 %bb.1
+-
+-  bb.2:
+-
+-...
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+

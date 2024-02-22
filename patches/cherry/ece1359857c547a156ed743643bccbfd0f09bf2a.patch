@@ -1,0 +1,51 @@
+From ece1359857c547a156ed743643bccbfd0f09bf2a Mon Sep 17 00:00:00 2001
+From: Arthur Eubanks <aeubanks@google.com>
+Date: Wed, 3 Jan 2024 16:54:45 +0000
+Subject: [PATCH] Revert "[PowerPC] Add test after #75271 on PPC. NFC.
+ (#75616)"
+
+This reverts commit 5cfc7b3342ce4de0bbe182b38baa8a71fc83f8f8.
+
+This depends on 0e46b49de43349f8cbb2a7d4c6badef6d16e31ae which is being reverted.
+---
+ ...-remat-with-undef-implicit-def-operand.mir | 28 -------------------
+ 1 file changed, 28 deletions(-)
+ delete mode 100644 llvm/test/CodeGen/PowerPC/coalescer-remat-with-undef-implicit-def-operand.mir
+
+diff --git a/llvm/test/CodeGen/PowerPC/coalescer-remat-with-undef-implicit-def-operand.mir b/llvm/test/CodeGen/PowerPC/coalescer-remat-with-undef-implicit-def-operand.mir
+deleted file mode 100644
+index 8e4e3be55600..000000000000
+--- a/llvm/test/CodeGen/PowerPC/coalescer-remat-with-undef-implicit-def-operand.mir
++++ /dev/null
+@@ -1,28 +0,0 @@
+-# RUN: llc -mtriple=powerpc64le-unknown-linux-gnu -verify-coalescing -run-pass=register-coalescer \
+-# RUN:   -o - %s | FileCheck %s
+----
+-name:            _Z13testTransposeIfLj31ELj17EEvv
+-alignment:       16
+-tracksRegLiveness: true
+-frameInfo:
+-  maxAlignment:    128
+-machineFunctionInfo: {}
+-body:             |
+-  ; CHECK-LABEL: name:            _Z13testTransposeIfLj31ELj17EEvv
+-  ; CHECK: undef %[[REG:[0-9]+]].sub_64:vsrc = IMPLICIT_DEF implicit-def %[[REG]]
+-  bb.0:
+-    liveins: $x2
+-    %2:vssrc = IMPLICIT_DEF
+-    B %bb.2
+-
+-  bb.1:
+-    %0:vsrc = SUBREG_TO_REG 1, killed %2, %subreg.sub_64
+-    %1:vsrc = XXPERMDI killed undef %0, killed %0, 0
+-    BLR8 implicit $lr8, implicit $rm
+-
+-  bb.2:
+-    successors: %bb.2(0x7c000000), %bb.1(0x04000000)
+-    BDNZ8 %bb.2, implicit-def $ctr8, implicit $ctr8
+-    B %bb.1
+-
+-...
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+

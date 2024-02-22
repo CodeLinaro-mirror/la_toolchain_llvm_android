@@ -1,0 +1,184 @@
+From 02347fc7191ff4d073f439dde6523add3f5496de Mon Sep 17 00:00:00 2001
+From: Ilya Biryukov <ibiryukov@google.com>
+Date: Tue, 2 Jan 2024 13:24:12 +0100
+Subject: [PATCH] Reapply "[Sema] Fix crash on invalid code with parenthesized
+ aggregate initialization" (#76272)
+
+With updates the libc++ tests.
+
+This reverts commit 2205d2334f3c859ad9f6c65ed950bfb3bb6f7cbe and relands
+86dc6e15f22610bbb53eb4efda0a178ecefc933a and
+7ab16fb5207fe187ab999f882069bd632d2e68e5.
+
+Original commit was reverted because of failing libc++ tests, see #76232 for
+the discussion.
+
+The errors in the tests are spurious in the first place (coming from initialization
+of invalid classes), so update the tests to match new behavior that does
+not show those errors.
+---
+ clang/lib/Sema/SemaInit.cpp                   |  8 ++++++
+ clang/test/SemaCXX/crash-GH76228.cpp          | 28 +++++++++++++++++++
+ clang/test/SemaCXX/paren-list-agg-init.cpp    |  2 +-
+ .../transform_error.mandates.verify.cpp       |  8 ------
+ .../transform_error.mandates.verify.cpp       |  8 ------
+ 5 files changed, 37 insertions(+), 17 deletions(-)
+ create mode 100644 clang/test/SemaCXX/crash-GH76228.cpp
+
+diff --git a/clang/lib/Sema/SemaInit.cpp b/clang/lib/Sema/SemaInit.cpp
+index 61d244f3bb97..cc9db5ded114 100644
+--- a/clang/lib/Sema/SemaInit.cpp
++++ b/clang/lib/Sema/SemaInit.cpp
+@@ -5512,6 +5512,14 @@ static void TryOrBuildParenListInitialization(
+   } else if (auto *RT = Entity.getType()->getAs<RecordType>()) {
+     bool IsUnion = RT->isUnionType();
+     const CXXRecordDecl *RD = cast<CXXRecordDecl>(RT->getDecl());
++    if (RD->isInvalidDecl()) {
++      // Exit early to avoid confusion when processing members.
++      // We do the same for braced list initialization in
++      // `CheckStructUnionTypes`.
++      Sequence.SetFailed(
++          clang::InitializationSequence::FK_ParenthesizedListInitFailed);
++      return;
++    }
+ 
+     if (!IsUnion) {
+       for (const CXXBaseSpecifier &Base : RD->bases()) {
+diff --git a/clang/test/SemaCXX/crash-GH76228.cpp b/clang/test/SemaCXX/crash-GH76228.cpp
+new file mode 100644
+index 000000000000..33a939582312
+--- /dev/null
++++ b/clang/test/SemaCXX/crash-GH76228.cpp
+@@ -0,0 +1,28 @@
++// RUN: %clang_cc1 -std=c++20 -verify %s
++// Check we don't crash on incomplete members and bases when handling parenthesized initialization.
++class incomplete; // expected-note@-0 3  {{forward declaration of 'incomplete'}}
++struct foo {
++  int a;
++  incomplete b;
++  // expected-error@-1 {{incomplete type}}
++};
++foo a1(0);
++
++struct one_int {
++    int a;
++};
++struct bar : one_int, incomplete {};
++// expected-error@-1 {{incomplete type}}
++bar a2(0);
++
++incomplete a3[3](1,2,3);
++// expected-error@-1 {{incomplete type}}
++
++struct qux : foo {
++};
++qux a4(0);
++
++struct fred {
++    foo a[3];
++};
++fred a5(0);
+diff --git a/clang/test/SemaCXX/paren-list-agg-init.cpp b/clang/test/SemaCXX/paren-list-agg-init.cpp
+index f60b20e0d465..c1964a5a9eb0 100644
+--- a/clang/test/SemaCXX/paren-list-agg-init.cpp
++++ b/clang/test/SemaCXX/paren-list-agg-init.cpp
+@@ -289,7 +289,7 @@ int test() {
+   // used to crash
+   S a(0, 1);
+   S b(0);
+-  S c(0, 0, 1); // beforecxx20-warning {{aggregate initialization of type 'S' from a parenthesized list of values is a C++20 extension}}
++  S c(0, 0, 1);
+ 
+   S d {0, 1};
+   S e {0};
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.expected/transform_error.mandates.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.expected/transform_error.mandates.verify.cpp
+index 965e82a7b403..3260a8cbc7f8 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.expected/transform_error.mandates.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.expected/transform_error.mandates.verify.cpp
+@@ -46,11 +46,9 @@ void test() {
+   {
+     std::expected<int, int> e;
+     e.transform_error(return_unexpected<int&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     // expected-error-re@*:* {{static assertion failed {{.*}}[expected.object.general] A program that instantiates the definition of template expected<T, E> for {{.*}} is ill-formed.}}
+ 
+     e.transform_error(return_no_object<int&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     // expected-error-re@*:* {{static assertion failed {{.*}}[expected.object.general] A program that instantiates the definition of template expected<T, E> for {{.*}} is ill-formed.}}
+   }
+ 
+@@ -58,27 +56,21 @@ void test() {
+   {
+     const std::expected<int, int> e;
+     e.transform_error(return_unexpected<const int &>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     e.transform_error(return_no_object<const int &>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ 
+   // Test && overload
+   {
+     std::expected<int, int> e;
+     std::move(e).transform_error(return_unexpected<int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     std::move(e).transform_error(return_no_object<int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ 
+   // Test const&& overload
+   {
+     const std::expected<int, int> e;
+     std::move(e).transform_error(return_unexpected<const int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     std::move(e).transform_error(return_no_object<const int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* 2 {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ }
+ // clang-format on
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.void/transform_error.mandates.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.void/transform_error.mandates.verify.cpp
+index 09aa1332e980..21dc24768791 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.void/transform_error.mandates.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.void/transform_error.mandates.verify.cpp
+@@ -46,11 +46,9 @@ void test() {
+   {
+     std::expected<void, int> e;
+     e.transform_error(return_unexpected<int&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     // expected-error-re@*:* {{static assertion failed {{.*}}A program that instantiates expected<T, E> with a E that is not a valid argument for unexpected<E> is ill-formed}}
+ 
+     e.transform_error(return_no_object<int&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     // expected-error-re@*:* {{static assertion failed {{.*}}A program that instantiates expected<T, E> with a E that is not a valid argument for unexpected<E> is ill-formed}}
+   }
+ 
+@@ -58,27 +56,21 @@ void test() {
+   {
+     const std::expected<void, int> e;
+     e.transform_error(return_unexpected<const int &>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     e.transform_error(return_no_object<const int &>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ 
+   // Test && overload
+   {
+     std::expected<void, int> e;
+     std::move(e).transform_error(return_unexpected<int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     std::move(e).transform_error(return_no_object<int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ 
+   // Test const&& overload
+   {
+     const std::expected<void, int> e;
+     std::move(e).transform_error(return_unexpected<const int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+     std::move(e).transform_error(return_no_object<const int&&>); // expected-error-re@*:* {{static assertion failed {{.*}}The result of {{.*}} must be a valid template argument for unexpected}}
+-    // expected-error-re@*:* {{{{(excess elements in struct initializer|no matching constructor for initialization of)}}{{.*}}}}
+   }
+ }
+ // clang-format on
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+
