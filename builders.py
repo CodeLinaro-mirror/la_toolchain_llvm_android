@@ -199,6 +199,8 @@ class Stage2Builder(base_builders.LLVMBuilder):
             ldflags.append('-Wl,-q')
         if self.lto and self.enable_mlgo:
             ldflags.append('-Wl,-mllvm,-regalloc-enable-advisor=release')
+        if self.lto and not self.profdata_file and self._config.target_os.is_linux:
+            ldflags.append('-Wl,--lto-O0')
         ldflags += self._common_ldflags(self._config)
         return ldflags
 
