@@ -266,7 +266,7 @@ class AutoconfBuilder(Builder):
             cflags.append(f'--sysroot={self._config.sysroot}')
         if self._config.target_os.is_darwin:
             sdk_path = self._get_mac_sdk_path()
-            cflags.append(f'-mmacosx-version-min={constants.MAC_MIN_VERSION}')
+            cflags.append(f'-mmacos-version-min={constants.MAC_MIN_VERSION}')
             cflags.append(f'-DMACOSX_DEPLOYMENT_TARGET={constants.MAC_MIN_VERSION}')
             cflags.append(f'-isysroot{sdk_path}')
             cflags.append(f'-Wl,-syslibroot,{sdk_path}')
@@ -423,7 +423,7 @@ class CMakeBuilder(Builder):
             # Inhibit all of CMake's own NDK handling code.
             defines['CMAKE_SYSTEM_VERSION'] = '1'
         if self._config.target_os.is_darwin:
-            # This will be used to set -mmacosx-version-min. And helps to choose SDK.
+            # This will be used to set -mmacos-version-min. And helps to choose SDK.
             # To specify a SDK, set CMAKE_OSX_SYSROOT or SDKROOT environment variable.
             defines['CMAKE_OSX_DEPLOYMENT_TARGET'] = constants.MAC_MIN_VERSION
             # Build universal binaries.
