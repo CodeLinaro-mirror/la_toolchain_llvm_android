@@ -14,7 +14,7 @@ cd $TOP
 
 # Fetch aosp-plus-llvm-master repo
 repo init -u https://android.googlesource.com/platform/manifest -b main --depth=1 < /dev/null
-repo sync -c -j8
+repo sync -c
 
 mkdir dist
 DIST_DIR=dist OUT_DIR=out prebuilts/python/linux-x86/bin/python3 \
