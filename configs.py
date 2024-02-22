@@ -248,7 +248,7 @@ class DarwinConfig(_BaseConfig):
     @property
     def cflags(self) -> List[str]:
         cflags = super().cflags
-        # Fails if an API used is newer than what specified in -mmacosx-version-min.
+        # Fails if an API used is newer than what specified in -mmacos-version-min.
         cflags.append('-Werror=unguarded-availability')
         return cflags
 
