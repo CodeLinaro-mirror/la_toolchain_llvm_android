@@ -898,6 +898,8 @@ class LLVMBuilder(LLVMBaseBuilder):
             checks = ['check-clang', 'check-llvm', 'check-clang-tools'] + ['check-cxx-' + triple for triple in cxx_triples]
             # clangd tests fail intermittently. https://github.com/llvm/llvm-project/issues/64964
             check_env = {'LIT_FILTER_OUT': 'clangd'}
-            if hosts.build_host().is_darwin: # b/298489611
+            if hosts.build_host().is_darwin:
+                # b/298489611, b/326166097
                 check_env = {'LIT_FILTER_OUT': 'clangd|clang-tidy|xpc|tools\/lto|LineEditor|Interpreter|ClangIncludeCleaner|ClangPseudo'}
+                checks.remove('check-llvm')
             self._ninja(checks, check_env)
