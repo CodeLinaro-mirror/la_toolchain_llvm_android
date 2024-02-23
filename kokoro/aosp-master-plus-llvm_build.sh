@@ -19,5 +19,5 @@ repo sync -c
 mkdir dist
 DIST_DIR=dist OUT_DIR=out prebuilts/python/linux-x86/bin/python3 \
   toolchain/llvm_android/test_compiler.py --build-only --no-mlgo \
-  --target aosp_cf_arm64_phone-trunk_staging-userdebug \
+  --target ${AOSP_BUILD_TARGET}-trunk_staging-userdebug \
   --clang-package-path ${KOKORO_GFILE_DIR} .
