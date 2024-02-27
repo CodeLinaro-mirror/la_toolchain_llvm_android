@@ -78,7 +78,7 @@ def build_kythe_corpus(builder: builders.Stage2Builder) -> None:
     env = {
         'KYTHE_OUTPUT_DIRECTORY': kythe_out_dir,
         'KYTHE_ROOT_DIRECTORY': paths.ANDROID_DIR,
-        'KYTHE_CORPUS': 'android.googlesource.com/toolchain/llvm-project//master-legacy',
+        'KYTHE_CORPUS': 'android.googlesource.com/toolchain/llvm-project//main',
         'KYTHE_VNAMES': paths.KYTHE_VNAMES_JSON
     }
 
