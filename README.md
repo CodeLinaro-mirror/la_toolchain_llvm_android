@@ -2,10 +2,10 @@ Android Clang/LLVM Toolchain
 ============================
 
 For the latest version of this doc, please make sure to visit:
-[Android Clang/LLVM Toolchain Readme Doc](https://android.googlesource.com/toolchain/llvm_android/+/master/README.md)
+[Android Clang/LLVM Toolchain Readme Doc](https://android.googlesource.com/toolchain/llvm_android/+/main/README.md)
 
 You can also visit the
-[Android Clang/LLVM Prebuilts Readme Doc](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/master/README.md)
+[Android Clang/LLVM Prebuilts Readme Doc](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/main/README.md)
 for more information about our prebuilt toolchains (and what versions they are based upon).
 
 Build Instructions
@@ -232,7 +232,7 @@ by RBE.
 ### Step 7: Switch to the new compiler
 
 All places need to switch to the new compiler are listed in
-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/master/README.md.
+https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/main/README.md.
 
 The updates in the kernel and NDK are done separately.
 

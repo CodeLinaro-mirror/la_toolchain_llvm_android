@@ -49,7 +49,7 @@ def get_svn_revision():
 def get_git_sha():
     _version_read = True
     if _llvm_next:
-        return "refs/for/master"
+        return "refs/for/main"
     return _git_sha
 
 
