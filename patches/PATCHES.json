@@ -730,6 +730,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ELF] Suppress --no-allow-shlib-undefined diagnostic when a SharedSymbol is overridden by a hidden visibility Defined which is later discarded"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e390bda9782b461f10433aa6728acf87521e22a5.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525045
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix MFS warning format"
         },
         "platforms": [

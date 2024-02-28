@@ -81,7 +81,11 @@ class Stage1Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
+        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
+        if isinstance(self._config, configs.LinuxMuslConfig):
+            # libcxx builds against libunwind when building for musl
+            proj.add('libunwind')
+        return proj
 
     @property
     def ldflags(self) -> List[str]:
@@ -159,7 +163,11 @@ class Stage2Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
+        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
+        if isinstance(self._config, configs.LinuxMuslConfig):
+            # libcxx builds against libunwind when building for musl
+            proj.add('libunwind')
+        return proj
 
     @property
     def ld_library_path_env_name(self) -> str:
@@ -1147,7 +1155,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         executor = paths.LLVM_PATH / 'libcxx' / 'utils' / 'adb_run.py'
 
         defines: Dict[str, str] = super().cmake_defines
-        defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi;libunwind'
+        defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi'
 
         # When the libc++ lit tests invoke clang, they set the triple and
         # sysroot using these generic CMake flags.
@@ -1157,7 +1165,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
         defines['LIBCXXABI_ENABLE_SHARED'] = 'OFF'
         defines['LIBCXXABI_EXECUTOR'] = executor
-        defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'ON'
+        defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'OFF'
         if self._config.platform:
             defines['LIBCXXABI_NON_DEMANGLING_TERMINATE'] = 'ON'
             defines['LIBCXXABI_STATIC_DEMANGLE_LIBRARY'] = 'ON'
@@ -1266,7 +1274,7 @@ class WinLibCxxBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines: Dict[str, str] = super().cmake_defines
-        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi;libunwind'
+        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi'
         defines['LLVM_ENABLE_PER_TARGET_RUNTIME_DIR'] = 'ON'
 
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'

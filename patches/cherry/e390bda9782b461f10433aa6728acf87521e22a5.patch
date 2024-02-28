@@ -1,0 +1,124 @@
+From e390bda9782b461f10433aa6728acf87521e22a5 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Mon, 22 Jan 2024 10:09:35 -0800
+Subject: [PATCH] [ELF] Suppress --no-allow-shlib-undefined diagnostic when a
+ SharedSymbol is overridden by a hidden visibility Defined which is later
+ discarded
+
+Commit 1981b1b6b92f7579a30c9ed32dbdf3bc749c1b40 unexpectedly strengthened
+--no-allow-shlib-undefined to catch a kind of ODR violation.
+More precisely, when all three conditions are met, the new
+`--no-allow-shlib-undefined` code reports an error.
+
+* There is a DSO undef that has been satisfied by a definition from
+  another DSO.
+* The `SharedSymbol` is overridden by a non-exported (usually of hidden
+  visibility) definition in a relocatable object file (`Defined`).
+* The section containing the `Defined` is garbage-collected (it is not
+  part of `.dynsym` and is not marked as live).
+
+Technically, the hidden Defined in the executable can be intentional: it
+can be meant to remain non-exported and not interact with any dynamic
+symbols of the same name that might exist in other DSOs. To allow for
+such use cases, allocate a new bit in
+Symbol and relax the --no-allow-shlib-undefined check to before
+commit 1981b1b6b92f7579a30c9ed32dbdf3bc749c1b40.
+---
+ lld/ELF/InputFiles.cpp               |  2 ++
+ lld/ELF/Symbols.h                    | 10 +++++++---
+ lld/ELF/Writer.cpp                   |  7 +++++++
+ lld/test/ELF/allow-shlib-undefined.s |  2 +-
+ 4 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/lld/ELF/InputFiles.cpp b/lld/ELF/InputFiles.cpp
+index af42b0381e99..75e5ee1d0da4 100644
+--- a/lld/ELF/InputFiles.cpp
++++ b/lld/ELF/InputFiles.cpp
+@@ -1546,6 +1546,7 @@ template <class ELFT> void SharedFile::parse() {
+       auto *s = symtab.addSymbol(
+           SharedSymbol{*this, name, sym.getBinding(), sym.st_other,
+                        sym.getType(), sym.st_value, sym.st_size, alignment});
++      s->dsoDefined = true;
+       if (s->file == this)
+         s->versionId = ver;
+     }
+@@ -1563,6 +1564,7 @@ template <class ELFT> void SharedFile::parse() {
+     auto *s = symtab.addSymbol(
+         SharedSymbol{*this, saver().save(name), sym.getBinding(), sym.st_other,
+                      sym.getType(), sym.st_value, sym.st_size, alignment});
++    s->dsoDefined = true;
+     if (s->file == this)
+       s->versionId = idx;
+   }
+diff --git a/lld/ELF/Symbols.h b/lld/ELF/Symbols.h
+index ec541de5c461..c65c5d6cd0dc 100644
+--- a/lld/ELF/Symbols.h
++++ b/lld/ELF/Symbols.h
+@@ -298,12 +298,13 @@ public:
+   // of the symbol.
+   uint8_t scriptDefined : 1;
+ 
++  // True if defined in a DSO. There may also be a definition in a relocatable
++  // object file.
++  uint8_t dsoDefined : 1;
++
+   // True if defined in a DSO as protected visibility.
+   uint8_t dsoProtected : 1;
+ 
+-  // True if targeted by a range extension thunk.
+-  uint8_t thunkAccessed : 1;
+-
+   // Temporary flags used to communicate which symbol entries need PLT and GOT
+   // entries during postScanRelocations();
+   std::atomic<uint16_t> flags;
+@@ -320,6 +321,9 @@ public:
+   uint16_t versionId;
+   uint8_t versionScriptAssigned : 1;
+ 
++  // True if targeted by a range extension thunk.
++  uint8_t thunkAccessed : 1;
++
+   void setFlags(uint16_t bits) {
+     flags.fetch_or(bits, std::memory_order_relaxed);
+   }
+diff --git a/lld/ELF/Writer.cpp b/lld/ELF/Writer.cpp
+index b18d2239dc58..6f66f3615fa4 100644
+--- a/lld/ELF/Writer.cpp
++++ b/lld/ELF/Writer.cpp
+@@ -2025,6 +2025,11 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
+       // to catch more cases. That is too much for us. Our approach resembles
+       // the one used in ld.gold, achieves a good balance to be useful but not
+       // too smart.
++      //
++      // If a DSO reference is resolved by a SharedSymbol, but the SharedSymbol
++      // is overridden by a hidden visibility Defined (which is later discarded
++      // due to GC), don't report the diagnostic. However, this may indicate an
++      // unintended SharedSymbol.
+       for (SharedFile *file : ctx.sharedFiles) {
+         bool allNeededIsKnown =
+             llvm::all_of(file->dtNeeded, [&](StringRef needed) {
+@@ -2033,6 +2038,8 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
+         if (!allNeededIsKnown)
+           continue;
+         for (Symbol *sym : file->requiredSymbols) {
++          if (sym->dsoDefined)
++            continue;
+           if (sym->isUndefined() && !sym->isWeak()) {
+             diagnose("undefined reference due to --no-allow-shlib-undefined: " +
+                      toString(*sym) + "\n>>> referenced by " + toString(file));
+diff --git a/lld/test/ELF/allow-shlib-undefined.s b/lld/test/ELF/allow-shlib-undefined.s
+index 56b44e144661..969e87b69eb8 100644
+--- a/lld/test/ELF/allow-shlib-undefined.s
++++ b/lld/test/ELF/allow-shlib-undefined.s
+@@ -40,7 +40,7 @@
+ # RUN: not ld.lld --gc-sections main.o a.so def-hidden.o -o /dev/null 2>&1 | FileCheck %s
+ ## The definition def.so is ignored.
+ # RUN: ld.lld -shared def.o -o def.so
+-# RUN: not ld.lld --gc-sections main.o a.so def.so def-hidden.o -o /dev/null 2>&1 | FileCheck %s
++# RUN: ld.lld --gc-sections main.o a.so def.so def-hidden.o --fatal-warnings -o /dev/null
+ 
+ # CHECK-NOT:   error:
+ # CHECK:       error: undefined reference due to --no-allow-shlib-undefined: x1{{$}}
+-- 
+2.44.0.rc1.240.g4c46232300-goog
+
