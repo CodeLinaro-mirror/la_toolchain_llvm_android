@@ -617,7 +617,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         get_scripts_sha = re.findall(r'name="toolchain/llvm_android" revision="(.*)" /',
                                      manifest_context)[0]
     else:
-        get_scripts_sha = 'refs/heads/master'
+        get_scripts_sha = 'refs/heads/main'
     with open(clang_source_info_file, 'r') as info:
         info_read = info.read()
     with open(clang_source_info_file, 'w') as info:
