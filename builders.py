@@ -81,11 +81,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
-        if isinstance(self._config, configs.LinuxMuslConfig):
-            # libcxx builds against libunwind when building for musl
-            proj.add('libunwind')
-        return proj
+        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
 
     @property
     def ldflags(self) -> List[str]:
@@ -163,11 +159,7 @@ class Stage2Builder(base_builders.LLVMBuilder):
 
     @property
     def llvm_runtime_projects(self) -> Set[str]:
-        proj = {'compiler-rt', 'libcxx', 'libcxxabi'}
-        if isinstance(self._config, configs.LinuxMuslConfig):
-            # libcxx builds against libunwind when building for musl
-            proj.add('libunwind')
-        return proj
+        return {'compiler-rt', 'libcxx', 'libcxxabi', 'libunwind'}
 
     @property
     def ld_library_path_env_name(self) -> str:

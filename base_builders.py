@@ -768,6 +768,10 @@ class LLVMBuilder(LLVMBaseBuilder):
         # (e.g. libc++) are also omitted, using OS-specific versions of the same CMake flag.
         defines['CMAKE_PLATFORM_NO_VERSIONED_SONAME'] = 'ON'
 
+        # Use static libunwinder for host builds.
+        defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'ON'
+        defines['LIBCXXABI_ENABLE_STATIC_UNWINDER'] = 'ON'
+
         if self._config.target_os.is_darwin:
             defines['COMPILER_RT_ENABLE_IOS'] = 'OFF'
             defines['COMPILER_RT_ENABLE_TVOS'] = 'OFF'
