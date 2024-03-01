@@ -1266,7 +1266,7 @@ class WinLibCxxBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines: Dict[str, str] = super().cmake_defines
-        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi'
+        defines['LLVM_ENABLE_RUNTIMES'] = 'libcxx;libcxxabi;libunwind'
         defines['LLVM_ENABLE_PER_TARGET_RUNTIME_DIR'] = 'ON'
 
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'
@@ -1283,6 +1283,10 @@ class WinLibCxxBuilder(base_builders.LLVMRuntimeBuilder):
         defines['LIBCXX_ENABLE_SHARED'] = 'OFF'
         defines['LIBCXXABI_ENABLE_SHARED'] = 'OFF'
         defines['LIBCXX_ENABLE_EXPERIMENTAL_LIBRARY'] = 'OFF'
+
+        # Use static libunwinder for host builds.
+        defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'ON'
+        defines['LIBCXXABI_ENABLE_STATIC_UNWINDER'] = 'ON'
 
         if self.enable_assertions:
             defines['LIBCXX_ENABLE_ASSERTIONS'] = 'ON'
