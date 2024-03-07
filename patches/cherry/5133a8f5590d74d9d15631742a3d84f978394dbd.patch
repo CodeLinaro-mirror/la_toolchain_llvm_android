@@ -59,7 +59,7 @@ index 330b103efdd6..e5e1b1d77269 100644
 diff --git a/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o b/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
 new file mode 100644
 index 000000000000..e69de29bb2d1
---- a/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
+--- /dev/null
 +++ b/clang/test/Driver/Inputs/basic_android_tree/sysroot/usr/lib/crt_pad_segment.o
 @@ -0,0 +1 @@
 +some text to retain this file when applying this patch with `patch -E`.
@@ -94,5 +94,5 @@ index d5cc3103a3a7..b8efd64cd91f 100644
  // RUN: %clang -### %s -no-pie 2>&1 \
  // RUN:     --target=loongarch64-linux-gnu -rtlib=platform --unwindlib=platform \
 -- 
-2.43.0.687.g38aa6559b0-goog
+2.44.0.rc0.258.g7320e95886-goog
 
