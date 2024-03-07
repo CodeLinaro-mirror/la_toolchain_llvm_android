@@ -1,20 +1,22 @@
-From bcba9ea5d205f7b9978276da3bef9f0e5ad78aaa Mon Sep 17 00:00:00 2001
-From: Yi Kong <yikong@google.com>
-Date: Tue, 28 Feb 2023 12:50:21 +0900
-Subject: [PATCH] Revert "[Driver] Allow target override containing . in
- executable name"
+From 1d584fdf67f61c42d336a4865795ef8abcf6511a Mon Sep 17 00:00:00 2001
+From: zijunzhao <zijunzhao@google.com>
+Date: Thu, 22 Feb 2024 01:11:35 +0000
+Subject: [PATCH] [PATCH] Revert "[Driver] Allow target override containing .
+ in executable name"
 
 This reverts commit 0d7eba1aeed853798bd8012f786c305e83a97b67.
+
+Change-Id: I02783959a64d3aa0caaf9883f14b104b13115b58
 ---
  clang/lib/Driver/ToolChain.cpp      | 9 +--------
  clang/test/Driver/target-override.c | 5 -----
  2 files changed, 1 insertion(+), 13 deletions(-)
 
 diff --git a/clang/lib/Driver/ToolChain.cpp b/clang/lib/Driver/ToolChain.cpp
-index 2dba975a5a8f..b10d5e098a4e 100644
+index 96a57927339a..1253b320beab 100644
 --- a/clang/lib/Driver/ToolChain.cpp
 +++ b/clang/lib/Driver/ToolChain.cpp
-@@ -226,7 +226,7 @@ static const DriverSuffix *FindDriverSuffix(StringRef ProgName, size_t &Pos) {
+@@ -326,7 +326,7 @@ static const DriverSuffix *FindDriverSuffix(StringRef ProgName, size_t &Pos) {
  /// Normalize the program name from argv[0] by stripping the file extension if
  /// present and lower-casing the string on Windows.
  static std::string normalizeProgramName(llvm::StringRef Argv0) {
@@ -23,7 +25,7 @@ index 2dba975a5a8f..b10d5e098a4e 100644
    if (is_style_windows(llvm::sys::path::Style::native)) {
      // Transform to lowercase for case insensitive file systems.
      std::transform(ProgName.begin(), ProgName.end(), ProgName.begin(),
-@@ -245,13 +245,6 @@ static const DriverSuffix *parseDriverSuffix(StringRef ProgName, size_t &Pos) {
+@@ -345,13 +345,6 @@ static const DriverSuffix *parseDriverSuffix(StringRef ProgName, size_t &Pos) {
    // added via -target as implicit first argument.
    const DriverSuffix *DS = FindDriverSuffix(ProgName, Pos);
  
@@ -58,5 +60,5 @@ index 2c605ac9a03d..aef89cc9a9dd 100644
 -// RUN: %t/x86_64-pc-freebsd13.1-clang -c -### %s 2>&1 | FileCheck -check-prefix CHECK-TG3 %s
 -// CHECK-TG3: Target: x86_64-pc-freebsd13.1
 -- 
-2.34.1
+2.44.0.rc0.258.g7320e95886-goog
 
