@@ -491,8 +491,7 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
         # set. We want this flag on instead to catch unresolved references
         # early.
         defines['SANITIZER_COMMON_LINK_FLAGS'] = '-Wl,-z,defs'
-        if self._config.platform:
-            defines['COMPILER_RT_HWASAN_WITH_INTERCEPTORS'] = 'OFF'
+        defines['COMPILER_RT_HWASAN_WITH_INTERCEPTORS'] = 'OFF'
         return defines
 
     @property
