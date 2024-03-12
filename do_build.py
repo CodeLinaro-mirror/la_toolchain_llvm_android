@@ -909,6 +909,13 @@ def parse_args():
                         using toolchain/llvm-project (SHA or \'main\')')
 
     parser.add_argument(
+        "--git_am",
+        action="store_true",
+        default=False,
+        help="If set, use 'git am' to patch instead of GNU 'patch'. ",
+    )
+
+    parser.add_argument(
         '--windows-sdk',
         help='Path to a Windows SDK. If set, it will be used instead of MinGW.'
     )
@@ -1001,7 +1008,8 @@ def main():
 
     # Clone sources to be built and apply patches.
     if not args.skip_source_setup:
-        source_manager.setup_sources(llvm_rev=args.llvm_rev, skip_apply_patches=args.skip_apply_patches)
+        source_manager.setup_sources(git_am=args.git_am, llvm_rev=args.llvm_rev,
+                                     skip_apply_patches=args.skip_apply_patches)
 
     # Build the stage1 Clang for the build host
     instrumented = hosts.build_host().is_linux and args.build_instrumented
