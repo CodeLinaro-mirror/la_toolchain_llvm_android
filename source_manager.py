@@ -37,7 +37,7 @@ def logger():
     return logging.getLogger(__name__)
 
 
-def apply_patches(source_dir, svn_version, patch_json, patch_dir,
+def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
                   failure_mode='fail'):
     """Apply patches in $patch_dir/$patch_json to $source_dir.
 
@@ -53,6 +53,9 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir,
         '--src_path', str(source_dir),
         '--failure_mode', failure_mode
     ]
+
+    if git_am:
+      patch_manager_cmd.append('--git_am')
 
     return utils.check_output(patch_manager_cmd)
 
@@ -117,7 +120,7 @@ def write_source_info(source_dir: str, patch_output: str) -> None:
         outfile.write('\n'.join(output))
 
 
-def setup_sources(llvm_rev=None, skip_apply_patches=False):
+def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False):
     """Setup toolchain sources into paths.LLVM_PATH.
 
     Copy toolchain/llvm-project into paths.LLVM_PATH or clone from upstream.
@@ -153,6 +156,18 @@ def setup_sources(llvm_rev=None, skip_apply_patches=False):
           # Fallback to normal copy.
           cmd = ['cp', '-Rf', copy_from, tmp_source_dir]
           subprocess.check_call(cmd)
+
+        if git_am:
+          # To avoid clobbering the source tree's git objects, remove
+          # out/llvm-project/.git and copy .repo/projects/toolchain/llvm-project.git there
+          tmp_out_git_dir = paths.OUT_DIR / 'llvm-project.tmp/.git'
+          copy_from_git = os.readlink(tmp_out_git_dir)
+
+          cmd = ['rm', '-rf', tmp_out_git_dir]
+          subprocess.check_call(cmd)
+
+          cmd = ['cp', '-Rf', copy_from_git, tmp_out_git_dir]
+          subprocess.check_call(cmd)
     else:
         logger().info(f'Fetching {llvm_rev} from https://github.com/llvm/llvm-project.git')
         if not os.path.exists(tmp_source_dir):
@@ -174,7 +189,7 @@ def setup_sources(llvm_rev=None, skip_apply_patches=False):
 
     if not skip_apply_patches:
       patch_output = apply_patches(tmp_source_dir, svn_version, patch_json,
-                                   patch_dir)
+                                   patch_dir, git_am)
       logger().info(patch_output)
       write_source_info(tmp_source_dir, patch_output)
 
