@@ -42,7 +42,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Cherry pick upstream LLVM patches.",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--sha', nargs='+', help='sha of patches to cherry pick')
-    parser.add_argument('--diff', help='Cherry pick from a differential revision e.g., D149486')
+    parser.add_argument('--pr', help='Cherry pick from a GitHub PR, e.g., 84422')
     parser.add_argument(
         '--start-version', default='llvm',
         help="""svn revision to start applying patches. 'llvm' can also be used.""")
@@ -98,11 +98,11 @@ class PatchItem:
         return m.group(1)
 
     @property
-    def phab_link(self) -> str:
-        m = next(re.match(r'Differential Revision: (.+)', line)
+    def pr_link(self) -> str:
+        m = next(re.match(r'Pull Request: (.+)', line)
             for line in open(f'patches/{self.rel_patch_path}'))
 
-        assert m, f'No phabricator link found in: {self.rel_patch_path}'
+        assert m, f'No PR link found in: {self.rel_patch_path}'
         return m.group(1)
 
     @property
@@ -240,7 +240,7 @@ def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: b
                 subject = subject[len('[UPSTREAM] '):]
             commit_line = sha + ' ' + subject
         else: # Add link to differential revision.
-            commit_line = patch.phab_link
+            commit_line = patch.pr_link
         commit_lines.append(commit_line)
     commit_lines.append('')
 
@@ -256,34 +256,28 @@ def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: b
     commit_lines += ['', 'Test: N/A']
     check_call(['git', 'commit', '-m', '\n'.join(commit_lines)])
 
-def get_title_from_phab(url) -> str:
-    webpage = urllib.request.urlopen(url).read()
-    title = str(webpage).split('<title>')[1].split('</title>')[0]
-    actual_title = ' '.join(title.split(' ')[1:])
-    return actual_title
-
-def create_patch(diff, start_version) -> PatchList:
-    assert diff.startswith('D'), f'Invalid Differential Revision {diff}'
-
-    phab_url=f'https://reviews.llvm.org/{diff}'
-    patch_url_req = urllib.request.Request(f'https://reviews.llvm.org/{diff}?download=true',
+def create_patch(pr, start_version) -> PatchList:
+    pr_url=f'https://api.github.com/repos/llvm/llvm-project/pulls/{pr}'
+    patch_url_req = urllib.request.Request(f'https://github.com/llvm/llvm-project/pull/{pr}.diff',
                                         method="HEAD")
     patch_url = urllib.request.urlopen(patch_url_req).url
 
     # TODO: Add commit body and author details as well.
-    title=get_title_from_phab(phab_url)
-    assert title, f'Title not found for {diff}'
+    with urllib.request.urlopen(pr_url) as response:
+      data = json.load(response)
+    title=data['title']
+    assert title, f'Title not found for {pr}'
     print(f'Creating a patch for {title}')
-    file_name=f'{diff}.patch'
+    file_name=f'{pr}.patch'
     abs_file_name= paths.SCRIPTS_DIR / 'patches' / file_name
     # Download the file from `patch_url` and save in `abs_file_name`:
     urllib.request.urlretrieve(patch_url, abs_file_name)
     # Add link to Differential Revision at the beginning of the file
-    patch_first_line=f'Differential Revision: {patch_url}'
+    patch_prefix=f'Pull Request: {patch_url}\nSubject: {title}'
     with open(abs_file_name, 'r+') as f:
         content = f.read()
         f.seek(0, 0)
-        f.write(patch_first_line + '\n\n' + content)
+        f.write(patch_prefix + '\n\n---\n' + content)
 
     # Extend the PATCHES.json
     result = PatchList()
@@ -328,12 +322,12 @@ def main():
     logging.basicConfig(level=level)
     patch_list = PatchList.load_from_file()
 
-    assert not (bool(args.sha) and bool(args.diff)), (
+    assert not (bool(args.sha) and bool(args.pr)), (
         'Only one of cherry-pick or patch supported.'
     )
-    if args.diff:
+    if args.pr:
         start_version = parse_start_version(args.start_version)
-        new_patches = create_patch(args.diff, start_version)
+        new_patches = create_patch(args.pr, start_version)
         patch_list.extend(new_patches)
     elif args.sha:
         start_version = parse_start_version(args.start_version)
