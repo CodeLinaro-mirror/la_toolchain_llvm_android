@@ -86,9 +86,6 @@ KYTHE_VNAMES_JSON = SCRIPTS_DIR / 'kythe_vnames.json'
 
 ORDERFILE_SCRIPTS_DIR: Path = TOOLCHAIN_DIR / "llvm_android" / "orderfiles" / "scripts"
 
-_PYTHON_VER = '3.10'
-_PYTHON_VER_SHORT = _PYTHON_VER.replace('.', '')
-
 def pgo_profdata_filename() -> str:
     svn_revision = android_version.get_svn_revision_number()
     return f'r{svn_revision}.profdata'
@@ -136,6 +133,22 @@ def get_package_install_path(host: hosts.Host, package_name) -> Path:
 def get_python_dir(host: hosts.Host) -> Path:
     """Returns the path to python for a host."""
     return PREBUILTS_DIR / 'python' / host.os_tag
+
+
+def determine_python_ver() -> str:
+    python_path = get_python_dir(hosts.Host.Linux)
+    versions = list(python_path.glob("include/python*"))
+    if len(versions) != 1:
+        raise RuntimeError(
+            "Could not determine unique Python version from "
+            f"{python_path / 'include'}"
+        )
+    return versions[0].name.removeprefix("python")
+
+
+_PYTHON_VER = determine_python_ver()
+_PYTHON_VER_SHORT = _PYTHON_VER.replace('.', '')
+
 
 def get_python_executable(host: hosts.Host) -> Path:
     """Returns the path to python executable for a host."""
