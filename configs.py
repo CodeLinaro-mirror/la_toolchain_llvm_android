@@ -613,6 +613,9 @@ class AndroidConfig(_BaseConfig):
         ldflags.append('-pie')
         if self.static:
             ldflags.append('-static')
+        if (self.target_arch == hosts.Arch.X86_64 or
+                self.target_arch == hosts.Arch.AARCH64):
+            ldflags.append('-Wl,-z,max-page-size=16384')
         return ldflags
 
     @property
