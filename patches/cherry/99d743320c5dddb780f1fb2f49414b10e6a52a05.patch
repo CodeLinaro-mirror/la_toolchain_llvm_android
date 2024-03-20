@@ -1,0 +1,444 @@
+From 99d743320c5dddb780f1fb2f49414b10e6a52a05 Mon Sep 17 00:00:00 2001
+From: Jon Roelofs <jonathan_roelofs@apple.com>
+Date: Fri, 9 Feb 2024 08:13:15 -0800
+Subject: [PATCH] [clang][fmv] Drop .ifunc from target_version's entrypoint's
+ mangling (#81194)
+
+Fixes: https://github.com/llvm/llvm-project/issues/81043
+---
+ clang/include/clang/AST/Decl.h                |   4 +
+ clang/include/clang/Basic/AttrDocs.td         |   8 ++
+ clang/lib/AST/Decl.cpp                        |   4 +
+ clang/lib/CodeGen/CodeGenModule.cpp           |  16 ++-
+ clang/test/CodeGen/attr-target-version.c      | 129 +++++++++---------
+ clang/test/CodeGenCXX/attr-target-version.cpp |  87 ++++++------
+ 6 files changed, 143 insertions(+), 105 deletions(-)
+
+diff --git a/clang/include/clang/AST/Decl.h b/clang/include/clang/AST/Decl.h
+index f26fb5ad5f13..42fdf2b56dc2 100644
+--- a/clang/include/clang/AST/Decl.h
++++ b/clang/include/clang/AST/Decl.h
+@@ -2619,6 +2619,10 @@ public:
+   /// the target-clones functionality.
+   bool isTargetClonesMultiVersion() const;
+ 
++  /// True if this function is a multiversioned dispatch function as a part of
++  /// the target-version functionality.
++  bool isTargetVersionMultiVersion() const;
++
+   /// \brief Get the associated-constraints of this function declaration.
+   /// Currently, this will either be a vector of size 1 containing the
+   /// trailing-requires-clause or an empty vector.
+diff --git a/clang/include/clang/Basic/AttrDocs.td b/clang/include/clang/Basic/AttrDocs.td
+index 041786f37fb8..19a98a0ccb92 100644
+--- a/clang/include/clang/Basic/AttrDocs.td
++++ b/clang/include/clang/Basic/AttrDocs.td
+@@ -2517,6 +2517,14 @@ function it instructs compiler to emit multiple function versions based on
+ priority and target features availability. One of the versions is always
+ ( implicitly or explicitly ) the ``default`` (fallback). Attribute strings can
+ contain dependent features names joined by the "+" sign.
++
++For targets that support the GNU indirect function (IFUNC) feature, dispatch
++is performed by emitting an indirect function that is resolved to the appropriate
++target clone at load time. The indirect function is given the name the
++multiversioned function would have if it had been declared without the attribute.
++For backward compatibility with earlier Clang releases, a function alias with an
++``.ifunc`` suffix is also emitted. The  ``.ifunc`` suffixed symbol is a deprecated
++feature and support for it may be removed in the future.
+ }];
+ }
+ 
+diff --git a/clang/lib/AST/Decl.cpp b/clang/lib/AST/Decl.cpp
+index 26fdfa040796..40e2903265bf 100644
+--- a/clang/lib/AST/Decl.cpp
++++ b/clang/lib/AST/Decl.cpp
+@@ -3541,6 +3541,10 @@ bool FunctionDecl::isTargetClonesMultiVersion() const {
+   return isMultiVersion() && hasAttr<TargetClonesAttr>();
+ }
+ 
++bool FunctionDecl::isTargetVersionMultiVersion() const {
++  return isMultiVersion() && hasAttr<TargetVersionAttr>();
++}
++
+ void
+ FunctionDecl::setPreviousDeclaration(FunctionDecl *PrevDecl) {
+   redeclarable_base::setPreviousDecl(PrevDecl);
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 36b63d78b06f..2f923d5457f9 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -30,6 +30,7 @@
+ #include "clang/AST/ASTContext.h"
+ #include "clang/AST/ASTLambda.h"
+ #include "clang/AST/CharUnits.h"
++#include "clang/AST/Decl.h"
+ #include "clang/AST/DeclCXX.h"
+ #include "clang/AST/DeclObjC.h"
+ #include "clang/AST/DeclTemplate.h"
+@@ -4212,7 +4213,8 @@ void CodeGenModule::emitMultiVersionFunctions() {
+     llvm::Constant *ResolverConstant = GetOrCreateMultiVersionResolver(GD);
+     if (auto *IFunc = dyn_cast<llvm::GlobalIFunc>(ResolverConstant)) {
+       ResolverConstant = IFunc->getResolver();
+-      if (FD->isTargetClonesMultiVersion()) {
++      if (FD->isTargetClonesMultiVersion() ||
++          FD->isTargetVersionMultiVersion()) {
+         const CGFunctionInfo &FI = getTypes().arrangeGlobalDeclaration(GD);
+         llvm::FunctionType *DeclTy = getTypes().GetFunctionType(FI);
+         std::string MangledName = getMangledNameImpl(
+@@ -4393,8 +4395,18 @@ llvm::Constant *CodeGenModule::GetOrCreateMultiVersionResolver(GlobalDecl GD) {
+   // a separate resolver).
+   std::string ResolverName = MangledName;
+   if (getTarget().supportsIFunc()) {
+-    if (!FD->isTargetClonesMultiVersion())
++    switch (FD->getMultiVersionKind()) {
++    case MultiVersionKind::None:
++      llvm_unreachable("unexpected MultiVersionKind::None for resolver");
++    case MultiVersionKind::Target:
++    case MultiVersionKind::CPUSpecific:
++    case MultiVersionKind::CPUDispatch:
+       ResolverName += ".ifunc";
++      break;
++    case MultiVersionKind::TargetClones:
++    case MultiVersionKind::TargetVersion:
++      break;
++    }
+   } else if (FD->isTargetMultiVersion()) {
+     ResolverName += ".resolver";
+   }
+diff --git a/clang/test/CodeGen/attr-target-version.c b/clang/test/CodeGen/attr-target-version.c
+index 2a96697e4291..c27d48f3ecf6 100644
+--- a/clang/test/CodeGen/attr-target-version.c
++++ b/clang/test/CodeGen/attr-target-version.c
+@@ -90,13 +90,20 @@ int hoo(void) {
+ 
+ //.
+ // CHECK: @__aarch64_cpu_features = external dso_local global { i64 }
+-// CHECK: @fmv.ifunc = weak_odr ifunc i32 (), ptr @fmv.resolver
+-// CHECK: @fmv_one.ifunc = weak_odr ifunc i32 (), ptr @fmv_one.resolver
+-// CHECK: @fmv_two.ifunc = weak_odr ifunc i32 (), ptr @fmv_two.resolver
+-// CHECK: @fmv_e.ifunc = weak_odr ifunc i32 (), ptr @fmv_e.resolver
+-// CHECK: @fmv_c.ifunc = weak_odr ifunc void (), ptr @fmv_c.resolver
+-// CHECK: @fmv_inline.ifunc = weak_odr ifunc i32 (), ptr @fmv_inline.resolver
+-// CHECK: @fmv_d.ifunc = internal ifunc i32 (), ptr @fmv_d.resolver
++// CHECK: @fmv.ifunc = weak_odr alias i32 (), ptr @fmv
++// CHECK: @fmv_one.ifunc = weak_odr alias i32 (), ptr @fmv_one
++// CHECK: @fmv_two.ifunc = weak_odr alias i32 (), ptr @fmv_two
++// CHECK: @fmv_e.ifunc = weak_odr alias i32 (), ptr @fmv_e
++// CHECK: @fmv_inline.ifunc = weak_odr alias i32 (), ptr @fmv_inline
++// CHECK: @fmv_d.ifunc = internal alias i32 (), ptr @fmv_d
++// CHECK: @fmv_c.ifunc = weak_odr alias void (), ptr @fmv_c
++// CHECK: @fmv = weak_odr ifunc i32 (), ptr @fmv.resolver
++// CHECK: @fmv_one = weak_odr ifunc i32 (), ptr @fmv_one.resolver
++// CHECK: @fmv_two = weak_odr ifunc i32 (), ptr @fmv_two.resolver
++// CHECK: @fmv_e = weak_odr ifunc i32 (), ptr @fmv_e.resolver
++// CHECK: @fmv_inline = weak_odr ifunc i32 (), ptr @fmv_inline.resolver
++// CHECK: @fmv_d = internal ifunc i32 (), ptr @fmv_d.resolver
++// CHECK: @fmv_c = weak_odr ifunc void (), ptr @fmv_c.resolver
+ //.
+ // CHECK: Function Attrs: noinline nounwind optnone
+ // CHECK-LABEL: define {{[^@]+}}@fmv._MrngMflagmMfp16fml
+@@ -105,6 +112,32 @@ int hoo(void) {
+ // CHECK-NEXT:    ret i32 1
+ //
+ //
++// CHECK: Function Attrs: noinline nounwind optnone
++// CHECK-LABEL: define {{[^@]+}}@fmv_one._MsimdMls64
++// CHECK-SAME: () #[[ATTR1:[0-9]+]] {
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    ret i32 1
++//
++//
++// CHECK: Function Attrs: noinline nounwind optnone
++// CHECK-LABEL: define {{[^@]+}}@fmv_two._Mfp
++// CHECK-SAME: () #[[ATTR1]] {
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    ret i32 1
++//
++//
++// CHECK: Function Attrs: noinline nounwind optnone
++// CHECK-LABEL: define {{[^@]+}}@foo
++// CHECK-SAME: () #[[ATTR2:[0-9]+]] {
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    [[CALL:%.*]] = call i32 @fmv()
++// CHECK-NEXT:    [[CALL1:%.*]] = call i32 @fmv_one()
++// CHECK-NEXT:    [[ADD:%.*]] = add nsw i32 [[CALL]], [[CALL1]]
++// CHECK-NEXT:    [[CALL2:%.*]] = call i32 @fmv_two()
++// CHECK-NEXT:    [[ADD3:%.*]] = add nsw i32 [[ADD]], [[CALL2]]
++// CHECK-NEXT:    ret i32 [[ADD3]]
++//
++//
+ // CHECK-LABEL: define {{[^@]+}}@fmv.resolver() comdat {
+ // CHECK-NEXT:  resolver_entry:
+ // CHECK-NEXT:    call void @__init_cpu_features_resolver()
+@@ -183,42 +216,16 @@ int hoo(void) {
+ // CHECK-NEXT:    ret ptr @fmv.default
+ //
+ //
+-// CHECK: Function Attrs: noinline nounwind optnone
+-// CHECK-LABEL: define {{[^@]+}}@fmv_one._MsimdMls64
+-// CHECK-SAME: () #[[ATTR1:[0-9]+]] {
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    ret i32 1
+-//
+-//
+ // CHECK-LABEL: define {{[^@]+}}@fmv_one.resolver() comdat {
+ // CHECK-NEXT:  resolver_entry:
+ // CHECK-NEXT:    ret ptr @fmv_one._MsimdMls64
+ //
+ //
+-// CHECK: Function Attrs: noinline nounwind optnone
+-// CHECK-LABEL: define {{[^@]+}}@fmv_two._Mfp
+-// CHECK-SAME: () #[[ATTR1]] {
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    ret i32 1
+-//
+-//
+ // CHECK-LABEL: define {{[^@]+}}@fmv_two.resolver() comdat {
+ // CHECK-NEXT:  resolver_entry:
+ // CHECK-NEXT:    ret ptr @fmv_two._MsimdMfp16
+ //
+ //
+-// CHECK: Function Attrs: noinline nounwind optnone
+-// CHECK-LABEL: define {{[^@]+}}@foo
+-// CHECK-SAME: () #[[ATTR2:[0-9]+]] {
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    [[CALL:%.*]] = call i32 @fmv.ifunc()
+-// CHECK-NEXT:    [[CALL1:%.*]] = call i32 @fmv_one.ifunc()
+-// CHECK-NEXT:    [[ADD:%.*]] = add nsw i32 [[CALL]], [[CALL1]]
+-// CHECK-NEXT:    [[CALL2:%.*]] = call i32 @fmv_two.ifunc()
+-// CHECK-NEXT:    [[ADD3:%.*]] = add nsw i32 [[ADD]], [[CALL2]]
+-// CHECK-NEXT:    ret i32 [[ADD3]]
+-//
+-//
+ // CHECK-LABEL: define {{[^@]+}}@fmv_e.resolver() comdat {
+ // CHECK-NEXT:  resolver_entry:
+ // CHECK-NEXT:    ret ptr @fmv_e._Mls64
+@@ -238,28 +245,14 @@ int hoo(void) {
+ // CHECK-NEXT:    ret void
+ //
+ //
+-// CHECK-LABEL: define {{[^@]+}}@fmv_c.resolver() comdat {
+-// CHECK-NEXT:  resolver_entry:
+-// CHECK-NEXT:    call void @__init_cpu_features_resolver()
+-// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 281474976710656
+-// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 281474976710656
+-// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
+-// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
+-// CHECK:       resolver_return:
+-// CHECK-NEXT:    ret ptr @fmv_c._Mssbs
+-// CHECK:       resolver_else:
+-// CHECK-NEXT:    ret ptr @fmv_c.default
+-//
+-//
+ // CHECK: Function Attrs: noinline nounwind optnone
+ // CHECK-LABEL: define {{[^@]+}}@goo
+ // CHECK-SAME: () #[[ATTR2]] {
+ // CHECK-NEXT:  entry:
+-// CHECK-NEXT:    [[CALL:%.*]] = call i32 @fmv_inline.ifunc()
+-// CHECK-NEXT:    [[CALL1:%.*]] = call i32 @fmv_e.ifunc()
+-// CHECK-NEXT:    [[CALL2:%.*]] = call i32 @fmv_d.ifunc()
+-// CHECK-NEXT:    call void @fmv_c.ifunc()
++// CHECK-NEXT:    [[CALL:%.*]] = call i32 @fmv_inline()
++// CHECK-NEXT:    [[CALL1:%.*]] = call i32 @fmv_e()
++// CHECK-NEXT:    [[CALL2:%.*]] = call i32 @fmv_d()
++// CHECK-NEXT:    call void @fmv_c()
+ // CHECK-NEXT:    [[CALL3:%.*]] = call i32 @fmv_default()
+ // CHECK-NEXT:    ret i32 [[CALL3]]
+ //
+@@ -412,6 +405,20 @@ int hoo(void) {
+ // CHECK-NEXT:    ret ptr @fmv_d.default
+ //
+ //
++// CHECK-LABEL: define {{[^@]+}}@fmv_c.resolver() comdat {
++// CHECK-NEXT:  resolver_entry:
++// CHECK-NEXT:    call void @__init_cpu_features_resolver()
++// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
++// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 281474976710656
++// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 281474976710656
++// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
++// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
++// CHECK:       resolver_return:
++// CHECK-NEXT:    ret ptr @fmv_c._Mssbs
++// CHECK:       resolver_else:
++// CHECK-NEXT:    ret ptr @fmv_c.default
++//
++//
+ // CHECK: Function Attrs: noinline nounwind optnone
+ // CHECK-LABEL: define {{[^@]+}}@recur
+ // CHECK-SAME: () #[[ATTR2]] {
+@@ -437,9 +444,9 @@ int hoo(void) {
+ // CHECK-NEXT:  entry:
+ // CHECK-NEXT:    [[FP1:%.*]] = alloca ptr, align 8
+ // CHECK-NEXT:    [[FP2:%.*]] = alloca ptr, align 8
+-// CHECK-NEXT:    call void @f(ptr noundef @fmv.ifunc)
+-// CHECK-NEXT:    store ptr @fmv.ifunc, ptr [[FP1]], align 8
+-// CHECK-NEXT:    store ptr @fmv.ifunc, ptr [[FP2]], align 8
++// CHECK-NEXT:    call void @f(ptr noundef @fmv)
++// CHECK-NEXT:    store ptr @fmv, ptr [[FP1]], align 8
++// CHECK-NEXT:    store ptr @fmv, ptr [[FP2]], align 8
+ // CHECK-NEXT:    [[TMP0:%.*]] = load ptr, ptr [[FP1]], align 8
+ // CHECK-NEXT:    [[CALL:%.*]] = call i32 [[TMP0]]()
+ // CHECK-NEXT:    [[TMP1:%.*]] = load ptr, ptr [[FP2]], align 8
+@@ -561,13 +568,6 @@ int hoo(void) {
+ //
+ //
+ // CHECK: Function Attrs: noinline nounwind optnone
+-// CHECK-LABEL: define {{[^@]+}}@fmv_c.default
+-// CHECK-SAME: () #[[ATTR2]] {
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    ret void
+-//
+-//
+-// CHECK: Function Attrs: noinline nounwind optnone
+ // CHECK-LABEL: define {{[^@]+}}@fmv_inline._Msha1MpmullMf64mm
+ // CHECK-SAME: () #[[ATTR12:[0-9]+]] {
+ // CHECK-NEXT:  entry:
+@@ -700,6 +700,13 @@ int hoo(void) {
+ // CHECK-NEXT:    ret i32 1
+ //
+ //
++// CHECK: Function Attrs: noinline nounwind optnone
++// CHECK-LABEL: define {{[^@]+}}@fmv_c.default
++// CHECK-SAME: () #[[ATTR2]] {
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    ret void
++//
++//
+ // CHECK-NOFMV: Function Attrs: noinline nounwind optnone
+ // CHECK-NOFMV-LABEL: define {{[^@]+}}@fmv
+ // CHECK-NOFMV-SAME: () #[[ATTR0:[0-9]+]] {
+diff --git a/clang/test/CodeGenCXX/attr-target-version.cpp b/clang/test/CodeGenCXX/attr-target-version.cpp
+index 68dd7be1180b..b63815db7e40 100644
+--- a/clang/test/CodeGenCXX/attr-target-version.cpp
++++ b/clang/test/CodeGenCXX/attr-target-version.cpp
+@@ -26,9 +26,12 @@ int bar() {
+ 
+ //.
+ // CHECK: @__aarch64_cpu_features = external dso_local global { i64 }
+-// CHECK: @_Z3fooi.ifunc = weak_odr ifunc i32 (i32), ptr @_Z3fooi.resolver
+-// CHECK: @_Z3foov.ifunc = weak_odr ifunc i32 (), ptr @_Z3foov.resolver
+-// CHECK: @_ZN7MyClass3gooEi.ifunc = weak_odr ifunc i32 (ptr, i32), ptr @_ZN7MyClass3gooEi.resolver
++// CHECK: @_ZN7MyClass3gooEi.ifunc = weak_odr alias i32 (ptr, i32), ptr @_ZN7MyClass3gooEi
++// CHECK: @_Z3fooi.ifunc = weak_odr alias i32 (i32), ptr @_Z3fooi
++// CHECK: @_Z3foov.ifunc = weak_odr alias i32 (), ptr @_Z3foov
++// CHECK: @_ZN7MyClass3gooEi = weak_odr ifunc i32 (ptr, i32), ptr @_ZN7MyClass3gooEi.resolver
++// CHECK: @_Z3fooi = weak_odr ifunc i32 (i32), ptr @_Z3fooi.resolver
++// CHECK: @_Z3foov = weak_odr ifunc i32 (), ptr @_Z3foov.resolver
+ //.
+ // CHECK-LABEL: @_Z3fooi._Mbf16Msme-f64f64(
+ // CHECK-NEXT:  entry:
+@@ -37,39 +40,11 @@ int bar() {
+ // CHECK-NEXT:    ret i32 1
+ //
+ //
+-// CHECK-LABEL: @_Z3fooi.resolver(
+-// CHECK-NEXT:  resolver_entry:
+-// CHECK-NEXT:    call void @__init_cpu_features_resolver()
+-// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 36028797153181696
+-// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 36028797153181696
+-// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
+-// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
+-// CHECK:       resolver_return:
+-// CHECK-NEXT:    ret ptr @_Z3fooi._Mbf16Msme-f64f64
+-// CHECK:       resolver_else:
+-// CHECK-NEXT:    ret ptr @_Z3fooi.default
+-//
+-//
+ // CHECK-LABEL: @_Z3foov._Msm4Mebf16(
+ // CHECK-NEXT:  entry:
+ // CHECK-NEXT:    ret i32 3
+ //
+ //
+-// CHECK-LABEL: @_Z3foov.resolver(
+-// CHECK-NEXT:  resolver_entry:
+-// CHECK-NEXT:    call void @__init_cpu_features_resolver()
+-// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 268435488
+-// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 268435488
+-// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
+-// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
+-// CHECK:       resolver_return:
+-// CHECK-NEXT:    ret ptr @_Z3foov._Msm4Mebf16
+-// CHECK:       resolver_else:
+-// CHECK-NEXT:    ret ptr @_Z3foov.default
+-//
+-//
+ // CHECK-LABEL: @_ZN7MyClass3gooEi.resolver(
+ // CHECK-NEXT:  resolver_entry:
+ // CHECK-NEXT:    call void @__init_cpu_features_resolver()
+@@ -95,24 +70,40 @@ int bar() {
+ // CHECK-LABEL: @_Z3barv(
+ // CHECK-NEXT:  entry:
+ // CHECK-NEXT:    [[M:%.*]] = alloca [[STRUCT_MYCLASS:%.*]], align 1
+-// CHECK-NEXT:    [[CALL:%.*]] = call noundef i32 @_ZN7MyClass3gooEi.ifunc(ptr noundef nonnull align 1 dereferenceable(1) [[M]], i32 noundef 1)
+-// CHECK-NEXT:    [[CALL1:%.*]] = call noundef i32 @_Z3fooi.ifunc(i32 noundef 1)
++// CHECK-NEXT:    [[CALL:%.*]] = call noundef i32 @_ZN7MyClass3gooEi(ptr noundef nonnull align 1 dereferenceable(1) [[M]], i32 noundef 1)
++// CHECK-NEXT:    [[CALL1:%.*]] = call noundef i32 @_Z3fooi(i32 noundef 1)
+ // CHECK-NEXT:    [[ADD:%.*]] = add nsw i32 [[CALL]], [[CALL1]]
+-// CHECK-NEXT:    [[CALL2:%.*]] = call noundef i32 @_Z3foov.ifunc()
++// CHECK-NEXT:    [[CALL2:%.*]] = call noundef i32 @_Z3foov()
+ // CHECK-NEXT:    [[ADD3:%.*]] = add nsw i32 [[ADD]], [[CALL2]]
+ // CHECK-NEXT:    ret i32 [[ADD3]]
+ //
+ //
+-// CHECK-LABEL: @_Z3fooi.default(
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    [[DOTADDR:%.*]] = alloca i32, align 4
+-// CHECK-NEXT:    store i32 [[TMP0:%.*]], ptr [[DOTADDR]], align 4
+-// CHECK-NEXT:    ret i32 2
++// CHECK-LABEL: @_Z3fooi.resolver(
++// CHECK-NEXT:  resolver_entry:
++// CHECK-NEXT:    call void @__init_cpu_features_resolver()
++// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
++// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 36028797153181696
++// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 36028797153181696
++// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
++// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
++// CHECK:       resolver_return:
++// CHECK-NEXT:    ret ptr @_Z3fooi._Mbf16Msme-f64f64
++// CHECK:       resolver_else:
++// CHECK-NEXT:    ret ptr @_Z3fooi.default
+ //
+ //
+-// CHECK-LABEL: @_Z3foov.default(
+-// CHECK-NEXT:  entry:
+-// CHECK-NEXT:    ret i32 4
++// CHECK-LABEL: @_Z3foov.resolver(
++// CHECK-NEXT:  resolver_entry:
++// CHECK-NEXT:    call void @__init_cpu_features_resolver()
++// CHECK-NEXT:    [[TMP0:%.*]] = load i64, ptr @__aarch64_cpu_features, align 8
++// CHECK-NEXT:    [[TMP1:%.*]] = and i64 [[TMP0]], 268435488
++// CHECK-NEXT:    [[TMP2:%.*]] = icmp eq i64 [[TMP1]], 268435488
++// CHECK-NEXT:    [[TMP3:%.*]] = and i1 true, [[TMP2]]
++// CHECK-NEXT:    br i1 [[TMP3]], label [[RESOLVER_RETURN:%.*]], label [[RESOLVER_ELSE:%.*]]
++// CHECK:       resolver_return:
++// CHECK-NEXT:    ret ptr @_Z3foov._Msm4Mebf16
++// CHECK:       resolver_else:
++// CHECK-NEXT:    ret ptr @_Z3foov.default
+ //
+ //
+ // CHECK-LABEL: @_ZN7MyClass3gooEi._Mdotprod(
+@@ -144,6 +135,18 @@ int bar() {
+ // CHECK-NEXT:    [[THIS1:%.*]] = load ptr, ptr [[THIS_ADDR]], align 8
+ // CHECK-NEXT:    ret i32 1
+ //
++//
++// CHECK-LABEL: @_Z3fooi.default(
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    [[DOTADDR:%.*]] = alloca i32, align 4
++// CHECK-NEXT:    store i32 [[TMP0:%.*]], ptr [[DOTADDR]], align 4
++// CHECK-NEXT:    ret i32 2
++//
++//
++// CHECK-LABEL: @_Z3foov.default(
++// CHECK-NEXT:  entry:
++// CHECK-NEXT:    ret i32 4
++//
+ //.
+ // CHECK: attributes #[[ATTR0:[0-9]+]] = { mustprogress noinline nounwind optnone "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+bf16,+sme,+sme-f64f64" }
+ // CHECK: attributes #[[ATTR1:[0-9]+]] = { mustprogress noinline nounwind optnone "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+bf16,+fp-armv8,+neon,+sm4" }
+-- 
+2.34.1
+

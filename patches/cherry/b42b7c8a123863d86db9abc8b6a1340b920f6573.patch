@@ -1,0 +1,317 @@
+From 8c1319fa60618ac1a72a7ac8cf3413a724e2474c Mon Sep 17 00:00:00 2001
+From: Alexandros Lamprineas <alexandros.lamprineas@arm.com>
+Date: Wed, 28 Feb 2024 17:49:59 +0000
+Subject: [PATCH] [clang] Refactor target attribute mangling. (#81893)
+
+Before this patch all of the 'target', 'target_version' and
+'target_clones' attributes were sharing a common mangling logic across
+different targets. However we would like to differenciate this logic,
+therefore I have moved the default path to ABIInfo and provided
+overrides for AArch64. This way we can resolve feature aliases without
+affecting the name mangling. The PR #80540 demonstrates a motivating
+case.
+---
+ clang/lib/CodeGen/ABIInfo.cpp         |  52 ++++++++++++
+ clang/lib/CodeGen/ABIInfo.h           |  10 +++
+ clang/lib/CodeGen/CodeGenModule.cpp   | 111 ++++----------------------
+ clang/lib/CodeGen/Targets/AArch64.cpp |  40 ++++++++++
+ 4 files changed, 118 insertions(+), 95 deletions(-)
+
+diff --git a/clang/lib/CodeGen/ABIInfo.cpp b/clang/lib/CodeGen/ABIInfo.cpp
+index 1b56cf7c596d..efcff958ce54 100644
+--- a/clang/lib/CodeGen/ABIInfo.cpp
++++ b/clang/lib/CodeGen/ABIInfo.cpp
+@@ -184,6 +184,58 @@ ABIArgInfo ABIInfo::getNaturalAlignIndirectInReg(QualType Ty,
+                                       /*ByVal*/ false, Realign);
+ }
+ 
++void ABIInfo::appendAttributeMangling(TargetAttr *Attr,
++                                      raw_ostream &Out) const {
++  if (Attr->isDefaultVersion())
++    return;
++  appendAttributeMangling(Attr->getFeaturesStr(), Out);
++}
++
++void ABIInfo::appendAttributeMangling(TargetVersionAttr *Attr,
++                                      raw_ostream &Out) const {
++  appendAttributeMangling(Attr->getNamesStr(), Out);
++}
++
++void ABIInfo::appendAttributeMangling(TargetClonesAttr *Attr, unsigned Index,
++                                      raw_ostream &Out) const {
++  appendAttributeMangling(Attr->getFeatureStr(Index), Out);
++  Out << '.' << Attr->getMangledIndex(Index);
++}
++
++void ABIInfo::appendAttributeMangling(StringRef AttrStr,
++                                      raw_ostream &Out) const {
++  if (AttrStr == "default") {
++    Out << ".default";
++    return;
++  }
++
++  Out << '.';
++  const TargetInfo &TI = CGT.getTarget();
++  ParsedTargetAttr Info = TI.parseTargetAttr(AttrStr);
++
++  llvm::sort(Info.Features, [&TI](StringRef LHS, StringRef RHS) {
++    // Multiversioning doesn't allow "no-${feature}", so we can
++    // only have "+" prefixes here.
++    assert(LHS.starts_with("+") && RHS.starts_with("+") &&
++           "Features should always have a prefix.");
++    return TI.multiVersionSortPriority(LHS.substr(1)) >
++           TI.multiVersionSortPriority(RHS.substr(1));
++  });
++
++  bool IsFirst = true;
++  if (!Info.CPU.empty()) {
++    IsFirst = false;
++    Out << "arch_" << Info.CPU;
++  }
++
++  for (StringRef Feat : Info.Features) {
++    if (!IsFirst)
++      Out << '_';
++    IsFirst = false;
++    Out << Feat.substr(1);
++  }
++}
++
+ // Pin the vtable to this file.
+ SwiftABIInfo::~SwiftABIInfo() = default;
+ 
+diff --git a/clang/lib/CodeGen/ABIInfo.h b/clang/lib/CodeGen/ABIInfo.h
+index b9a5ef6e4366..ff4ae44a42c3 100644
+--- a/clang/lib/CodeGen/ABIInfo.h
++++ b/clang/lib/CodeGen/ABIInfo.h
+@@ -9,6 +9,7 @@
+ #ifndef LLVM_CLANG_LIB_CODEGEN_ABIINFO_H
+ #define LLVM_CLANG_LIB_CODEGEN_ABIINFO_H
+ 
++#include "clang/AST/Attr.h"
+ #include "clang/AST/CharUnits.h"
+ #include "clang/AST/Type.h"
+ #include "llvm/IR/CallingConv.h"
+@@ -111,6 +112,15 @@ public:
+ 
+   CodeGen::ABIArgInfo getNaturalAlignIndirectInReg(QualType Ty,
+                                                    bool Realign = false) const;
++
++  virtual void appendAttributeMangling(TargetAttr *Attr,
++                                       raw_ostream &Out) const;
++  virtual void appendAttributeMangling(TargetVersionAttr *Attr,
++                                       raw_ostream &Out) const;
++  virtual void appendAttributeMangling(TargetClonesAttr *Attr, unsigned Index,
++                                       raw_ostream &Out) const;
++  virtual void appendAttributeMangling(StringRef AttrStr,
++                                       raw_ostream &Out) const;
+ };
+ 
+ /// Target specific hooks for defining how a type should be passed or returned
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 2f923d5457f9..1af8c3e198b2 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -1708,59 +1708,6 @@ static void AppendCPUSpecificCPUDispatchMangling(const CodeGenModule &CGM,
+     Out << ".resolver";
+ }
+ 
+-static void AppendTargetVersionMangling(const CodeGenModule &CGM,
+-                                        const TargetVersionAttr *Attr,
+-                                        raw_ostream &Out) {
+-  if (Attr->isDefaultVersion()) {
+-    Out << ".default";
+-    return;
+-  }
+-  Out << "._";
+-  const TargetInfo &TI = CGM.getTarget();
+-  llvm::SmallVector<StringRef, 8> Feats;
+-  Attr->getFeatures(Feats);
+-  llvm::stable_sort(Feats, [&TI](const StringRef FeatL, const StringRef FeatR) {
+-    return TI.multiVersionSortPriority(FeatL) <
+-           TI.multiVersionSortPriority(FeatR);
+-  });
+-  for (const auto &Feat : Feats) {
+-    Out << 'M';
+-    Out << Feat;
+-  }
+-}
+-
+-static void AppendTargetMangling(const CodeGenModule &CGM,
+-                                 const TargetAttr *Attr, raw_ostream &Out) {
+-  if (Attr->isDefaultVersion())
+-    return;
+-
+-  Out << '.';
+-  const TargetInfo &Target = CGM.getTarget();
+-  ParsedTargetAttr Info = Target.parseTargetAttr(Attr->getFeaturesStr());
+-  llvm::sort(Info.Features, [&Target](StringRef LHS, StringRef RHS) {
+-    // Multiversioning doesn't allow "no-${feature}", so we can
+-    // only have "+" prefixes here.
+-    assert(LHS.starts_with("+") && RHS.starts_with("+") &&
+-           "Features should always have a prefix.");
+-    return Target.multiVersionSortPriority(LHS.substr(1)) >
+-           Target.multiVersionSortPriority(RHS.substr(1));
+-  });
+-
+-  bool IsFirst = true;
+-
+-  if (!Info.CPU.empty()) {
+-    IsFirst = false;
+-    Out << "arch_" << Info.CPU;
+-  }
+-
+-  for (StringRef Feat : Info.Features) {
+-    if (!IsFirst)
+-      Out << '_';
+-    IsFirst = false;
+-    Out << Feat.substr(1);
+-  }
+-}
+-
+ // Returns true if GD is a function decl with internal linkage and
+ // needs a unique suffix after the mangled name.
+ static bool isUniqueInternalLinkageDecl(GlobalDecl GD,
+@@ -1770,41 +1717,6 @@ static bool isUniqueInternalLinkageDecl(GlobalDecl GD,
+          (CGM.getFunctionLinkage(GD) == llvm::GlobalValue::InternalLinkage);
+ }
+ 
+-static void AppendTargetClonesMangling(const CodeGenModule &CGM,
+-                                       const TargetClonesAttr *Attr,
+-                                       unsigned VersionIndex,
+-                                       raw_ostream &Out) {
+-  const TargetInfo &TI = CGM.getTarget();
+-  if (TI.getTriple().isAArch64()) {
+-    StringRef FeatureStr = Attr->getFeatureStr(VersionIndex);
+-    if (FeatureStr == "default") {
+-      Out << ".default";
+-      return;
+-    }
+-    Out << "._";
+-    SmallVector<StringRef, 8> Features;
+-    FeatureStr.split(Features, "+");
+-    llvm::stable_sort(Features,
+-                      [&TI](const StringRef FeatL, const StringRef FeatR) {
+-                        return TI.multiVersionSortPriority(FeatL) <
+-                               TI.multiVersionSortPriority(FeatR);
+-                      });
+-    for (auto &Feat : Features) {
+-      Out << 'M';
+-      Out << Feat;
+-    }
+-  } else {
+-    Out << '.';
+-    StringRef FeatureStr = Attr->getFeatureStr(VersionIndex);
+-    if (FeatureStr.starts_with("arch="))
+-      Out << "arch_" << FeatureStr.substr(sizeof("arch=") - 1);
+-    else
+-      Out << FeatureStr;
+-
+-    Out << '.' << Attr->getMangledIndex(VersionIndex);
+-  }
+-}
+-
+ static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
+                                       const NamedDecl *ND,
+                                       bool OmitMultiVersionMangling = false) {
+@@ -1858,16 +1770,25 @@ static std::string getMangledNameImpl(CodeGenModule &CGM, GlobalDecl GD,
+                                              FD->getAttr<CPUSpecificAttr>(),
+                                              GD.getMultiVersionIndex(), Out);
+         break;
+-      case MultiVersionKind::Target:
+-        AppendTargetMangling(CGM, FD->getAttr<TargetAttr>(), Out);
++      case MultiVersionKind::Target: {
++        auto *Attr = FD->getAttr<TargetAttr>();
++        const ABIInfo &Info = CGM.getTargetCodeGenInfo().getABIInfo();
++        Info.appendAttributeMangling(Attr, Out);
+         break;
+-      case MultiVersionKind::TargetVersion:
+-        AppendTargetVersionMangling(CGM, FD->getAttr<TargetVersionAttr>(), Out);
++      }
++      case MultiVersionKind::TargetVersion: {
++        auto *Attr = FD->getAttr<TargetVersionAttr>();
++        const ABIInfo &Info = CGM.getTargetCodeGenInfo().getABIInfo();
++        Info.appendAttributeMangling(Attr, Out);
+         break;
+-      case MultiVersionKind::TargetClones:
+-        AppendTargetClonesMangling(CGM, FD->getAttr<TargetClonesAttr>(),
+-                                   GD.getMultiVersionIndex(), Out);
++      }
++      case MultiVersionKind::TargetClones: {
++        auto *Attr = FD->getAttr<TargetClonesAttr>();
++        unsigned Index = GD.getMultiVersionIndex();
++        const ABIInfo &Info = CGM.getTargetCodeGenInfo().getABIInfo();
++        Info.appendAttributeMangling(Attr, Index, Out);
+         break;
++      }
+       case MultiVersionKind::None:
+         llvm_unreachable("None multiversion type isn't valid here");
+       }
+diff --git a/clang/lib/CodeGen/Targets/AArch64.cpp b/clang/lib/CodeGen/Targets/AArch64.cpp
+index ee7f95084d2e..da3eb003148f 100644
+--- a/clang/lib/CodeGen/Targets/AArch64.cpp
++++ b/clang/lib/CodeGen/Targets/AArch64.cpp
+@@ -8,6 +8,7 @@
+ 
+ #include "ABIInfoImpl.h"
+ #include "TargetInfo.h"
++#include "llvm/TargetParser/AArch64TargetParser.h"
+ 
+ using namespace clang;
+ using namespace clang::CodeGen;
+@@ -74,6 +75,12 @@ private:
+   bool allowBFloatArgsAndRet() const override {
+     return getTarget().hasBFloat16Type();
+   }
++
++  using ABIInfo::appendAttributeMangling;
++  void appendAttributeMangling(TargetClonesAttr *Attr, unsigned Index,
++                               raw_ostream &Out) const override;
++  void appendAttributeMangling(StringRef AttrStr,
++                               raw_ostream &Out) const override;
+ };
+ 
+ class AArch64SwiftABIInfo : public SwiftABIInfo {
+@@ -814,6 +821,39 @@ Address AArch64ABIInfo::EmitMSVAArg(CodeGenFunction &CGF, Address VAListAddr,
+                           /*allowHigherAlign*/ false);
+ }
+ 
++void AArch64ABIInfo::appendAttributeMangling(TargetClonesAttr *Attr,
++                                             unsigned Index,
++                                             raw_ostream &Out) const {
++  appendAttributeMangling(Attr->getFeatureStr(Index), Out);
++}
++
++void AArch64ABIInfo::appendAttributeMangling(StringRef AttrStr,
++                                             raw_ostream &Out) const {
++  if (AttrStr == "default") {
++    Out << ".default";
++    return;
++  }
++
++  Out << "._";
++  SmallVector<StringRef, 8> Features;
++  AttrStr.split(Features, "+");
++  for (auto &Feat : Features)
++    Feat = Feat.trim();
++
++  // FIXME: It was brought up in #79316 that sorting the features which are
++  // used for mangling based on their multiversion priority is not a good
++  // practice. Changing the feature priorities will break the ABI. Perhaps
++  // it would be preferable to perform a lexicographical sort instead.
++  const TargetInfo &TI = CGT.getTarget();
++  llvm::sort(Features, [&TI](const StringRef LHS, const StringRef RHS) {
++    return TI.multiVersionSortPriority(LHS) < TI.multiVersionSortPriority(RHS);
++  });
++
++  for (auto &Feat : Features)
++    if (auto Ext = llvm::AArch64::parseArchExtension(Feat))
++      Out << 'M' << Ext->Name;
++}
++
+ std::unique_ptr<TargetCodeGenInfo>
+ CodeGen::createAArch64TargetCodeGenInfo(CodeGenModule &CGM,
+                                         AArch64ABIKind Kind) {
+-- 
+2.34.1
+
