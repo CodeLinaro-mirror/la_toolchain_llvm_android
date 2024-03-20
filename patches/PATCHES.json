@@ -744,6 +744,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][Clang] Fix linker error for function multiversioning (#74358)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1be0d9d7d88a9bdabe6ef4d81720ddf4cf6f71c1.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525059
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix MFS warning format"
         },
         "platforms": [
@@ -753,6 +767,20 @@
         "version_range": {
             "from": 510928,
             "until": 525168
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64][FMV] Support feature MOPS in Function Multi Versioning. (#78788)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/179ba129f50aefe6e670800aec7091d958aa6f90.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525237
         }
     },
     {
@@ -842,6 +870,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [NFC][FMV] Add tests to demonstrate feature priorities. (#79455)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f6290e0daf5aff7132cab097fb13aad8a20ad070.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525665
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Driver,CodeGen] Support -mtls-dialect= (#79256)"
         },
         "platforms": [
@@ -865,6 +907,20 @@
         "version_range": {
             "from": 522817,
             "until": 525817
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [FMV] Change feature priorities according to ACLE. (#79316)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f214933bc538c719403804069941de301487c39b.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525974
         }
     },
     {
@@ -912,6 +968,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang][fmv] Drop .ifunc from target_version's entrypoint's mangling (#81194)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/99d743320c5dddb780f1fb2f49414b10e6a52a05.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 527155
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [clang][driver] Set TLSDESC as the default for Android on RISC-V (#81198)"
         },
         "platforms": [
@@ -935,6 +1005,34 @@
         "version_range": {
             "from": 522817,
             "until": 528245
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [clang] Refactor target attribute mangling. (#81893)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b42b7c8a123863d86db9abc8b6a1340b920f6573.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 528964
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [FMV] Use lexicographic order of feature names when mangling. (#83464)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e81ef463f10851bfbcd56a4f3450821f1e7c862f.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 529162
         }
     },
     {
