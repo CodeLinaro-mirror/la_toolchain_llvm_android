@@ -54,10 +54,13 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
         '--failure_mode', failure_mode
     ]
 
+    patch_dir = os.getcwd()
     if git_am:
       patch_manager_cmd.append('--git_am')
+      """Run git am in the source directory"""
+      patch_dir=source_dir
 
-    return utils.check_output(patch_manager_cmd)
+    return utils.check_output(patch_manager_cmd, cwd=patch_dir)
 
 
 def write_source_info(source_dir: str, patch_output: str) -> None:
@@ -160,13 +163,13 @@ def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False):
         if git_am:
           # To avoid clobbering the source tree's git objects, remove
           # out/llvm-project/.git and copy .repo/projects/toolchain/llvm-project.git there
-          tmp_out_git_dir = paths.OUT_DIR / 'llvm-project.tmp/.git'
-          copy_from_git = os.readlink(tmp_out_git_dir)
+          tmp_out_git_dir = tmp_source_dir / '.git'
+          copy_from_git = os.path.abspath(os.path.join(tmp_source_dir, os.readlink(tmp_out_git_dir)))
 
           cmd = ['rm', '-rf', tmp_out_git_dir]
           subprocess.check_call(cmd)
 
-          cmd = ['cp', '-Rf', copy_from_git, tmp_out_git_dir]
+          cmd = ['cp', '-Rf', '-L', copy_from_git, tmp_out_git_dir]
           subprocess.check_call(cmd)
     else:
         logger().info(f'Fetching {llvm_rev} from https://github.com/llvm/llvm-project.git')
