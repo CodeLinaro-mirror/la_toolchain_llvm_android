@@ -660,6 +660,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISCV] Force relocations if initial MCSubtargetInfo contains FeatureRelax (#77436)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6c207ee5d20d2b054509123e6d0507df1332b376.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523615
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [lld][ELF] Allow Arm PC-relative relocations in PIC links (#77304)"
         },
         "platforms": [
@@ -1019,6 +1033,20 @@
         "version_range": {
             "from": 522817,
             "until": 528964
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [RISCV] Store RVC and TSO ELF flags explicitly in RISCVTargetStreamer. NFCI (#83344)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6afda56faa6260cff4e6e9264226737d96d952c1.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 529091
         }
     },
     {

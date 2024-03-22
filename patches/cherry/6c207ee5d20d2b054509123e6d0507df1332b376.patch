@@ -1,0 +1,95 @@
+From 6c207ee5d20d2b054509123e6d0507df1332b376 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Tue, 9 Jan 2024 11:24:21 -0800
+Subject: [PATCH] [RISCV] Force relocations if initial MCSubtargetInfo contains
+ FeatureRelax (#77436)
+
+Regarding
+```
+.option norelax
+j label
+.option relax
+// relaxable instructions
+// For assembly input, RISCVAsmParser::ParseInstruction will set ForceRelocs (https://reviews.llvm.org/D46423).
+// For direct object emission, ForceRelocs is not set after https://github.com/llvm/llvm-project/pull/73721
+label:
+```
+
+The J instruction needs a relocation to ensure the target is correct
+after linker relaxation. This is related a limitation in the assembler:
+RISCVAsmBackend::shouldForceRelocation decides upfront whether a
+relocation is needed, instead of checking more information (whether
+there are relaxable fragments in between).
+
+Despite the limitation, `j label` produces a relocation in direct object
+emission mode, but was broken by #73721 due to the shouldForceRelocation
+limitation.
+
+Add a workaround to RISCVTargetELFStreamer to emulate the previous
+behavior.
+
+Link: https://github.com/ClangBuiltLinux/linux/issues/1965
+---
+ .../RISCV/MCTargetDesc/RISCVELFStreamer.cpp   |  7 +++++
+ .../CodeGen/RISCV/option-relax-relocation.ll  | 31 +++++++++++++++++++
+ 2 files changed, 38 insertions(+)
+ create mode 100644 llvm/test/CodeGen/RISCV/option-relax-relocation.ll
+
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
+index 9db5148208b3..961b8f0afe22 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
+@@ -37,6 +37,13 @@ RISCVTargetELFStreamer::RISCVTargetELFStreamer(MCStreamer &S,
+   auto &MAB = static_cast<RISCVAsmBackend &>(MCA.getBackend());
+   setTargetABI(RISCVABI::computeTargetABI(STI.getTargetTriple(), Features,
+                                           MAB.getTargetOptions().getABIName()));
++  // `j label` in `.option norelax; j label; .option relax; ...; label:` needs a
++  // relocation to ensure the jump target is correct after linking. This is due
++  // to a limitation that shouldForceRelocation has to make the decision upfront
++  // without knowing a possibly future .option relax. When RISCVAsmParser is used,
++  // its ParseInstruction may call setForceRelocs as well.
++  if (STI.hasFeature(RISCV::FeatureRelax))
++    static_cast<RISCVAsmBackend &>(MAB).setForceRelocs();
+ }
+ 
+ RISCVELFStreamer &RISCVTargetELFStreamer::getStreamer() {
+diff --git a/llvm/test/CodeGen/RISCV/option-relax-relocation.ll b/llvm/test/CodeGen/RISCV/option-relax-relocation.ll
+new file mode 100644
+index 000000000000..3dc5aa64bb36
+--- /dev/null
++++ b/llvm/test/CodeGen/RISCV/option-relax-relocation.ll
+@@ -0,0 +1,31 @@
++;; With +relax, J below needs a relocation to ensure the target is correct
++;; after linker relaxation. See https://github.com/ClangBuiltLinux/linux/issues/1965
++
++; RUN: llc -mtriple=riscv64 -mattr=-relax -filetype=obj < %s \
++; RUN:     | llvm-objdump -d -r - | FileCheck %s
++; RUN: llc -mtriple=riscv64 -mattr=+relax -filetype=obj < %s \
++; RUN:     | llvm-objdump -d -r - | FileCheck %s --check-prefixes=CHECK,RELAX
++
++; CHECK:        j       {{.*}}
++; RELAX-NEXT:           R_RISCV_JAL  {{.*}}
++; CHECK-NEXT:   auipc   ra, 0x0
++; CHECK-NEXT:           R_RISCV_CALL_PLT     f
++; RELAX-NEXT:           R_RISCV_RELAX        *ABS*
++; CHECK-NEXT:   jalr    ra
++
++define dso_local noundef signext i32 @main() local_unnamed_addr #0 {
++entry:
++  callbr void asm sideeffect ".option push\0A.option norvc\0A.option norelax\0Aj $0\0A.option pop\0A", "!i"() #2
++          to label %asm.fallthrough [label %label]
++
++asm.fallthrough:                                  ; preds = %entry
++  tail call void @f()
++  br label %label
++
++label:                                            ; preds = %asm.fallthrough, %entry
++  ret i32 0
++}
++
++declare void @f()
++
++attributes #0 = { nounwind "target-features"="-c,+relax" }
+-- 
+2.44.0.396.g6e790dbe36-goog
+

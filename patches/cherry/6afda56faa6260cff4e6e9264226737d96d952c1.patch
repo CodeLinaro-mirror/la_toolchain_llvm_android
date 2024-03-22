@@ -1,0 +1,116 @@
+From 56b81685673b17e5a13f86e985459f88a4edf4d8 Mon Sep 17 00:00:00 2001
+From: Craig Topper <craig.topper@sifive.com>
+Date: Thu, 29 Feb 2024 08:55:52 -0800
+Subject: [PATCH] [RISCV] Store RVC and TSO ELF flags explicitly in
+ RISCVTargetStreamer. NFCI (#83344)
+
+Instead of caching STI in the RISCVELFTargetStreamer, store the two
+flags we need from it.
+
+My goal is to allow RISCVAsmPrinter to override these flags using IR
+module metadata for LTO. So they need to be separated from the STI used
+to construct the TargetStreamer.
+
+This patch should be NFC as long as no one is changing the contents of
+the STI that was used to construct the TargetStreamer between the
+constructor and the use of the flags.
+
+Change-Id: Idc4ccde3fdaa7f33474e71e98431cccf790bcb6f
+---
+ llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp   | 8 ++++----
+ llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.h     | 1 -
+ .../lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp | 6 ++++++
+ llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h  | 5 +++++
+ 4 files changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
+index 961b8f0afe22..cdf7c048a4bf 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.cpp
+@@ -31,12 +31,13 @@ using namespace llvm;
+ // This part is for ELF object output.
+ RISCVTargetELFStreamer::RISCVTargetELFStreamer(MCStreamer &S,
+                                                const MCSubtargetInfo &STI)
+-    : RISCVTargetStreamer(S), CurrentVendor("riscv"), STI(STI) {
++    : RISCVTargetStreamer(S), CurrentVendor("riscv") {
+   MCAssembler &MCA = getStreamer().getAssembler();
+   const FeatureBitset &Features = STI.getFeatureBits();
+   auto &MAB = static_cast<RISCVAsmBackend &>(MCA.getBackend());
+   setTargetABI(RISCVABI::computeTargetABI(STI.getTargetTriple(), Features,
+                                           MAB.getTargetOptions().getABIName()));
++  setFlagsFromFeatures(STI);
+   // `j label` in `.option norelax; j label; .option relax; ...; label:` needs a
+   // relocation to ensure the jump target is correct after linking. This is due
+   // to a limitation that shouldForceRelocation has to make the decision upfront
+@@ -87,14 +88,13 @@ void RISCVTargetELFStreamer::finishAttributeSection() {
+ void RISCVTargetELFStreamer::finish() {
+   RISCVTargetStreamer::finish();
+   MCAssembler &MCA = getStreamer().getAssembler();
+-  const FeatureBitset &Features = STI.getFeatureBits();
+   RISCVABI::ABI ABI = getTargetABI();
+ 
+   unsigned EFlags = MCA.getELFHeaderEFlags();
+ 
+-  if (Features[RISCV::FeatureStdExtC])
++  if (hasRVC())
+     EFlags |= ELF::EF_RISCV_RVC;
+-  if (Features[RISCV::FeatureStdExtZtso])
++  if (hasTSO())
+     EFlags |= ELF::EF_RISCV_TSO;
+ 
+   switch (ABI) {
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.h b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.h
+index a6f54bf67b5d..e8f29cd8449b 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.h
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVELFStreamer.h
+@@ -46,7 +46,6 @@ private:
+   StringRef CurrentVendor;
+ 
+   MCSection *AttributeSection = nullptr;
+-  const MCSubtargetInfo &STI;
+ 
+   void emitAttribute(unsigned Attribute, unsigned Value) override;
+   void emitTextAttribute(unsigned Attribute, StringRef String) override;
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
+index 29ffc3224b52..8a51a6b34afd 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.cpp
+@@ -48,6 +48,12 @@ void RISCVTargetStreamer::setTargetABI(RISCVABI::ABI ABI) {
+   TargetABI = ABI;
+ }
+ 
++void RISCVTargetStreamer::setFlagsFromFeatures(const MCSubtargetInfo &STI) {
++  HasRVC = STI.hasFeature(RISCV::FeatureStdExtC) ||
++           STI.hasFeature(RISCV::FeatureStdExtZca);
++  HasTSO = STI.hasFeature(RISCV::FeatureStdExtZtso);
++}
++
+ void RISCVTargetStreamer::emitTargetAttributes(const MCSubtargetInfo &STI,
+                                                bool EmitStackAlign) {
+   if (STI.hasFeature(RISCV::FeatureRVE))
+diff --git a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
+index 070e72fb157a..cb8bc21cb635 100644
+--- a/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
++++ b/llvm/lib/Target/RISCV/MCTargetDesc/RISCVTargetStreamer.h
+@@ -33,6 +33,8 @@ struct RISCVOptionArchArg {
+ 
+ class RISCVTargetStreamer : public MCTargetStreamer {
+   RISCVABI::ABI TargetABI = RISCVABI::ABI_Unknown;
++  bool HasRVC = false;
++  bool HasTSO = false;
+ 
+ public:
+   RISCVTargetStreamer(MCStreamer &S);
+@@ -58,6 +60,9 @@ public:
+   void emitTargetAttributes(const MCSubtargetInfo &STI, bool EmitStackAlign);
+   void setTargetABI(RISCVABI::ABI ABI);
+   RISCVABI::ABI getTargetABI() const { return TargetABI; }
++  void setFlagsFromFeatures(const MCSubtargetInfo &STI);
++  bool hasRVC() const { return HasRVC; }
++  bool hasTSO() const { return HasTSO; }
+ };
+ 
+ // This part is for ascii assembly output
+-- 
+2.44.0.396.g6e790dbe36-goog
+
