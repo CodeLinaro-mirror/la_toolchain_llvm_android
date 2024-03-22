@@ -1,0 +1,164 @@
+commit 05b86a8fea23865e4a437efa9cb4f6844ccbf50e
+Author: Nikita Popov <npopov@redhat.com>
+Date:   Thu Sep 28 14:58:38 2023 +0200
+
+    [Bitcode] Support expanding constant expressions in function metadata
+    
+    This fixes the bitcode upgrade failure reported in
+    https://reviews.llvm.org/D155924#4616789.
+    
+    The expansion always happens in the entry block, so this may be
+    inaccurate if there are trapping constant expressions.
+
+diff --git a/llvm/lib/Bitcode/Reader/BitcodeReader.cpp b/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
+index 1d1ec988a93d..e56291859022 100644
+--- a/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
++++ b/llvm/lib/Bitcode/Reader/BitcodeReader.cpp
+@@ -4683,7 +4683,7 @@ Error BitcodeReader::parseFunctionBody(Function *F) {
+       case bitc::METADATA_BLOCK_ID:
+         assert(DeferredMetadataInfo.empty() &&
+                "Must read all module-level metadata before function-level");
+-        if (Error Err = MDLoader->parseFunctionMetadata())
++        if (Error Err = MDLoader->parseFunctionMetadata(CurBB))
+           return Err;
+         break;
+       case bitc::USELIST_BLOCK_ID:
+diff --git a/llvm/lib/Bitcode/Reader/MetadataLoader.cpp b/llvm/lib/Bitcode/Reader/MetadataLoader.cpp
+index 641cd1befa4c..e12435499090 100644
+--- a/llvm/lib/Bitcode/Reader/MetadataLoader.cpp
++++ b/llvm/lib/Bitcode/Reader/MetadataLoader.cpp
+@@ -473,7 +473,8 @@ class MetadataLoader::MetadataLoaderImpl {
+ 
+   Error parseOneMetadata(SmallVectorImpl<uint64_t> &Record, unsigned Code,
+                          PlaceholderQueue &Placeholders, StringRef Blob,
+-                         unsigned &NextMetadataNo);
++                         unsigned &NextMetadataNo,
++                         BasicBlock *ConstExprInsertBB);
+   Error parseMetadataStrings(ArrayRef<uint64_t> Record, StringRef Blob,
+                              function_ref<void(StringRef)> CallBack);
+   Error parseGlobalObjectAttachment(GlobalObject &GO,
+@@ -742,7 +743,7 @@ public:
+         TheModule(TheModule), Callbacks(std::move(Callbacks)),
+         IsImporting(IsImporting) {}
+ 
+-  Error parseMetadata(bool ModuleLevel);
++  Error parseMetadata(bool ModuleLevel, BasicBlock *ConstExprInsertBB);
+ 
+   bool hasFwdRefs() const { return MetadataList.hasFwdRefs(); }
+ 
+@@ -1067,7 +1068,8 @@ void MetadataLoader::MetadataLoaderImpl::callMDTypeCallback(Metadata **Val,
+ 
+ /// Parse a METADATA_BLOCK. If ModuleLevel is true then we are parsing
+ /// module level metadata.
+-Error MetadataLoader::MetadataLoaderImpl::parseMetadata(bool ModuleLevel) {
++Error MetadataLoader::MetadataLoaderImpl::parseMetadata(
++    bool ModuleLevel, BasicBlock *ConstExprInsertBB) {
+   if (!ModuleLevel && MetadataList.hasFwdRefs())
+     return error("Invalid metadata: fwd refs into function blocks");
+ 
+@@ -1150,7 +1152,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseMetadata(bool ModuleLevel) {
+     if (Expected<unsigned> MaybeCode =
+             Stream.readRecord(Entry.ID, Record, &Blob)) {
+       if (Error Err = parseOneMetadata(Record, MaybeCode.get(), Placeholders,
+-                                       Blob, NextMetadataNo))
++                                       Blob, NextMetadataNo, ConstExprInsertBB))
+         return Err;
+     } else
+       return MaybeCode.takeError();
+@@ -1191,7 +1193,8 @@ void MetadataLoader::MetadataLoaderImpl::lazyLoadOneMetadata(
+   if (Expected<unsigned> MaybeCode =
+           IndexCursor.readRecord(Entry.ID, Record, &Blob)) {
+     if (Error Err =
+-            parseOneMetadata(Record, MaybeCode.get(), Placeholders, Blob, ID))
++            parseOneMetadata(Record, MaybeCode.get(), Placeholders, Blob, ID,
++                             /* ConstExprInsertBB */ nullptr))
+       report_fatal_error("Can't lazyload MD, parseOneMetadata: " +
+                          Twine(toString(std::move(Err))));
+   } else
+@@ -1235,7 +1238,8 @@ void MetadataLoader::MetadataLoaderImpl::resolveForwardRefsAndPlaceholders(
+ 
+ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
+     SmallVectorImpl<uint64_t> &Record, unsigned Code,
+-    PlaceholderQueue &Placeholders, StringRef Blob, unsigned &NextMetadataNo) {
++    PlaceholderQueue &Placeholders, StringRef Blob, unsigned &NextMetadataNo,
++    BasicBlock *ConstExprInsertBB) {
+ 
+   bool IsDistinct = false;
+   auto getMD = [&](unsigned ID) -> Metadata * {
+@@ -1389,8 +1393,7 @@ Error MetadataLoader::MetadataLoaderImpl::parseOneMetadata(
+     if (!Ty || Ty->isMetadataTy() || Ty->isVoidTy())
+       return error("Invalid record");
+ 
+-    Value *V = ValueList.getValueFwdRef(Record[1], Ty, TyID,
+-                                        /*ConstExprInsertBB*/ nullptr);
++    Value *V = ValueList.getValueFwdRef(Record[1], Ty, TyID, ConstExprInsertBB);
+     if (!V)
+       return error("Invalid value reference from metadata");
+ 
+@@ -2479,8 +2482,9 @@ MetadataLoader::MetadataLoader(BitstreamCursor &Stream, Module &TheModule,
+     : Pimpl(std::make_unique<MetadataLoaderImpl>(
+           Stream, TheModule, ValueList, std::move(Callbacks), IsImporting)) {}
+ 
+-Error MetadataLoader::parseMetadata(bool ModuleLevel) {
+-  return Pimpl->parseMetadata(ModuleLevel);
++Error MetadataLoader::parseMetadata(bool ModuleLevel,
++                                    BasicBlock *ConstExprInsertBB) {
++  return Pimpl->parseMetadata(ModuleLevel, ConstExprInsertBB);
+ }
+ 
+ bool MetadataLoader::hasFwdRefs() const { return Pimpl->hasFwdRefs(); }
+diff --git a/llvm/lib/Bitcode/Reader/MetadataLoader.h b/llvm/lib/Bitcode/Reader/MetadataLoader.h
+index fbee7e49f8df..3bbe51b2f70b 100644
+--- a/llvm/lib/Bitcode/Reader/MetadataLoader.h
++++ b/llvm/lib/Bitcode/Reader/MetadataLoader.h
+@@ -19,6 +19,7 @@
+ #include <memory>
+ 
+ namespace llvm {
++class BasicBlock;
+ class BitcodeReaderValueList;
+ class BitstreamCursor;
+ class DISubprogram;
+@@ -47,7 +48,8 @@ struct MetadataLoaderCallbacks {
+ class MetadataLoader {
+   class MetadataLoaderImpl;
+   std::unique_ptr<MetadataLoaderImpl> Pimpl;
+-  Error parseMetadata(bool ModuleLevel);
++  Error parseMetadata(bool ModuleLevel,
++                      BasicBlock *ConstExprInsertBB = nullptr);
+ 
+ public:
+   ~MetadataLoader();
+@@ -61,7 +63,9 @@ public:
+   Error parseModuleMetadata() { return parseMetadata(true); }
+ 
+   // Parse a function metadata block
+-  Error parseFunctionMetadata() { return parseMetadata(false); }
++  Error parseFunctionMetadata(BasicBlock *ConstExprInsertBB) {
++    return parseMetadata(false, ConstExprInsertBB);
++  }
+ 
+   /// Set the mode to strip TBAA metadata on load.
+   void setStripTBAA(bool StripTBAA = true);
+diff --git a/llvm/test/Bitcode/Inputs/constexpr-to-instr-metadata.bc b/llvm/test/Bitcode/Inputs/constexpr-to-instr-metadata.bc
+new file mode 100644
+index 000000000000..ddee3bd4ea25
+Binary files /dev/null and b/llvm/test/Bitcode/Inputs/constexpr-to-instr-metadata.bc differ
+diff --git a/llvm/test/Bitcode/constexpr-to-instr-metadata.ll b/llvm/test/Bitcode/constexpr-to-instr-metadata.ll
+new file mode 100644
+index 000000000000..78b5e30dd315
+--- /dev/null
++++ b/llvm/test/Bitcode/constexpr-to-instr-metadata.ll
+@@ -0,0 +1,12 @@
++; RUN: llvm-dis -expand-constant-exprs < %S/Inputs/constexpr-to-instr-metadata.bc | FileCheck %s
++
++; CHECK-LABEL: define void @test() {
++; CHECK: %constexpr = ptrtoint ptr @g to i32
++; CHECK: %constexpr1 = zext i32 %constexpr to i64
++; CHECK: %constexpr2 = ptrtoint ptr @g to i64
++; CHECK: %constexpr3 = lshr i64 %constexpr2, 32
++; CHECK: %constexpr4 = trunc i64 %constexpr3 to i32
++; CHECK: %constexpr5 = zext i32 %constexpr4 to i64
++; CHECK: %constexpr6 = shl i64 %constexpr5, 32
++; CHECK: %constexpr7 = or i64 %constexpr1, %constexpr6
++; CHECK: call void @llvm.dbg.value(metadata i64 %constexpr7, metadata !4, metadata !DIExpression(DW_OP_LLVM_fragment, 64, 64)), !dbg !13

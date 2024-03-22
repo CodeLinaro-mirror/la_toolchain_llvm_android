@@ -296,6 +296,21 @@
     {
         "metadata": {
             "info": [],
+            "title": "[Bitcode] Support expanding constant expressions in function metadata"
+        },
+        "platforms": [
+            "android",
+            "chromiumos"
+        ],
+        "rel_patch_path": "cherry/05b86a8fea23865e4a437efa9cb4f6844ccbf50e.patch",
+        "version_range": {
+            "from": 510928,
+            "until": 514146
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [RISC-V] Add RISC-V ABI plugin"
         },
         "platforms": [
