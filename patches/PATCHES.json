@@ -1066,6 +1066,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] clang driver: enable fast unaligned access for Android on RISCV64 (#85704)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b20360abeb3a80281dc082f1e093abd13cb1ee4c.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 531316
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
