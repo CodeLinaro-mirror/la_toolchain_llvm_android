@@ -1,0 +1,51 @@
+From bb65f5a5d95736cf08b282c1ded7f5cceed5fd7e Mon Sep 17 00:00:00 2001
+From: Andy Kaylor <andrew.kaylor@intel.com>
+Date: Wed, 24 Jan 2024 11:20:23 -0800
+Subject: [PATCH] Move raw_string_ostream back to raw_ostream.cpp (#79224)
+
+The implementation of raw_string_ostream::write_impl() was moved to
+raw_socket_stream.cpp when the raw_socket_ostream support was separated.
+This patch moves it back to facilitate disabling socket support in
+downstream projects.
+---
+ llvm/lib/Support/raw_ostream.cpp       | 8 ++++++++
+ llvm/lib/Support/raw_socket_stream.cpp | 7 -------
+ 2 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/llvm/lib/Support/raw_ostream.cpp b/llvm/lib/Support/raw_ostream.cpp
+index 3d3a564af51d..c7064d2dfedc 100644
+--- a/llvm/lib/Support/raw_ostream.cpp
++++ b/llvm/lib/Support/raw_ostream.cpp
+@@ -954,6 +954,14 @@ bool raw_fd_stream::classof(const raw_ostream *OS) {
+   return OS->get_kind() == OStreamKind::OK_FDStream;
+ }
+ 
++//===----------------------------------------------------------------------===//
++//  raw_string_ostream
++//===----------------------------------------------------------------------===//
++
++void raw_string_ostream::write_impl(const char *Ptr, size_t Size) {
++  OS.append(Ptr, Size);
++}
++
+ //===----------------------------------------------------------------------===//
+ //  raw_svector_ostream
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/Support/raw_socket_stream.cpp b/llvm/lib/Support/raw_socket_stream.cpp
+index 4659880cfe19..a65865bcede1 100644
+--- a/llvm/lib/Support/raw_socket_stream.cpp
++++ b/llvm/lib/Support/raw_socket_stream.cpp
+@@ -170,10 +170,3 @@ raw_socket_stream::createConnectedUnix(StringRef SocketPath) {
+ 
+ raw_socket_stream::~raw_socket_stream() {}
+ 
+-//===----------------------------------------------------------------------===//
+-//  raw_string_ostream
+-//===----------------------------------------------------------------------===//
+-
+-void raw_string_ostream::write_impl(const char *Ptr, size_t Size) {
+-  OS.append(Ptr, Size);
+-}
+-- 
+2.44.0.396.g6e790dbe36-goog
+
