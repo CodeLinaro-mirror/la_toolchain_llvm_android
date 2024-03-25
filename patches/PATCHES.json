@@ -801,6 +801,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Move raw_string_ostream back to raw_ostream.cpp (#79224)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bb65f5a5d95736cf08b282c1ded7f5cceed5fd7e.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525444
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Fix missing and incorrect push/pop macros (#79204)"
         },
         "platforms": [
