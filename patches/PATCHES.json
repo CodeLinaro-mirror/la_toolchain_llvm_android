@@ -997,6 +997,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang][Sema] Fix a CTAD regression after 42239d2e9 (#86914)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0f6ed4c394fd8f843029f6919230bf8df8618529.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 532220
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [

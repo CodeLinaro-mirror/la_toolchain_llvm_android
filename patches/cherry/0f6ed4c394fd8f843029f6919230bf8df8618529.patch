@@ -1,0 +1,111 @@
+From 0f6ed4c394fd8f843029f6919230bf8df8618529 Mon Sep 17 00:00:00 2001
+From: Younan Zhang <zyn7109@gmail.com>
+Date: Fri, 29 Mar 2024 23:28:54 +0800
+Subject: [PATCH] [clang][Sema] Fix a CTAD regression after 42239d2e9 (#86914)
+
+The most recent declaration of a template as a friend can introduce a
+different template parameter depth compared to what we anticipate from a
+CTAD guide.
+
+Fixes https://github.com/llvm/llvm-project/issues/86769
+---
+ clang/docs/ReleaseNotes.rst                  |  3 +++
+ clang/lib/Sema/SemaTemplate.cpp              | 22 ++++++++++++++++-
+ clang/test/SemaTemplate/concepts-friends.cpp | 26 ++++++++++++++++++++
+ clang/test/SemaTemplate/ctad.cpp             |  2 +-
+ 4 files changed, 51 insertions(+), 2 deletions(-)
+
+diff --git a/clang/docs/ReleaseNotes.rst b/clang/docs/ReleaseNotes.rst
+index 232de0d7d8bb..c193c20fae5c 100644
+--- a/clang/docs/ReleaseNotes.rst
++++ b/clang/docs/ReleaseNotes.rst
+@@ -357,6 +357,9 @@ Bug Fixes in This Version
+ - Fixes an assertion failure on invalid code when trying to define member
+   functions in lambdas.
+ 
++- Fixed a regression in CTAD that a friend declaration that befriends itself may cause
++  incorrect constraint substitution. (#GH86769).
++
+ Bug Fixes to Compiler Builtins
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+diff --git a/clang/lib/Sema/SemaTemplate.cpp b/clang/lib/Sema/SemaTemplate.cpp
+index e575bb2df97f..9cd19d711af4 100644
+--- a/clang/lib/Sema/SemaTemplate.cpp
++++ b/clang/lib/Sema/SemaTemplate.cpp
+@@ -1836,7 +1836,27 @@ static TemplateParameterList *GetTemplateParameterList(TemplateDecl *TD) {
+   // Make sure we get the template parameter list from the most
+   // recent declaration, since that is the only one that is guaranteed to
+   // have all the default template argument information.
+-  return cast<TemplateDecl>(TD->getMostRecentDecl())->getTemplateParameters();
++  Decl *D = TD->getMostRecentDecl();
++  // C++11 N3337 [temp.param]p12:
++  // A default template argument shall not be specified in a friend class
++  // template declaration.
++  //
++  // Skip past friend *declarations* because they are not supposed to contain
++  // default template arguments. Moreover, these declarations may introduce
++  // template parameters living in different template depths than the
++  // corresponding template parameters in TD, causing unmatched constraint
++  // substitution.
++  //
++  // FIXME: Diagnose such cases within a class template:
++  //  template <class T>
++  //  struct S {
++  //    template <class = void> friend struct C;
++  //  };
++  //  template struct S<int>;
++  while (D->getFriendObjectKind() != Decl::FriendObjectKind::FOK_None &&
++         D->getPreviousDecl())
++    D = D->getPreviousDecl();
++  return cast<TemplateDecl>(D)->getTemplateParameters();
+ }
+ 
+ DeclResult Sema::CheckClassTemplate(
+diff --git a/clang/test/SemaTemplate/concepts-friends.cpp b/clang/test/SemaTemplate/concepts-friends.cpp
+index 255b0858917f..91b797034ed6 100644
+--- a/clang/test/SemaTemplate/concepts-friends.cpp
++++ b/clang/test/SemaTemplate/concepts-friends.cpp
+@@ -478,3 +478,29 @@ template <Concept> class Foo {
+ };
+ 
+ } // namespace FriendOfFriend
++
++namespace GH86769 {
++
++template <typename T>
++concept X = true;
++
++template <X T> struct Y {
++  Y(T) {}
++  template <X U> friend struct Y;
++  template <X U> friend struct Y;
++  template <X U> friend struct Y;
++};
++
++template <class T>
++struct Z {
++  // FIXME: This is ill-formed per C++11 N3337 [temp.param]p12:
++  // A default template argument shall not be specified in a friend class
++  // template declaration.
++  template <X U = void> friend struct Y;
++};
++
++template struct Y<int>;
++template struct Z<int>;
++Y y(1);
++
++}
+diff --git a/clang/test/SemaTemplate/ctad.cpp b/clang/test/SemaTemplate/ctad.cpp
+index 388ed7d4cced..ec144d4f44ba 100644
+--- a/clang/test/SemaTemplate/ctad.cpp
++++ b/clang/test/SemaTemplate/ctad.cpp
+@@ -53,4 +53,4 @@ X x;
+ template<class T, class B> struct Y { Y(T); };
+ template<class T, class B=void> struct Y ;
+ Y y(1);
+-};
++}
+-- 
+2.44.0.478.gd926399ef9-goog
+
