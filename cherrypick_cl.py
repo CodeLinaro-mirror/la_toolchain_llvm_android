@@ -343,7 +343,10 @@ def main():
 
     if args.verify_merge:
         print('Verifying merge...')
+        print('Verifying merge with patch ...')
         source_manager.setup_sources()
+        print('Verifying merge with git am ...')
+        source_manager.setup_sources(git_am=True)
     if args.create_cl:
         if not args.reason:
             print('error: --create-cl requires --reason')
