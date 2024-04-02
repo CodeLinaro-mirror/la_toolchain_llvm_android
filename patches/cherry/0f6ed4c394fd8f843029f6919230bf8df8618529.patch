@@ -9,25 +9,10 @@ CTAD guide.
 
 Fixes https://github.com/llvm/llvm-project/issues/86769
 ---
- clang/docs/ReleaseNotes.rst                  |  3 +++
  clang/lib/Sema/SemaTemplate.cpp              | 22 ++++++++++++++++-
  clang/test/SemaTemplate/concepts-friends.cpp | 26 ++++++++++++++++++++
  clang/test/SemaTemplate/ctad.cpp             |  2 +-
- 4 files changed, 51 insertions(+), 2 deletions(-)
-
-diff --git a/clang/docs/ReleaseNotes.rst b/clang/docs/ReleaseNotes.rst
-index 232de0d7d8bb..c193c20fae5c 100644
---- a/clang/docs/ReleaseNotes.rst
-+++ b/clang/docs/ReleaseNotes.rst
-@@ -357,6 +357,9 @@ Bug Fixes in This Version
- - Fixes an assertion failure on invalid code when trying to define member
-   functions in lambdas.
- 
-+- Fixed a regression in CTAD that a friend declaration that befriends itself may cause
-+  incorrect constraint substitution. (#GH86769).
-+
- Bug Fixes to Compiler Builtins
- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 3 files changed, 48 insertions(+), 2 deletions(-)
  
 diff --git a/clang/lib/Sema/SemaTemplate.cpp b/clang/lib/Sema/SemaTemplate.cpp
 index e575bb2df97f..9cd19d711af4 100644
