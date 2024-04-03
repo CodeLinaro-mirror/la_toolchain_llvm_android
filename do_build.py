@@ -944,7 +944,7 @@ def parse_args():
         action='store_false',
         default=False,
         dest='incremental',
-        help='Delete paths.OUT_DIR if it exists')
+        help='Delete paths.OUT_DIR if it exists (default)')
 
     return parser.parse_args()
 
