@@ -1285,7 +1285,7 @@
         "rel_patch_path": "bionic-includes-plus-sign-for-nan-v2.patch",
         "version_range": {
             "from": 510928,
-            "until": null
+            "until": 530511
         }
     },
     {
