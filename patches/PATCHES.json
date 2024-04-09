@@ -661,6 +661,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ELF] Support R_RISCV_SET_ULEB128/R_RISCV_SUB_ULEB128 in SHF_ALLOC sections (#77261)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3fa17954dedd59bfad9cef1778719fb6312a5949.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523507
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [RISCV] Force relocations if initial MCSubtargetInfo contains FeatureRelax (#77436)"
         },
         "platforms": [
@@ -815,6 +829,62 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISCV] Support TLSDESC in the RISC-V backend (#66915)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/03a61d34ebf4f8eeaa6861bec3ab39c75bb41778.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525314
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [RISCV] Fix TLSDESC comment. NFC (#79403)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1f454ede4660477c3782595975def90c26c19881.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525559
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Clean up R_RISCV_RELAX code. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ccb99f221422b8de5e1ae04d3427f15878f7cd93.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525571
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Fix terminology: TLS optimizations instead of TLS relaxation. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/849951f8759171cb6c74d3ccbcf154506fc1f0ae.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525574
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Fix missing and incorrect push/pop macros (#79204)"
         },
         "platforms": [
@@ -829,6 +899,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ELF] Implement R_RISCV_TLSDESC for RISC-V"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1117fdd7c16873eb389e988c6a39ad922bae0fd0.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525603
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [NFC][FMV] Add tests to demonstrate feature priorities. (#79455)"
         },
         "platforms": [
@@ -838,6 +922,20 @@
         "version_range": {
             "from": 522817,
             "until": 525665
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Driver,CodeGen] Support -mtls-dialect= (#79256)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/36b4a9ccd9f7e04010476e6b2a311f2052a4ac20.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525716
         }
     },
     {
