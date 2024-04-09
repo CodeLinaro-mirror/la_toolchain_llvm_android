@@ -19,6 +19,7 @@
 """Update the prebuilt clang from the build server."""
 
 import argparse
+import contextlib
 import glob
 import inspect
 import logging
@@ -315,24 +316,25 @@ def install_clang_directory(extract_subdir: str, install_subdir: str, overwrite:
 def update_profiles(download_dir, build_number, bug):
     profiles_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / 'linux-x86' / 'profiles'
 
-    # First, delete the old profiles.
-    for f in glob.glob(f'{profiles_dir}/{PGO_PROFILE_PATTERN}'):
-        os.remove(f)
-    for f in glob.glob(f'{profiles_dir}/{BOLT_PROFILE_PATTERN}'):
-        os.remove(f)
+    with contextlib.chdir(profiles_dir):
+        # First, delete the old profiles.
+        for f in glob.glob(PGO_PROFILE_PATTERN):
+            os.remove(f)
+        for f in glob.glob(BOLT_PROFILE_PATTERN):
+            os.remove(f)
 
-    # Replace with the downloaded new profiles.
-    shutil.copy(glob.glob(f'{download_dir}/{PGO_PROFILE_PATTERN}')[0], str(profiles_dir))
-    shutil.copy(glob.glob(f'{download_dir}/{BOLT_PROFILE_PATTERN}')[0], str(profiles_dir))
+        # Replace with the downloaded new profiles.
+        shutil.copy(glob.glob(f'{download_dir}/{PGO_PROFILE_PATTERN}')[0], '.')
+        shutil.copy(glob.glob(f'{download_dir}/{BOLT_PROFILE_PATTERN}')[0], '.')
 
-    utils.check_call(['git', 'add', profiles_dir])
-    message_lines = [f'Check in profiles from build {build_number}']
-    if bug is not None:
-        message_lines.append('')
-        message_lines.append(f'Bug: {format_bug(bug)}')
-    message_lines.append('Test: N/A')
-    message = '\n'.join(message_lines)
-    utils.check_call(['git', 'commit', '-m', message])
+        utils.check_call(['git', 'add', '.'])
+        message_lines = [f'Check in profiles from build {build_number}']
+        if bug is not None:
+            message_lines.append('')
+            message_lines.append(f'Bug: {format_bug(bug)}')
+        message_lines.append('Test: N/A')
+        message = '\n'.join(message_lines)
+        utils.check_call(['git', 'commit', '-m', message])
 
 
 def main():
