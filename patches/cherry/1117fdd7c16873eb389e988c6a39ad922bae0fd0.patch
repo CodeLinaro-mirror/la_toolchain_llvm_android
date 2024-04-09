@@ -1,0 +1,779 @@
+From 1117fdd7c16873eb389e988c6a39ad922bae0fd0 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Thu, 25 Jan 2024 13:42:31 -0800
+Subject: [PATCH] [ELF] Implement R_RISCV_TLSDESC for RISC-V
+
+Support
+R_RISCV_TLSDESC_HI20/R_RISCV_TLSDESC_LOAD_LO12/R_RISCV_TLSDESC_ADD_LO12/R_RISCV_TLSDESC_CALL.
+LOAD_LO12/ADD_LO12/CALL relocations reference a label at the HI20
+location, which requires special handling. We save the value of HI20 to
+be reused. Two interleaved TLSDESC code sequences, which compilers do
+not generate, are unsupported.
+
+For -no-pie/-pie links, TLSDESC to initial-exec or local-exec
+optimizations are eligible. Implement the relevant hooks
+(R_RELAX_TLS_GD_TO_LE, R_RELAX_TLS_GD_TO_IE): the first two instructions
+are converted to NOP while the latter two are converted to a GOT load or
+a lui+addi.
+
+The first two instructions, which would be converted to NOP, are removed
+instead in the presence of relaxation. Relaxation is eligible as long as
+the R_RISCV_TLSDESC_HI20 relocation has a pairing R_RISCV_RELAX,
+regardless of whether the following instructions have a R_RISCV_RELAX.
+In addition, for the TLSDESC to LE optimization (`lui a0,<hi20>; addi a0,a0,<lo12>`),
+`lui` can be removed (i.e. use the short form) if hi20 is 0.
+
+```
+// TLSDESC to LE/IE optimization
+.Ltlsdesc_hi2:
+  auipc a4, %tlsdesc_hi(c)                      # if relax: remove; otherwise, NOP
+  load  a5, %tlsdesc_load_lo(.Ltlsdesc_hi2)(a4) # if relax: remove; otherwise, NOP
+  addi  a0, a4, %tlsdesc_add_lo(.Ltlsdesc_hi2)  # if LE && !hi20 {if relax: remove; otherwise, NOP}
+  jalr  t0, 0(a5), %tlsdesc_call(.Ltlsdesc_hi2)
+  add   a0, a0, tp
+```
+
+The implementation carefully ensures that an instruction unrelated to
+the current TLSDESC code sequence, if immediately follows a removable
+instruction (HI20 or LOAD_LO12 OR (LE-specific) ADD_LO12), is not
+converted to NOP.
+
+* `riscv64-tlsdesc.s` is inspired by `i386-tlsdesc-gd.s` (https://reviews.llvm.org/D112582).
+* `riscv64-tlsdesc-relax.s` tests linker relaxation.
+* `riscv-tlsdesc-gd-mixed.s` is inspired by `x86-64-tlsdesc-gd-mixed.s` (https://reviews.llvm.org/D116900).
+
+Link: https://github.com/riscv-non-isa/riscv-elf-psabi-doc/pull/373
+
+Reviewed By: ilovepi
+
+Pull Request: https://github.com/llvm/llvm-project/pull/79239
+---
+ lld/ELF/Arch/RISCV.cpp                | 134 +++++++++++++++++-
+ lld/ELF/Relocations.cpp               |  14 +-
+ lld/test/ELF/riscv-tlsdesc-gd-mixed.s |  26 ++++
+ lld/test/ELF/riscv-tlsdesc-relax.s    | 189 +++++++++++++++++++++++++
+ lld/test/ELF/riscv-tlsdesc.s          | 194 ++++++++++++++++++++++++++
+ 5 files changed, 551 insertions(+), 6 deletions(-)
+ create mode 100644 lld/test/ELF/riscv-tlsdesc-gd-mixed.s
+ create mode 100644 lld/test/ELF/riscv-tlsdesc-relax.s
+ create mode 100644 lld/test/ELF/riscv-tlsdesc.s
+
+diff --git a/lld/ELF/Arch/RISCV.cpp b/lld/ELF/Arch/RISCV.cpp
+index a92f7bf590c4..8ce92b4badfb 100644
+--- a/lld/ELF/Arch/RISCV.cpp
++++ b/lld/ELF/Arch/RISCV.cpp
+@@ -61,6 +61,7 @@ enum Op {
+   AUIPC = 0x17,
+   JALR = 0x67,
+   LD = 0x3003,
++  LUI = 0x37,
+   LW = 0x2003,
+   SRLI = 0x5013,
+   SUB = 0x40000033,
+@@ -73,6 +74,7 @@ enum Reg {
+   X_T0 = 5,
+   X_T1 = 6,
+   X_T2 = 7,
++  X_A0 = 10,
+   X_T3 = 28,
+ };
+ 
+@@ -139,6 +141,7 @@ RISCV::RISCV() {
+     tlsGotRel = R_RISCV_TLS_TPREL32;
+   }
+   gotRel = symbolicRel;
++  tlsDescRel = R_RISCV_TLSDESC;
+ 
+   // .got[0] = _DYNAMIC
+   gotHeaderEntriesNum = 1;
+@@ -207,6 +210,8 @@ int64_t RISCV::getImplicitAddend(const uint8_t *buf, RelType type) const {
+   case R_RISCV_JUMP_SLOT:
+     // These relocations are defined as not having an implicit addend.
+     return 0;
++  case R_RISCV_TLSDESC:
++    return config->is64 ? read64le(buf + 8) : read32le(buf + 4);
+   }
+ }
+ 
+@@ -315,6 +320,12 @@ RelExpr RISCV::getRelExpr(const RelType type, const Symbol &s,
+   case R_RISCV_PCREL_LO12_I:
+   case R_RISCV_PCREL_LO12_S:
+     return R_RISCV_PC_INDIRECT;
++  case R_RISCV_TLSDESC_HI20:
++  case R_RISCV_TLSDESC_LOAD_LO12:
++  case R_RISCV_TLSDESC_ADD_LO12:
++    return R_TLSDESC_PC;
++  case R_RISCV_TLSDESC_CALL:
++    return R_TLSDESC_CALL;
+   case R_RISCV_TLS_GD_HI20:
+     return R_TLSGD_PC;
+   case R_RISCV_TLS_GOT_HI20:
+@@ -439,6 +450,7 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
+ 
+   case R_RISCV_GOT_HI20:
+   case R_RISCV_PCREL_HI20:
++  case R_RISCV_TLSDESC_HI20:
+   case R_RISCV_TLS_GD_HI20:
+   case R_RISCV_TLS_GOT_HI20:
+   case R_RISCV_TPREL_HI20:
+@@ -450,6 +462,8 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
+   }
+ 
+   case R_RISCV_PCREL_LO12_I:
++  case R_RISCV_TLSDESC_LOAD_LO12:
++  case R_RISCV_TLSDESC_ADD_LO12:
+   case R_RISCV_TPREL_LO12_I:
+   case R_RISCV_LO12_I: {
+     uint64_t hi = (val + 0x800) >> 12;
+@@ -533,8 +547,14 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
+     break;
+ 
+   case R_RISCV_RELAX:
+-    return; // Ignored (for now)
+-
++    return;
++  case R_RISCV_TLSDESC:
++    // The addend is stored in the second word.
++    if (config->is64)
++      write64le(loc + 8, val);
++    else
++      write32le(loc + 4, val);
++    break;
+   default:
+     llvm_unreachable("unknown relocation");
+   }
+@@ -544,23 +564,113 @@ static bool relaxable(ArrayRef<Relocation> relocs, size_t i) {
+   return i + 1 != relocs.size() && relocs[i + 1].type == R_RISCV_RELAX;
+ }
+ 
++static void tlsdescToIe(uint8_t *loc, const Relocation &rel, uint64_t val) {
++  switch (rel.type) {
++  case R_RISCV_TLSDESC_HI20:
++  case R_RISCV_TLSDESC_LOAD_LO12:
++    write32le(loc, 0x00000013); // nop
++    break;
++  case R_RISCV_TLSDESC_ADD_LO12:
++    write32le(loc, utype(AUIPC, X_A0, hi20(val))); // auipc a0,<hi20>
++    break;
++  case R_RISCV_TLSDESC_CALL:
++    if (config->is64)
++      write32le(loc, itype(LD, X_A0, X_A0, lo12(val))); // ld a0,<lo12>(a0)
++    else
++      write32le(loc, itype(LW, X_A0, X_A0, lo12(val))); // lw a0,<lo12>(a0)
++    break;
++  default:
++    llvm_unreachable("unsupported relocation for TLSDESC to IE");
++  }
++}
++
++static void tlsdescToLe(uint8_t *loc, const Relocation &rel, uint64_t val) {
++  switch (rel.type) {
++  case R_RISCV_TLSDESC_HI20:
++  case R_RISCV_TLSDESC_LOAD_LO12:
++    write32le(loc, 0x00000013); // nop
++    return;
++  case R_RISCV_TLSDESC_ADD_LO12:
++    if (isInt<12>(val))
++      write32le(loc, 0x00000013); // nop
++    else
++      write32le(loc, utype(LUI, X_A0, hi20(val))); // lui a0,<hi20>
++    return;
++  case R_RISCV_TLSDESC_CALL:
++    if (isInt<12>(val))
++      write32le(loc, itype(ADDI, X_A0, 0, val)); // addi a0,zero,<lo12>
++    else
++      write32le(loc, itype(ADDI, X_A0, X_A0, lo12(val))); // addi a0,a0,<lo12>
++    return;
++  default:
++    llvm_unreachable("unsupported relocation for TLSDESC to LE");
++  }
++}
++
+ void RISCV::relocateAlloc(InputSectionBase &sec, uint8_t *buf) const {
+   uint64_t secAddr = sec.getOutputSection()->addr;
+   if (auto *s = dyn_cast<InputSection>(&sec))
+     secAddr += s->outSecOff;
+   else if (auto *ehIn = dyn_cast<EhInputSection>(&sec))
+     secAddr += ehIn->getParent()->outSecOff;
++  uint64_t tlsdescVal = 0;
++  bool tlsdescRelax = false, isToLe = false;
+   const ArrayRef<Relocation> relocs = sec.relocs();
+   for (size_t i = 0, size = relocs.size(); i != size; ++i) {
+     const Relocation &rel = relocs[i];
+     uint8_t *loc = buf + rel.offset;
+-    const uint64_t val =
++    uint64_t val =
+         sec.getRelocTargetVA(sec.file, rel.type, rel.addend,
+                              secAddr + rel.offset, *rel.sym, rel.expr);
+ 
+     switch (rel.expr) {
+     case R_RELAX_HINT:
++      continue;
++    case R_TLSDESC_PC:
++      // For R_RISCV_TLSDESC_HI20, store &got(sym)-PC to be used by the
++      // following two instructions L[DW] and ADDI.
++      if (rel.type == R_RISCV_TLSDESC_HI20)
++        tlsdescVal = val;
++      else
++        val = tlsdescVal;
+       break;
++    case R_RELAX_TLS_GD_TO_IE:
++      // Only R_RISCV_TLSDESC_HI20 reaches here. tlsdescVal will be finalized
++      // after we see R_RISCV_TLSDESC_ADD_LO12 in the R_RELAX_TLS_GD_TO_LE case.
++      // The net effect is that tlsdescVal will be smaller than `val` to take
++      // into account of NOP instructions (in the absence of R_RISCV_RELAX)
++      // before AUIPC.
++      tlsdescVal = val + rel.offset;
++      isToLe = false;
++      tlsdescRelax = relaxable(relocs, i);
++      if (!tlsdescRelax)
++        tlsdescToIe(loc, rel, val);
++      continue;
++    case R_RELAX_TLS_GD_TO_LE:
++      // See the comment in handleTlsRelocation. For TLSDESC=>IE,
++      // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12,CALL} also reach here. If isToIe is
++      // true, this is actually TLSDESC=>IE optimization.
++      if (rel.type == R_RISCV_TLSDESC_HI20) {
++        tlsdescVal = val;
++        isToLe = true;
++        tlsdescRelax = relaxable(relocs, i);
++      } else {
++        if (!isToLe && rel.type == R_RISCV_TLSDESC_ADD_LO12)
++          tlsdescVal -= rel.offset;
++        val = tlsdescVal;
++      }
++      // When NOP conversion is eligible and relaxation applies, don't write a
++      // NOP in case an unrelated instruction follows the current instruction.
++      if (tlsdescRelax &&
++          (rel.type == R_RISCV_TLSDESC_HI20 ||
++           rel.type == R_RISCV_TLSDESC_LOAD_LO12 ||
++           (rel.type == R_RISCV_TLSDESC_ADD_LO12 && isToLe && !hi20(val))))
++        continue;
++      if (isToLe)
++        tlsdescToLe(loc, rel, val);
++      else
++        tlsdescToIe(loc, rel, val);
++      continue;
+     case R_RISCV_LEB128:
+       if (i + 1 < size) {
+         const Relocation &rel1 = relocs[i + 1];
+@@ -579,9 +689,9 @@ void RISCV::relocateAlloc(InputSectionBase &sec, uint8_t *buf) const {
+                   ": R_RISCV_SET_ULEB128 not paired with R_RISCV_SUB_SET128");
+       return;
+     default:
+-      relocate(loc, rel, val);
+       break;
+     }
++    relocate(loc, rel, val);
+   }
+ }
+ 
+@@ -725,6 +835,7 @@ static bool relax(InputSection &sec) {
+   bool changed = false;
+   ArrayRef<SymbolAnchor> sa = ArrayRef(aux.anchors);
+   uint64_t delta = 0;
++  bool tlsdescRelax = false, toLeShortForm = false;
+ 
+   std::fill_n(aux.relocTypes.get(), relocs.size(), R_RISCV_NONE);
+   aux.writes.clear();
+@@ -765,6 +876,21 @@ static bool relax(InputSection &sec) {
+       if (relaxable(relocs, i))
+         relaxHi20Lo12(sec, i, loc, r, remove);
+       break;
++    case R_RISCV_TLSDESC_HI20:
++      // For TLSDESC=>LE, we can use the short form if hi20 is zero.
++      tlsdescRelax = relaxable(relocs, i);
++      toLeShortForm = tlsdescRelax && r.expr == R_RELAX_TLS_GD_TO_LE &&
++                      !hi20(r.sym->getVA(r.addend));
++      [[fallthrough]];
++    case R_RISCV_TLSDESC_LOAD_LO12:
++      // For TLSDESC=>LE/IE, AUIPC and L[DW] are removed if relaxable.
++      if (tlsdescRelax && r.expr != R_TLSDESC_PC)
++        remove = 4;
++      break;
++    case R_RISCV_TLSDESC_ADD_LO12:
++      if (toLeShortForm)
++        remove = 4;
++      break;
+     }
+ 
+     // For all anchors whose offsets are <= r.offset, they are preceded by
+diff --git a/lld/ELF/Relocations.cpp b/lld/ELF/Relocations.cpp
+index 3490a701d718..79c8230724ad 100644
+--- a/lld/ELF/Relocations.cpp
++++ b/lld/ELF/Relocations.cpp
+@@ -1274,12 +1274,16 @@ static unsigned handleTlsRelocation(RelType type, Symbol &sym,
+ 
+   if (config->emachine == EM_MIPS)
+     return handleMipsTlsRelocation(type, sym, c, offset, addend, expr);
++  bool isRISCV = config->emachine == EM_RISCV;
+ 
+   if (oneof<R_AARCH64_TLSDESC_PAGE, R_TLSDESC, R_TLSDESC_CALL, R_TLSDESC_PC,
+             R_TLSDESC_GOTPLT>(expr) &&
+       config->shared) {
++    // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} reference a label. Do not
++    // set NEEDS_TLSDESC on the label.
+     if (expr != R_TLSDESC_CALL) {
+-      sym.setFlags(NEEDS_TLSDESC);
++      if (!isRISCV || type == R_RISCV_TLSDESC_HI20)
++        sym.setFlags(NEEDS_TLSDESC);
+       c.addReloc({expr, type, offset, addend, &sym});
+     }
+     return 1;
+@@ -1287,12 +1291,14 @@ static unsigned handleTlsRelocation(RelType type, Symbol &sym,
+ 
+   // ARM, Hexagon, LoongArch and RISC-V do not support GD/LD to IE/LE
+   // optimizations.
++  // RISC-V supports TLSDESC to IE/LE optimizations.
+   // For PPC64, if the file has missing R_PPC64_TLSGD/R_PPC64_TLSLD, disable
+   // optimization as well.
+   bool execOptimize =
+       !config->shared && config->emachine != EM_ARM &&
+       config->emachine != EM_HEXAGON && config->emachine != EM_LOONGARCH &&
+-      config->emachine != EM_RISCV && !c.file->ppc64DisableTLSRelax;
++      !(isRISCV && expr != R_TLSDESC_PC && expr != R_TLSDESC_CALL) &&
++      !c.file->ppc64DisableTLSRelax;
+ 
+   // If we are producing an executable and the symbol is non-preemptable, it
+   // must be defined and the code sequence can be optimized to use Local-Exec.
+@@ -1349,6 +1355,10 @@ static unsigned handleTlsRelocation(RelType type, Symbol &sym,
+ 
+     // Global-Dynamic/TLSDESC can be optimized to Initial-Exec or Local-Exec
+     // depending on the symbol being locally defined or not.
++    //
++    // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} reference a non-preemptible
++    // label, so the LE optimization will be categorized as
++    // R_RELAX_TLS_GD_TO_LE. We fix the categorization in RISCV::relocateAlloc.
+     if (sym.isPreemptible) {
+       sym.setFlags(NEEDS_TLSGD_TO_IE);
+       c.addReloc({target->adjustTlsExpr(type, R_RELAX_TLS_GD_TO_IE), type,
+diff --git a/lld/test/ELF/riscv-tlsdesc-gd-mixed.s b/lld/test/ELF/riscv-tlsdesc-gd-mixed.s
+new file mode 100644
+index 000000000000..c0e91593ed96
+--- /dev/null
++++ b/lld/test/ELF/riscv-tlsdesc-gd-mixed.s
+@@ -0,0 +1,26 @@
++# REQUIRES: riscv
++# RUN: llvm-mc -filetype=obj -triple=riscv64 %s -o %t.o
++# RUN: ld.lld -shared %t.o -o %t.so
++# RUN: llvm-readobj -r %t.so | FileCheck %s --check-prefix=RELA
++
++## Both TLSDESC and DTPMOD64/DTPREL64 should be present.
++# RELA:      .rela.dyn {
++# RELA-NEXT:   0x[[#%X,ADDR:]] R_RISCV_TLSDESC      a 0x0
++# RELA-NEXT:   0x[[#ADDR+16]]  R_RISCV_TLS_DTPMOD64 a 0x0
++# RELA-NEXT:   0x[[#ADDR+24]]  R_RISCV_TLS_DTPREL64 a 0x0
++# RELA-NEXT: }
++
++  la.tls.gd a0,a
++  call __tls_get_addr@plt
++
++.Ltlsdesc_hi0:
++  auipc a2, %tlsdesc_hi(a)
++  ld    a3, %tlsdesc_load_lo(.Ltlsdesc_hi0)(a2)
++  addi  a0, a2, %tlsdesc_add_lo(.Ltlsdesc_hi0)
++  jalr  t0, 0(a3), %tlsdesc_call(.Ltlsdesc_hi0)
++
++.section .tbss,"awT",@nobits
++.globl a
++.zero 8
++a:
++.zero 4
+diff --git a/lld/test/ELF/riscv-tlsdesc-relax.s b/lld/test/ELF/riscv-tlsdesc-relax.s
+new file mode 100644
+index 000000000000..fb24317e6535
+--- /dev/null
++++ b/lld/test/ELF/riscv-tlsdesc-relax.s
+@@ -0,0 +1,189 @@
++# REQUIRES: riscv
++# RUN: rm -rf %t && split-file %s %t && cd %t
++# RUN: llvm-mc -filetype=obj -triple=riscv64 --defsym PAD=0 -mattr=+c,+relax a.s -o a.64.o
++# RUN: llvm-mc -filetype=obj -triple=riscv64 --defsym PAD=5000 -mattr=+c,+relax a.s -o aa.64.o
++# RUN: llvm-mc -filetype=obj -triple=riscv64 -mattr=+c,+relax c.s -o c.64.o
++# RUN: ld.lld -shared -soname=c.64.so c.64.o -o c.64.so
++
++# RUN: ld.lld -shared -z now a.64.o c.64.o -o a.64.so -z separate-code
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.64.so | FileCheck %s --check-prefix=GD64
++
++## Test the TLSDESC to LE optimization. Also check --emit-relocs.
++# RUN: ld.lld -e 0 -z now a.64.o c.64.o -o a.64.le -z separate-code --emit-relocs
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -hdr a.64.le | FileCheck %s --check-prefix=LE64
++# RUN: ld.lld -e 0 -z now aa.64.o c.64.o -o aa.64.le -z separate-code
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d aa.64.le | FileCheck %s --check-prefix=LE64A
++
++## Test the TLSDESC to IE optimization.
++# RUN: ld.lld -e 0 -z now a.64.o c.64.so -o a.64.ie -z separate-code
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.64.ie | FileCheck %s --check-prefix=IE64
++
++# GD64:      .got     00000018 00000000000020c0
++# GD64-LABEL: <_start>:
++# GD64-NEXT:         jal     {{.*}} <foo>
++# GD64-LABEL: <foo>:
++## &.got[c]-. = 0x20c0+8 - 0x1004 = 0x10c4
++# GD64:        1004: auipc   a2, 0x1
++# GD64-NEXT:         c.add   a7, a7
++# GD64-NEXT:         ld      a3, 0xc4(a2)
++# GD64-NEXT:         c.add   a7, a7
++# GD64-NEXT:         addi    a0, a2, 0xc4
++# GD64-NEXT:         c.add   a7, a7
++# GD64-NEXT:         jalr    t0, 0x0(a3)
++# GD64-NEXT:         c.add   a0, tp
++# GD64-NEXT:         jal     {{.*}} <foo>
++## &.got[c]-. = 0x20c0+8 - 0x1020 = 0x10a8
++# GD64-NEXT:   1020: auipc   a4, 0x1
++# GD64-NEXT:         ld      a5, 0xa8(a4)
++# GD64-NEXT:         addi    a0, a4, 0xa8
++# GD64-NEXT:         jalr    t0, 0x0(a5)
++# GD64-NEXT:         c.add   a0, tp
++## &.got[c]-. = 0x20c0+8 - 0x1032 = 0x1096
++# GD64-NEXT:   1032: auipc   a6, 0x1
++# GD64-NEXT:         ld      a7, 0x96(a6)
++# GD64-NEXT:         addi    a0, a6, 0x96
++# GD64-NEXT:         jalr    t0, 0x0(a7)
++# GD64-NEXT:         c.add   a0, tp
++
++# LE64-LABEL: <_start>:
++# LE64-NEXT:         jal     {{.*}} <foo>
++# LE64-LABEL: <foo>:
++# LE64-NEXT:         c.add   a7, a7
++# LE64-NEXT:                 R_RISCV_TLSDESC_HI20 b
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         c.add   a7, a7
++# LE64-NEXT:                 R_RISCV_TLSDESC_LOAD_LO12 .Ltlsdesc_hi0
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:  11008: c.add   a7, a7
++# LE64-NEXT:                 R_RISCV_TLSDESC_ADD_LO12 .Ltlsdesc_hi0
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         addi    a0, zero, 0x7ff
++# LE64-NEXT:                 R_RISCV_TLSDESC_CALL .Ltlsdesc_hi0
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         c.add   a0, tp
++# LE64-NEXT:         jal     {{.*}} <foo>
++# LE64-NEXT:                 R_RISCV_JAL foo
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         addi    a0, zero, 0x7ff
++# LE64-NEXT:                 R_RISCV_TLSDESC_HI20 b
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:                 R_RISCV_TLSDESC_LOAD_LO12 .Ltlsdesc_hi1
++# LE64-NEXT:                 R_RISCV_TLSDESC_ADD_LO12 .Ltlsdesc_hi1
++# LE64-NEXT:                 R_RISCV_TLSDESC_CALL .Ltlsdesc_hi1
++# LE64-NEXT:         c.add   a0, tp
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:                 R_RISCV_TLSDESC_HI20 b
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:                 R_RISCV_TLSDESC_LOAD_LO12 .Ltlsdesc_hi2
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:                 R_RISCV_TLSDESC_ADD_LO12 .Ltlsdesc_hi2
++# LE64-NEXT:                 R_RISCV_RELAX *ABS*
++# LE64-NEXT:         addi    a0, zero, 0x7ff
++# LE64-NEXT:                 R_RISCV_TLSDESC_CALL .Ltlsdesc_hi2
++# LE64-NEXT:         c.add   a0, tp
++
++# LE64A-LABEL: <_start>:
++# LE64A-NEXT:         jal     {{.*}} <foo>
++# LE64A-LABEL: <foo>:
++# LE64A-NEXT:         c.add   a7, a7
++# LE64A-NEXT:         c.add   a7, a7
++# LE64A-NEXT:  11008: lui     a0, 0x2
++# LE64A-NEXT:         c.add   a7, a7
++# LE64A-NEXT:         addi    a0, a0, -0x479
++# LE64A-NEXT:         c.add   a0, tp
++# LE64A-NEXT:         jal     {{.*}} <foo>
++# LE64A-NEXT:         lui     a0, 0x2
++# LE64A-NEXT:         addi    a0, a0, -0x479
++# LE64A-NEXT:         c.add   a0, tp
++# LE64A-NEXT:         addi    zero, zero, 0x0
++# LE64A-NEXT:         addi    zero, zero, 0x0
++# LE64A-NEXT:         lui     a0, 0x2
++# LE64A-NEXT:         addi    a0, a0, -0x479
++# LE64A-NEXT:         c.add   a0, tp
++
++# IE64:       .got     00000010 00000000000120e0
++# IE64-LABEL: <_start>:
++# IE64-NEXT:         jal     {{.*}} <foo>
++# IE64-LABEL: <foo>:
++# IE64-NEXT:         c.add   a7, a7
++# IE64-NEXT:         c.add   a7, a7
++## &.got[c]-. = 0x120e0+8 - 0x11008 = 0x10e0
++# IE64-NEXT:  11008: auipc   a0, 0x1
++# IE64-NEXT:         c.add   a7, a7
++# IE64-NEXT:         ld      a0, 0xe0(a0)
++# IE64-NEXT:         c.add   a0, tp
++# IE64-NEXT:         jal     {{.*}} <foo>
++## &.got[c]-. = 0x120e0+8 - 0x11018 = 0x10d0
++# IE64-NEXT:  11018: auipc   a0, 0x1
++# IE64-NEXT:         ld      a0, 0xd0(a0)
++# IE64-NEXT:         c.add   a0, tp
++## &.got[c]-. = 0x120e0+8 - 0x1102a = 0x10be
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:  1102a: auipc   a0, 0x1
++# IE64-NEXT:         ld      a0, 0xbe(a0)
++# IE64-NEXT:         c.add   a0, tp
++
++#--- a.s
++.globl _start
++_start:
++.balign 16
++  call foo
++
++foo:
++.Ltlsdesc_hi0:
++.option norelax
++## All 4 instructions have an R_RISCV_RELAX.
++## Check that optimization/relaxation are not affected by irrelevant instructions.
++  auipc a2, %tlsdesc_hi(b)
++  .reloc .-4, R_RISCV_RELAX, 0
++  c.add a7, a7
++  ld    a3, %tlsdesc_load_lo(.Ltlsdesc_hi0)(a2)
++  .reloc .-4, R_RISCV_RELAX, 0
++  c.add a7, a7
++  addi  a0, a2, %tlsdesc_add_lo(.Ltlsdesc_hi0)
++  .reloc .-4, R_RISCV_RELAX, 0
++  c.add a7, a7
++  jalr  t0, 0(a3), %tlsdesc_call(.Ltlsdesc_hi0)
++  .reloc .-4, R_RISCV_RELAX, 0
++  add   a0, a0, tp
++.option relax
++
++  call foo
++
++.Ltlsdesc_hi1:
++.option norelax
++## AUIPC has an R_RISCV_RELAX. We perform relaxation, ignoring whether other
++## instructions have R_RISCV_RELAX.
++  auipc a4, %tlsdesc_hi(b)
++  .reloc .-4, R_RISCV_RELAX, 0
++  ld    a5, %tlsdesc_load_lo(.Ltlsdesc_hi1)(a4)
++  addi  a0, a4, %tlsdesc_add_lo(.Ltlsdesc_hi1)
++  jalr  t0, 0(a5), %tlsdesc_call(.Ltlsdesc_hi1)
++  add   a0, a0, tp
++.option relax
++
++.Ltlsdesc_hi2:
++.option norelax
++## AUIPC does not have R_RISCV_RELAX. No relaxation.
++  auipc a6, %tlsdesc_hi(b)
++  ld    a7, %tlsdesc_load_lo(.Ltlsdesc_hi2)(a6)
++  .reloc .-4, R_RISCV_RELAX, 0
++  addi  a0, a6, %tlsdesc_add_lo(.Ltlsdesc_hi2)
++  .reloc .-4, R_RISCV_RELAX, 0
++  jalr  t0, 0(a7), %tlsdesc_call(.Ltlsdesc_hi2)
++  add   a0, a0, tp
++.option relax
++
++.section .tbss
++.globl a
++.zero 8
++a:
++.zero 2039+PAD  ## Place b at 0x7ff+PAD
++
++#--- c.s
++.tbss
++.globl b
++b:
++.zero 4
+diff --git a/lld/test/ELF/riscv-tlsdesc.s b/lld/test/ELF/riscv-tlsdesc.s
+new file mode 100644
+index 000000000000..1738f86256ca
+--- /dev/null
++++ b/lld/test/ELF/riscv-tlsdesc.s
+@@ -0,0 +1,194 @@
++# REQUIRES: riscv
++# RUN: rm -rf %t && split-file %s %t && cd %t
++# RUN: llvm-mc -filetype=obj -triple=riscv64 a.s -o a.64.o
++# RUN: llvm-mc -filetype=obj -triple=riscv64 c.s -o c.64.o
++# RUN: ld.lld -shared -soname=c.64.so c.64.o -o c.64.so
++# RUN: llvm-mc -filetype=obj -triple=riscv32 --defsym ELF32=1 a.s -o a.32.o
++# RUN: llvm-mc -filetype=obj -triple=riscv32 --defsym ELF32=1 c.s -o c.32.o
++# RUN: ld.lld -shared -soname=c.32.so c.32.o -o c.32.so
++
++# RUN: ld.lld -shared -z now a.64.o c.64.o -o a.64.so
++# RUN: llvm-readobj -r -x .got a.64.so | FileCheck --check-prefix=GD64-RELA %s
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.64.so | FileCheck %s --check-prefix=GD64
++
++# RUN: ld.lld -shared -z now a.64.o c.64.o -o rel.64.so -z rel
++# RUN: llvm-readobj -r -x .got rel.64.so | FileCheck --check-prefix=GD64-REL %s
++
++# RUN: ld.lld -e 0 -z now a.64.o c.64.o -o a.64.le
++# RUN: llvm-readelf -r a.64.le | FileCheck --check-prefix=NOREL %s
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.64.le | FileCheck %s --check-prefix=LE64
++
++# RUN: ld.lld -e 0 -z now a.64.o c.64.so -o a.64.ie
++# RUN: llvm-readobj -r a.64.ie | FileCheck --check-prefix=IE64-RELA %s
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.64.ie | FileCheck %s --check-prefix=IE64
++
++## 32-bit code is mostly the same. We only test a few variants. The IE optimization uses the LW instruction.
++
++# RUN: ld.lld -shared -z now a.32.o c.32.o -o rel.32.so -z rel
++# RUN: llvm-readobj -r -x .got rel.32.so | FileCheck --check-prefix=GD32-REL %s
++# RUN: ld.lld -e 0 -z now a.32.o c.32.so -o a.32.ie
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -h -d a.32.ie | FileCheck %s --check-prefix=IE32
++
++# GD64-RELA:      .rela.dyn {
++# GD64-RELA-NEXT:   0x2408 R_RISCV_TLSDESC - 0x7FF
++# GD64-RELA-NEXT:   0x23E8 R_RISCV_TLSDESC a 0x0
++# GD64-RELA-NEXT:   0x23F8 R_RISCV_TLSDESC c 0x0
++# GD64-RELA-NEXT: }
++# GD64-RELA:      Hex dump of section '.got':
++# GD64-RELA-NEXT: 0x000023e0 20230000 00000000 00000000 00000000 #
++# GD64-RELA-NEXT: 0x000023f0 00000000 00000000 00000000 00000000 .
++
++# GD64-REL:      .rel.dyn {
++# GD64-REL-NEXT:   0x23F0 R_RISCV_TLSDESC -
++# GD64-REL-NEXT:   0x23D0 R_RISCV_TLSDESC a
++# GD64-REL-NEXT:   0x23E0 R_RISCV_TLSDESC c
++# GD64-REL-NEXT: }
++# GD64-REL:      Hex dump of section '.got':
++# GD64-REL-NEXT: 0x000023c8 08230000 00000000 00000000 00000000 .
++# GD64-REL-NEXT: 0x000023d8 00000000 00000000 00000000 00000000 .
++# GD64-REL-NEXT: 0x000023e8 00000000 00000000 00000000 00000000 .
++# GD64-REL-NEXT: 0x000023f8 ff070000 00000000                   .
++
++# GD32-REL:      .rel.dyn {
++# GD32-REL-NEXT:   0x2274 R_RISCV_TLSDESC -
++# GD32-REL-NEXT:   0x2264 R_RISCV_TLSDESC a
++# GD32-REL-NEXT:   0x226C R_RISCV_TLSDESC c
++# GD32-REL-NEXT: }
++# GD32-REL:      Hex dump of section '.got':
++# GD32-REL-NEXT: 0x00002260 00220000 00000000 00000000 00000000 .
++# GD32-REL-NEXT: 0x00002270 00000000 00000000 ff070000          .
++
++# GD64:      .got     00000038 00000000000023e0
++
++## &.got[a]-. = 0x23e0+8 - 0x12e0 = 0x1108
++# GD64:        12e0: auipc   a0, 0x1
++# GD64-NEXT:         ld      a1, 0x108(a0)
++# GD64-NEXT:         addi    a0, a0, 0x108
++# GD64-NEXT:         jalr    t0, 0x0(a1)
++# GD64-NEXT:         add     a0, a0, tp
++
++## &.got[b]-. = 0x23e0+40 - 0x12f4 = 0x1114
++# GD64-NEXT:   12f4: auipc   a2, 0x1
++# GD64-NEXT:         ld      a3, 0x114(a2)
++# GD64-NEXT:         addi    a0, a2, 0x114
++# GD64-NEXT:         jalr    t0, 0x0(a3)
++# GD64-NEXT:         add     a0, a0, tp
++
++## &.got[c]-. = 0x23e0+24 - 0x1308 = 0x10f0
++# GD64-NEXT:   1308: auipc   a4, 0x1
++# GD64-NEXT:         ld      a5, 0xf0(a4)
++# GD64-NEXT:         addi    a0, a4, 0xf0
++# GD64-NEXT:         jalr    t0, 0x0(a5)
++# GD64-NEXT:         add     a0, a0, tp
++
++# NOREL: no relocations
++
++# LE64-LABEL: <.text>:
++## st_value(a) = 8
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    a0, zero, 0x8
++# LE64-NEXT:         add     a0, a0, tp
++## st_value(b) = 2047
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    a0, zero, 0x7ff
++# LE64-NEXT:         add     a0, a0, tp
++## st_value(c) = 2048
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         addi    zero, zero, 0x0
++# LE64-NEXT:         lui     a0, 0x1
++# LE64-NEXT:         addi    a0, a0, -0x800
++# LE64-NEXT:         add     a0, a0, tp
++
++# IE64-RELA:      .rela.dyn {
++# IE64-RELA-NEXT:   0x123B0 R_RISCV_TLS_TPREL64 c 0x0
++# IE64-RELA-NEXT: }
++
++# IE64:       .got     00000010 00000000000123a8
++
++## a and b are optimized to use LE. c is optimized to IE.
++# IE64-LABEL: <.text>:
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    a0, zero, 0x8
++# IE64-NEXT:         add     a0, a0, tp
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    a0, zero, 0x7ff
++# IE64-NEXT:         add     a0, a0, tp
++## &.got[c]-. = 0x123a8+8 - 0x112b8 = 0x10f8
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:         addi    zero, zero, 0x0
++# IE64-NEXT:  112b8: auipc   a0, 0x1
++# IE64-NEXT:         ld      a0, 0xf8(a0)
++# IE64-NEXT:         add     a0, a0, tp
++
++# IE32:       .got     00000008 00012248
++
++# IE32-LABEL: <.text>:
++## st_value(a) = 8
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    a0, zero, 0x8
++# IE32-NEXT:         add     a0, a0, tp
++## st_value(b) = 2047
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    a0, zero, 0x7ff
++# IE32-NEXT:         add     a0, a0, tp
++## &.got[c]-. = 0x12248+4 - 0x111cc = 0x1080
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:         addi    zero, zero, 0x0
++# IE32-NEXT:  111cc: auipc   a0, 0x1
++# IE32-NEXT:         lw      a0, 0x80(a0)
++# IE32-NEXT:         add     a0, a0, tp
++
++#--- a.s
++.macro load dst, src
++.ifdef ELF32
++lw \dst, \src
++.else
++ld \dst, \src
++.endif
++.endm
++
++.Ltlsdesc_hi0:
++  auipc a0, %tlsdesc_hi(a)
++  load  a1, %tlsdesc_load_lo(.Ltlsdesc_hi0)(a0)
++  addi  a0, a0, %tlsdesc_add_lo(.Ltlsdesc_hi0)
++  jalr  t0, 0(a1), %tlsdesc_call(.Ltlsdesc_hi0)
++  add   a0, a0, tp
++
++.Ltlsdesc_hi1:
++  auipc a2, %tlsdesc_hi(b)
++  load  a3, %tlsdesc_load_lo(.Ltlsdesc_hi1)(a2)
++  addi  a0, a2, %tlsdesc_add_lo(.Ltlsdesc_hi1)
++  jalr  t0, 0(a3), %tlsdesc_call(.Ltlsdesc_hi1)
++  add   a0, a0, tp
++
++.Ltlsdesc_hi2:
++  auipc a4, %tlsdesc_hi(c)
++  load  a5, %tlsdesc_load_lo(.Ltlsdesc_hi2)(a4)
++  addi  a0, a4, %tlsdesc_add_lo(.Ltlsdesc_hi2)
++  jalr  t0, 0(a5), %tlsdesc_call(.Ltlsdesc_hi2)
++  add   a0, a0, tp
++
++.section .tbss
++.globl a
++.zero 8
++a:
++.zero 2039  ## Place b at 0x7ff
++b:
++.zero 1
++
++#--- c.s
++.tbss
++.globl c
++c: .zero 4
+-- 
+2.44.0.rc0.258.g7320e95886-goog
+
