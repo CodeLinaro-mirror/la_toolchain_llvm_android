@@ -1,0 +1,247 @@
+From b433076fcbacba8a3b91446390bbea5843322bcd Mon Sep 17 00:00:00 2001
+From: Antonio Frighetto <me@antoniofrighetto.com>
+Date: Thu, 7 Mar 2024 07:49:40 +0100
+Subject: [PATCH] [clang][CodeGen] Allow `memcpy` replace with trivial auto var
+ init
+
+When emitting the storage (or memory copy operations) for constant
+initializers, the decision whether to split a constant structure or
+array store into a sequence of field stores or to use `memcpy` is
+based upon the optimization level and the size of the initializer.
+In afe8b93ffdfef5d8879e1894b9d7dda40dee2b8d, we extended this by
+allowing constants to be split when the array (or struct) type does
+not match the type of data the address to the object (constant) is
+expected to contain. This may happen when `emitStoresForConstant` is
+called by `EmitAutoVarInit`, as the element type of the address gets
+shrunk. When this occurs, let the initializer be split into a bunch
+of stores only under `-ftrivial-auto-var-init=pattern`.
+
+Fixes: https://github.com/llvm/llvm-project/issues/84178.
+---
+ clang/lib/CodeGen/CGDecl.cpp              | 43 ++++++++++++++---------
+ clang/test/CodeGen/aapcs-align.cpp        |  4 +--
+ clang/test/CodeGen/aapcs64-align.cpp      |  8 ++---
+ clang/test/CodeGen/attr-counted-by.c      | 26 ++++----------
+ clang/test/CodeGenCXX/auto-var-init.cpp   | 27 +++++++-------
+ clang/test/CodeGenOpenCL/amdgpu-printf.cl |  9 +----
+ clang/test/OpenMP/bug54082.c              |  4 +--
+ 7 files changed, 56 insertions(+), 65 deletions(-)
+
+diff --git a/clang/lib/CodeGen/CGDecl.cpp b/clang/lib/CodeGen/CGDecl.cpp
+index dc42faf8dbb9..2ef5ed04af30 100644
+--- a/clang/lib/CodeGen/CGDecl.cpp
++++ b/clang/lib/CodeGen/CGDecl.cpp
+@@ -1242,27 +1242,38 @@ static void emitStoresForConstant(CodeGenModule &CGM, const VarDecl &D,
+     return;
+   }
+ 
+-  // If the initializer is small, use a handful of stores.
++  // If the initializer is small or trivialAutoVarInit is set, use a handful of
++  // stores.
++  bool IsTrivialAutoVarInitPattern =
++      CGM.getContext().getLangOpts().getTrivialAutoVarInit() ==
++      LangOptions::TrivialAutoVarInitKind::Pattern;
+   if (shouldSplitConstantStore(CGM, ConstantSize)) {
+     if (auto *STy = dyn_cast<llvm::StructType>(Ty)) {
+-      const llvm::StructLayout *Layout =
+-          CGM.getDataLayout().getStructLayout(STy);
+-      for (unsigned i = 0; i != constant->getNumOperands(); i++) {
+-        CharUnits CurOff = CharUnits::fromQuantity(Layout->getElementOffset(i));
+-        Address EltPtr = Builder.CreateConstInBoundsByteGEP(
+-            Loc.withElementType(CGM.Int8Ty), CurOff);
+-        emitStoresForConstant(CGM, D, EltPtr, isVolatile, Builder,
+-                              constant->getAggregateElement(i), IsAutoInit);
++      if (STy == Loc.getElementType() ||
++          (STy != Loc.getElementType() && IsTrivialAutoVarInitPattern)) {
++        const llvm::StructLayout *Layout =
++            CGM.getDataLayout().getStructLayout(STy);
++        for (unsigned i = 0; i != constant->getNumOperands(); i++) {
++          CharUnits CurOff =
++              CharUnits::fromQuantity(Layout->getElementOffset(i));
++          Address EltPtr = Builder.CreateConstInBoundsByteGEP(
++              Loc.withElementType(CGM.Int8Ty), CurOff);
++          emitStoresForConstant(CGM, D, EltPtr, isVolatile, Builder,
++                                constant->getAggregateElement(i), IsAutoInit);
++        }
++        return;
+       }
+-      return;
+     } else if (auto *ATy = dyn_cast<llvm::ArrayType>(Ty)) {
+-      for (unsigned i = 0; i != ATy->getNumElements(); i++) {
+-        Address EltPtr = Builder.CreateConstGEP(
+-            Loc.withElementType(ATy->getElementType()), i);
+-        emitStoresForConstant(CGM, D, EltPtr, isVolatile, Builder,
+-                              constant->getAggregateElement(i), IsAutoInit);
++      if (ATy == Loc.getElementType() ||
++          (ATy != Loc.getElementType() && IsTrivialAutoVarInitPattern)) {
++        for (unsigned i = 0; i != ATy->getNumElements(); i++) {
++          Address EltPtr = Builder.CreateConstGEP(
++              Loc.withElementType(ATy->getElementType()), i);
++          emitStoresForConstant(CGM, D, EltPtr, isVolatile, Builder,
++                                constant->getAggregateElement(i), IsAutoInit);
++        }
++        return;
+       }
+-      return;
+     }
+   }
+ 
+diff --git a/clang/test/CodeGen/aapcs-align.cpp b/clang/test/CodeGen/aapcs-align.cpp
+index 2886a32974b0..4f393d9e6b7f 100644
+--- a/clang/test/CodeGen/aapcs-align.cpp
++++ b/clang/test/CodeGen/aapcs-align.cpp
+@@ -134,8 +134,8 @@ void g6() {
+   f6m(1, 2, 3, 4, 5, s);
+ }
+ // CHECK: define{{.*}} void @g6
+-// CHECK: call void @f6(i32 noundef 1, [4 x i32] [i32 6, i32 7, i32 0, i32 0])
+-// CHECK: call void @f6m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [4 x i32] [i32 6, i32 7, i32 0, i32 0])
++// CHECK: call void @f6(i32 noundef 1, [4 x i32] [i32 6, i32 7, i32 0, i32 undef])
++// CHECK: call void @f6m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [4 x i32] [i32 6, i32 7, i32 0, i32 undef])
+ // CHECK: declare void @f6(i32 noundef, [4 x i32])
+ // CHECK: declare void @f6m(i32 noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef, [4 x i32])
+ }
+diff --git a/clang/test/CodeGen/aapcs64-align.cpp b/clang/test/CodeGen/aapcs64-align.cpp
+index 759413cbc4b5..de231f2123b9 100644
+--- a/clang/test/CodeGen/aapcs64-align.cpp
++++ b/clang/test/CodeGen/aapcs64-align.cpp
+@@ -75,8 +75,8 @@ void g4() {
+   f4m(1, 2, 3, 4, 5, s);
+ }
+ // CHECK: define{{.*}} void @g4()
+-// CHECK: call void @f4(i32 noundef 1, [2 x i64] %{{.*}})
+-// CHECK: void @f4m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [2 x i64] %{{.*}})
++// CHECK: call void @f4(i32 noundef 1, [2 x i64] [i64 30064771078, i64 0])
++// CHECK: void @f4m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [2 x i64] [i64 30064771078, i64 0])
+ // CHECK: declare void @f4(i32 noundef, [2 x i64])
+ // CHECK: declare void @f4m(i32 noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef, [2 x i64])
+ 
+@@ -95,8 +95,8 @@ void f5m(int, int, int, int, int, P16);
+     f5m(1, 2, 3, 4, 5, s);
+ }
+ // CHECK: define{{.*}} void @g5()
+-// CHECK: call void @f5(i32 noundef 1, [2 x i64] %{{.*}})
+-// CHECK: void @f5m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [2 x i64] %{{.*}})
++// CHECK: call void @f5(i32 noundef 1, [2 x i64] [i64 30064771078, i64 0])
++// CHECK: void @f5m(i32 noundef 1, i32 noundef 2, i32 noundef 3, i32 noundef 4, i32 noundef 5, [2 x i64] [i64 30064771078, i64 0])
+ // CHECK: declare void @f5(i32 noundef, [2 x i64])
+ // CHECK: declare void @f5m(i32 noundef, i32 noundef, i32 noundef, i32 noundef, i32 noundef, [2 x i64])
+ 
+diff --git a/clang/test/CodeGenCXX/auto-var-init.cpp b/clang/test/CodeGenCXX/auto-var-init.cpp
+index 991eb73fe45c..7803ed5b633f 100644
+--- a/clang/test/CodeGenCXX/auto-var-init.cpp
++++ b/clang/test/CodeGenCXX/auto-var-init.cpp
+@@ -1,8 +1,8 @@
+ // RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks %s -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK,CHECK-O0
+ // RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=pattern %s -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK-O0,PATTERN,PATTERN-O0
+-// RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=pattern %s -O1 -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK-O1,PATTERN,PATTERN-O1
++// RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=pattern %s -O1 -emit-llvm -o - | FileCheck %s -check-prefixes=PATTERN,PATTERN-O1
+ // RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=zero %s -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK-O0,ZERO,ZERO-O0
+-// RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=zero %s -O1 -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK-O1,ZERO,ZERO-O1
++// RUN: %clang_cc1 -std=c++14 -triple x86_64-unknown-unknown -fblocks -ftrivial-auto-var-init=zero %s -O1 -emit-llvm -o - | FileCheck %s -check-prefixes=ZERO,ZERO-O1
+ // RUN: %clang_cc1 -std=c++14 -triple i386-unknown-unknown -fblocks -ftrivial-auto-var-init=pattern %s -emit-llvm -o - | FileCheck %s -check-prefixes=CHECK-O0,PATTERN,PATTERN-O0
+ 
+ #pragma clang diagnostic ignored "-Winaccessible-base"
+@@ -1303,9 +1303,10 @@ TEST_CUSTOM(semivolatile, semivolatile, { 0x44444444, 0x44444444 });
+ // CHECK-O0:  call void @llvm.memcpy
+ // CHECK-NOT:   !annotation
+ // CHECK-O0:  call void @{{.*}}used{{.*}}%custom)
+-// CHECK-O1:  store i32 1145324612, ptr %custom, align 4
+-// CHECK-O1-NEXT:  %[[I:[^ ]*]] = getelementptr inbounds i8, ptr %custom, i64 4
+-// CHECK-O1-NEXT:  store i32 1145324612, ptr %[[I]], align 4
++// PATTERN-O1:       store i32 1145324612, ptr %custom, align 4
++// PATTERN-O1-NEXT:  %[[I:[^ ]*]] = getelementptr inbounds i8, ptr %custom, i64 4
++// PATTERN-O1-NEXT:  store i32 1145324612, ptr %[[I]], align 4
++// ZERO-O1:          store i64 4919131752989213764, ptr %custom, align 8
+ // CHECK-NOT:   !annotation
+ 
+ TEST_UNINIT(semivolatileinit, semivolatileinit);
+@@ -1418,7 +1419,8 @@ TEST_CUSTOM(matching, matching, { .f = 0xf00f });
+ // CHECK-O0:  call void @llvm.memcpy
+ // CHECK-NOT:   !annotation
+ // CHECK-O0:  call void @{{.*}}used{{.*}}%custom)
+-// CHECK-O1:  store float 6.145500e+04, ptr {{.*}}, align 4
++// PATTERN-O1:  store float 6.145500e+04, ptr {{.*}}, align 4
++// ZERO-O1:     store i32 1198526208, ptr %custom, align 4
+ // CHECK-NOT:   !annotation
+ 
+ TEST_UNINIT(matchingreverse, matchingreverse);
+@@ -1445,7 +1447,8 @@ TEST_CUSTOM(matchingreverse, matchingreverse, { .i = 0xf00f });
+ // CHECK-O0:    call void @llvm.memcpy
+ // CHECK-NOT:   !annotation
+ // CHECK-O0:    call void @{{.*}}used{{.*}}%custom)
+-// CHECK-O1:    store i32 61455, ptr %custom, align 4
++// PATTERN-O1:  store i32 61455, ptr %custom, align 4
++// ZERO-O1:     store i32 61455, ptr %custom, align 4
+ // CHECK-NOT:   !annotation
+ 
+ TEST_UNINIT(unmatched, unmatched);
+@@ -1471,7 +1474,8 @@ TEST_CUSTOM(unmatched, unmatched, { .i = 0x3badbeef });
+ // CHECK-O0:    call void @llvm.memcpy
+ // CHECK-NOT:   !annotation
+ // CHECK-O0:    call void @{{.*}}used{{.*}}%custom)
+-// CHECK-O1:    store i32 1001242351, ptr {{.*}}, align 4
++// PATTERN-O1:  store i32 1001242351, ptr {{.*}}, align 4
++// ZERO-O1:     store i32 1001242351, ptr {{.*}}, align 4
+ // CHECK-NOT:   !annotation
+ 
+ TEST_UNINIT(unmatchedreverse, unmatchedreverse);
+@@ -1504,9 +1508,7 @@ TEST_CUSTOM(unmatchedreverse, unmatchedreverse, { .c = 42  });
+ // PATTERN-O1-NEXT:  store i8 -86, ptr %[[I]], align {{.*}}
+ // PATTERN-O1-NEXT:  %[[I:[^ ]*]] = getelementptr inbounds i8, ptr %custom, i64 3
+ // PATTERN-O1-NEXT:  store i8 -86, ptr %[[I]], align {{.*}}
+-// ZERO-O1:     store i8 42, ptr {{.*}}, align 4
+-// ZERO-O1-NEXT:  %[[I:[^ ]*]] = getelementptr inbounds i8, ptr %custom, i64 1
+-// ZERO-O1-NEXT:  call void @llvm.memset.{{.*}}({{.*}}, i8 0, i64 3, {{.*}})
++// ZERO-O1:     store i32 42, ptr {{.*}}, align 4
+ 
+ TEST_UNINIT(unmatchedfp, unmatchedfp);
+ // CHECK-LABEL: @test_unmatchedfp_uninit()
+@@ -1531,7 +1533,8 @@ TEST_CUSTOM(unmatchedfp, unmatchedfp, { .d = 3.1415926535897932384626433 });
+ // CHECK-O0:    call void @llvm.memcpy
+ // CHECK-NOT:   !annotation
+ // CHECK-O0:    call void @{{.*}}used{{.*}}%custom)
+-// CHECK-O1:    store double 0x400921FB54442D18, ptr %custom, align 8
++// PATTERN-O1:  store double 0x400921FB54442D18, ptr %custom, align 8
++// ZERO-O1:     store i64 4614256656552045848, ptr %custom, align 8
+ // CHECK-NOT:   !annotation
+ 
+ TEST_UNINIT(emptyenum, emptyenum);
+diff --git a/clang/test/CodeGenOpenCL/amdgpu-printf.cl b/clang/test/CodeGenOpenCL/amdgpu-printf.cl
+index 6c84485b66b4..edf6dbf8657c 100644
+--- a/clang/test/CodeGenOpenCL/amdgpu-printf.cl
++++ b/clang/test/CodeGenOpenCL/amdgpu-printf.cl
+@@ -30,14 +30,7 @@ __kernel void test_printf_int(int i) {
+ // CHECK-NEXT:    [[S:%.*]] = alloca [4 x i8], align 1, addrspace(5)
+ // CHECK-NEXT:    store i32 [[I:%.*]], ptr addrspace(5) [[I_ADDR]], align 4, !tbaa [[TBAA8]]
+ // CHECK-NEXT:    call void @llvm.lifetime.start.p5(i64 4, ptr addrspace(5) [[S]]) #[[ATTR5:[0-9]+]]
+-// CHECK-NEXT:    [[LOC0:%.*]] = getelementptr i8, ptr addrspace(5) [[S]], i64 0
+-// CHECK-NEXT:    store i8 102, ptr addrspace(5) [[LOC0]], align 1
+-// CHECK-NEXT:    [[LOC1:%.*]] = getelementptr i8, ptr addrspace(5) [[S]], i64 1
+-// CHECK-NEXT:    store i8 111, ptr addrspace(5) [[LOC1]], align 1
+-// CHECK-NEXT:    [[LOC2:%.*]] = getelementptr i8, ptr addrspace(5) [[S]], i64 2
+-// CHECK-NEXT:    store i8 111, ptr addrspace(5) [[LOC2]], align 1
+-// CHECK-NEXT:    [[LOC3:%.*]] = getelementptr i8, ptr addrspace(5) [[S]], i64 3
+-// CHECK-NEXT:    store i8 0, ptr addrspace(5) [[LOC3]], align 1
++// CHECK-NEXT:    call void @llvm.memcpy.p5.p4.i64(ptr addrspace(5) align 1 [[S]], ptr addrspace(4) align 1 @__const.test_printf_str_int.s, i64 4, i1 false)
+ // CHECK-NEXT:    [[ARRAYDECAY:%.*]] = getelementptr inbounds [4 x i8], ptr addrspace(5) [[S]], i64 0, i64 0
+ // CHECK-NEXT:    [[TMP2:%.*]] = load i32, ptr addrspace(5) [[I_ADDR]], align 4, !tbaa [[TBAA8]]
+ // CHECK-NEXT:    [[CALL:%.*]] = call i32 (ptr addrspace(4), ...) @printf(ptr addrspace(4) noundef @.str.2, ptr addrspace(5) noundef [[ARRAYDECAY]], i32 noundef [[TMP2]]) #[[ATTR4]]
+diff --git a/clang/test/OpenMP/bug54082.c b/clang/test/OpenMP/bug54082.c
+index b88b68fd4301..337c120983e0 100644
+--- a/clang/test/OpenMP/bug54082.c
++++ b/clang/test/OpenMP/bug54082.c
+@@ -69,9 +69,7 @@ void foo() {
+ // CHECK-NEXT:    [[X_TRAITS:%.*]] = alloca [1 x %struct.omp_alloctrait_t], align 16
+ // CHECK-NEXT:    [[X_ALLOC:%.*]] = alloca i64, align 8
+ // CHECK-NEXT:    call void @llvm.lifetime.start.p0(i64 16, ptr nonnull [[X_TRAITS]]) #[[ATTR5:[0-9]+]]
+-// CHECK-NEXT:    store i32 2, ptr [[X_TRAITS]], align 16
+-// CHECK-NEXT:    [[LOC0:%.*]] = getelementptr inbounds i8, ptr [[X_TRAITS]], i64 8
+-// CHECK-NEXT:    store i64 64, ptr [[LOC0]], align 8
++// CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr noundef nonnull align 16 dereferenceable(16) [[X_TRAITS]], ptr noundef nonnull align 16 dereferenceable(16) @__const.foo.x_traits, i64 16, i1 false)
+ // CHECK-NEXT:    call void @llvm.lifetime.start.p0(i64 8, ptr nonnull [[X_ALLOC]]) #[[ATTR5]]
+ // CHECK-NEXT:    [[CALL:%.*]] = call i64 @omp_init_allocator(i64 noundef 0, i32 noundef 1, ptr noundef nonnull [[X_TRAITS]]) #[[ATTR5]]
+ // CHECK-NEXT:    store i64 [[CALL]], ptr [[X_ALLOC]], align 8, !tbaa [[TBAA3:![0-9]+]]
+-- 
+2.44.0.478.gd926399ef9-goog
+
