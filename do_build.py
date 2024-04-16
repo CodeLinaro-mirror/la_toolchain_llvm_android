@@ -35,6 +35,7 @@ import configs
 import hosts
 import paths
 import source_manager
+import toolchain_errors
 import timer
 import toolchains
 import utils
@@ -823,6 +824,12 @@ def parse_args():
         help='Skip applying local patches. This allows building a vanilla upstream version.')
 
     parser.add_argument(
+        '--continue-on-errors',
+        action='store_true',
+        default=False,
+        help='Continue build on error. This allows catching all errors at once.')
+
+    parser.add_argument(
         '--create-tar',
         action='store_true',
         default=False,
@@ -1006,10 +1013,15 @@ def main():
     else:
         logger().info('Tensorflow found: ' + paths.get_tensorflow_path())
 
+    build_errors : List[toolchain_errors.ToolchainError] = []
     # Clone sources to be built and apply patches.
     if not args.skip_source_setup:
-        source_manager.setup_sources(git_am=args.git_am, llvm_rev=args.llvm_rev,
-                                     skip_apply_patches=args.skip_apply_patches)
+        setup_source_result = source_manager.setup_sources(git_am=args.git_am,
+                                         llvm_rev=args.llvm_rev,
+                                         skip_apply_patches=args.skip_apply_patches,
+                                         continue_on_patch_errors=args.continue_on_errors)
+        if setup_source_result:
+            build_errors.append(setup_source_result)
 
     # Build the stage1 Clang for the build host
     instrumented = hosts.build_host().is_linux and args.build_instrumented
@@ -1181,6 +1193,9 @@ def main():
             with_runtimes=do_runtimes,
             create_tar=args.create_tar)
 
+    if build_errors:
+        logger().info(toolchain_errors.combine_toolchain_errors(build_errors))
+        return len(build_errors)
     return 0
 
 
