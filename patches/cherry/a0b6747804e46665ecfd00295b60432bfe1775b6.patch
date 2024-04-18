@@ -1,0 +1,359 @@
+From 6ebc9b1037e3f82442f47f8cb70d515427596349 Mon Sep 17 00:00:00 2001
+From: Chuanqi Xu <yedeng.yd@linux.alibaba.com>
+Date: Mon, 29 Jan 2024 11:42:08 +0800
+Subject: Don't perform ODR checks in GMF
+
+Close https://github.com/llvm/llvm-project/issues/79240.
+
+See the linked issue for details. Given the frequency of issue reporting
+about false positive ODR checks (I received private issue reports too),
+I'd like to backport this to 18.x too.
+---
+ clang/docs/ReleaseNotes.rst                   |  5 ++
+ clang/include/clang/Serialization/ASTReader.h |  4 ++
+ clang/lib/Serialization/ASTReader.cpp         |  3 ++
+ clang/lib/Serialization/ASTReaderDecl.cpp     | 37 +++++++++----
+ clang/lib/Serialization/ASTWriter.cpp         |  8 ++-
+ clang/lib/Serialization/ASTWriterDecl.cpp     | 13 +++--
+ clang/test/Modules/concept.cppm               | 14 ++---
+ clang/test/Modules/no-eager-load.cppm         | 53 -------------------
+ clang/test/Modules/polluted-operator.cppm     |  8 ++-
+ 9 files changed, 65 insertions(+), 80 deletions(-)
+
+diff --git a/clang/docs/ReleaseNotes.rst b/clang/docs/ReleaseNotes.rst
+index 3c08d1808b0e..b99e9ebfb15e 100644
+--- a/clang/docs/ReleaseNotes.rst
++++ b/clang/docs/ReleaseNotes.rst
+@@ -148,6 +148,11 @@ C++ Language Changes
+ C++20 Feature Support
+ ^^^^^^^^^^^^^^^^^^^^^
+ 
++- Clang won't perform ODR checks for decls in the global module fragment any
++  more to ease the implementation and improve the user's using experience.
++  This follows the MSVC's behavior.
++  (`#79240 <https://github.com/llvm/llvm-project/issues/79240>`_).
++
+ C++23 Feature Support
+ ^^^^^^^^^^^^^^^^^^^^^
+ - Implemented `P0847R7: Deducing this <https://wg21.link/P0847R7>`_. Some related core issues were also
+diff --git a/clang/include/clang/Serialization/ASTReader.h b/clang/include/clang/Serialization/ASTReader.h
+index 21d791f5cd89..116ec1f88d9e 100644
+--- a/clang/include/clang/Serialization/ASTReader.h
++++ b/clang/include/clang/Serialization/ASTReader.h
+@@ -2448,6 +2448,10 @@ private:
+   uint32_t CurrentBitsIndex = ~0;
+ };
+ 
++inline bool isFromExplicitGMF(const Decl *D) {
++  return D->getOwningModule() && D->getOwningModule()->isExplicitGlobalModule();
++}
++
+ } // namespace clang
+ 
+ #endif // LLVM_CLANG_SERIALIZATION_ASTREADER_H
+diff --git a/clang/lib/Serialization/ASTReader.cpp b/clang/lib/Serialization/ASTReader.cpp
+index 9effd333dacc..4dac74a06446 100644
+--- a/clang/lib/Serialization/ASTReader.cpp
++++ b/clang/lib/Serialization/ASTReader.cpp
+@@ -9712,6 +9712,9 @@ void ASTReader::finishPendingActions() {
+ 
+         if (!FD->isLateTemplateParsed() &&
+             !NonConstDefn->isLateTemplateParsed() &&
++            // We only perform ODR checks for decls not in the explicit
++            // global module fragment.
++            !isFromExplicitGMF(FD) &&
+             FD->getODRHash() != NonConstDefn->getODRHash()) {
+           if (!isa<CXXMethodDecl>(FD)) {
+             PendingFunctionOdrMergeFailures[FD].push_back(NonConstDefn);
+diff --git a/clang/lib/Serialization/ASTReaderDecl.cpp b/clang/lib/Serialization/ASTReaderDecl.cpp
+index 547eb77930b4..3e377dd162da 100644
+--- a/clang/lib/Serialization/ASTReaderDecl.cpp
++++ b/clang/lib/Serialization/ASTReaderDecl.cpp
+@@ -804,8 +804,10 @@ void ASTDeclReader::VisitEnumDecl(EnumDecl *ED) {
+   ED->setScopedUsingClassTag(EnumDeclBits.getNextBit());
+   ED->setFixed(EnumDeclBits.getNextBit());
+ 
+-  ED->setHasODRHash(true);
+-  ED->ODRHash = Record.readInt();
++  if (!isFromExplicitGMF(ED)) {
++    ED->setHasODRHash(true);
++    ED->ODRHash = Record.readInt();
++  }
+ 
+   // If this is a definition subject to the ODR, and we already have a
+   // definition, merge this one into it.
+@@ -827,7 +829,9 @@ void ASTDeclReader::VisitEnumDecl(EnumDecl *ED) {
+       Reader.MergedDeclContexts.insert(std::make_pair(ED, OldDef));
+       ED->demoteThisDefinitionToDeclaration();
+       Reader.mergeDefinitionVisibility(OldDef, ED);
+-      if (OldDef->getODRHash() != ED->getODRHash())
++      // We don't want to check the ODR hash value for declarations from global
++      // module fragment.
++      if (!isFromExplicitGMF(ED) && OldDef->getODRHash() != ED->getODRHash())
+         Reader.PendingEnumOdrMergeFailures[OldDef].push_back(ED);
+     } else {
+       OldDef = ED;
+@@ -866,6 +870,9 @@ ASTDeclReader::VisitRecordDeclImpl(RecordDecl *RD) {
+ 
+ void ASTDeclReader::VisitRecordDecl(RecordDecl *RD) {
+   VisitRecordDeclImpl(RD);
++  // We should only reach here if we're in C/Objective-C. There is no
++  // global module fragment.
++  assert(!isFromExplicitGMF(RD));
+   RD->setODRHash(Record.readInt());
+ 
+   // Maintain the invariant of a redeclaration chain containing only
+@@ -1094,8 +1101,10 @@ void ASTDeclReader::VisitFunctionDecl(FunctionDecl *FD) {
+   if (FD->isExplicitlyDefaulted())
+     FD->setDefaultLoc(readSourceLocation());
+ 
+-  FD->ODRHash = Record.readInt();
+-  FD->setHasODRHash(true);
++  if (!isFromExplicitGMF(FD)) {
++    FD->ODRHash = Record.readInt();
++    FD->setHasODRHash(true);
++  }
+ 
+   if (FD->isDefaulted()) {
+     if (unsigned NumLookups = Record.readInt()) {
+@@ -1971,9 +1980,12 @@ void ASTDeclReader::ReadCXXDefinitionData(
+ #include "clang/AST/CXXRecordDeclDefinitionBits.def"
+ #undef FIELD
+ 
+-  // Note: the caller has deserialized the IsLambda bit already.
+-  Data.ODRHash = Record.readInt();
+-  Data.HasODRHash = true;
++  // We only perform ODR checks for decls not in GMF.
++  if (!isFromExplicitGMF(D)) {
++    // Note: the caller has deserialized the IsLambda bit already.
++    Data.ODRHash = Record.readInt();
++    Data.HasODRHash = true;
++  }
+ 
+   if (Record.readInt()) {
+     Reader.DefinitionSource[D] =
+@@ -2134,6 +2146,10 @@ void ASTDeclReader::MergeDefinitionData(
+     }
+   }
+ 
++  // We don't want to check ODR for decls in the global module fragment.
++  if (isFromExplicitGMF(MergeDD.Definition))
++    return;
++
+   if (D->getODRHash() != MergeDD.ODRHash) {
+     DetectedOdrViolation = true;
+   }
+@@ -3496,10 +3512,13 @@ ASTDeclReader::FindExistingResult ASTDeclReader::findExisting(NamedDecl *D) {
+   // If this declaration is from a merged context, make a note that we need to
+   // check that the canonical definition of that context contains the decl.
+   //
++  // Note that we don't perform ODR checks for decls from the global module
++  // fragment.
++  //
+   // FIXME: We should do something similar if we merge two definitions of the
+   // same template specialization into the same CXXRecordDecl.
+   auto MergedDCIt = Reader.MergedDeclContexts.find(D->getLexicalDeclContext());
+-  if (MergedDCIt != Reader.MergedDeclContexts.end() &&
++  if (MergedDCIt != Reader.MergedDeclContexts.end() && !isFromExplicitGMF(D) &&
+       MergedDCIt->second == D->getDeclContext())
+     Reader.PendingOdrMergeChecks.push_back(D);
+ 
+diff --git a/clang/lib/Serialization/ASTWriter.cpp b/clang/lib/Serialization/ASTWriter.cpp
+index 78939bfd533f..fd0faa982377 100644
+--- a/clang/lib/Serialization/ASTWriter.cpp
++++ b/clang/lib/Serialization/ASTWriter.cpp
+@@ -6015,8 +6015,12 @@ void ASTRecordWriter::AddCXXDefinitionData(const CXXRecordDecl *D) {
+ 
+   Record->push_back(DefinitionBits);
+ 
+-  // getODRHash will compute the ODRHash if it has not been previously computed.
+-  Record->push_back(D->getODRHash());
++  // We only perform ODR checks for decls not in GMF.
++  if (!isFromExplicitGMF(D)) {
++    // getODRHash will compute the ODRHash if it has not been previously
++    // computed.
++    Record->push_back(D->getODRHash());
++  }
+ 
+   bool ModulesDebugInfo =
+       Writer->Context->getLangOpts().ModulesDebugInfo && !D->isDependentType();
+diff --git a/clang/lib/Serialization/ASTWriterDecl.cpp b/clang/lib/Serialization/ASTWriterDecl.cpp
+index 9e3299f04918..14bcc8cc0b32 100644
+--- a/clang/lib/Serialization/ASTWriterDecl.cpp
++++ b/clang/lib/Serialization/ASTWriterDecl.cpp
+@@ -493,7 +493,9 @@ void ASTDeclWriter::VisitEnumDecl(EnumDecl *D) {
+   EnumDeclBits.addBit(D->isFixed());
+   Record.push_back(EnumDeclBits);
+ 
+-  Record.push_back(D->getODRHash());
++  // We only perform ODR checks for decls not in GMF.
++  if (!isFromExplicitGMF(D))
++    Record.push_back(D->getODRHash());
+ 
+   if (MemberSpecializationInfo *MemberInfo = D->getMemberSpecializationInfo()) {
+     Record.AddDeclRef(MemberInfo->getInstantiatedFrom());
+@@ -510,7 +512,7 @@ void ASTDeclWriter::VisitEnumDecl(EnumDecl *D) {
+       !D->isTopLevelDeclInObjCContainer() &&
+       !CXXRecordDecl::classofKind(D->getKind()) &&
+       !D->getIntegerTypeSourceInfo() && !D->getMemberSpecializationInfo() &&
+-      !needsAnonymousDeclarationNumber(D) &&
++      !needsAnonymousDeclarationNumber(D) && !isFromExplicitGMF(D) &&
+       D->getDeclName().getNameKind() == DeclarationName::Identifier)
+     AbbrevToUse = Writer.getDeclEnumAbbrev();
+ 
+@@ -701,7 +703,9 @@ void ASTDeclWriter::VisitFunctionDecl(FunctionDecl *D) {
+   if (D->isExplicitlyDefaulted())
+     Record.AddSourceLocation(D->getDefaultLoc());
+ 
+-  Record.push_back(D->getODRHash());
++  // We only perform ODR checks for decls not in GMF.
++  if (!isFromExplicitGMF(D))
++    Record.push_back(D->getODRHash());
+ 
+   if (D->isDefaulted()) {
+     if (auto *FDI = D->getDefaultedFunctionInfo()) {
+@@ -1506,7 +1510,8 @@ void ASTDeclWriter::VisitCXXMethodDecl(CXXMethodDecl *D) {
+       D->getFirstDecl() == D->getMostRecentDecl() && !D->isInvalidDecl() &&
+       !D->hasAttrs() && !D->isTopLevelDeclInObjCContainer() &&
+       D->getDeclName().getNameKind() == DeclarationName::Identifier &&
+-      !D->hasExtInfo() && !D->isExplicitlyDefaulted()) {
++      !isFromExplicitGMF(D) && !D->hasExtInfo() &&
++      !D->isExplicitlyDefaulted()) {
+     if (D->getTemplatedKind() == FunctionDecl::TK_NonTemplate ||
+         D->getTemplatedKind() == FunctionDecl::TK_FunctionTemplate ||
+         D->getTemplatedKind() == FunctionDecl::TK_MemberSpecialization ||
+diff --git a/clang/test/Modules/concept.cppm b/clang/test/Modules/concept.cppm
+index 0e85a46411a5..a343c9cd76a1 100644
+--- a/clang/test/Modules/concept.cppm
++++ b/clang/test/Modules/concept.cppm
+@@ -70,13 +70,6 @@ module;
+ export module B;
+ import A;
+ 
+-#ifdef DIFFERENT
+-// expected-error@foo.h:41 {{'__fn::operator()' from module 'A.<global>' is not present in definition of '__fn' provided earlier}}
+-// expected-note@* 1+{{declaration of 'operator()' does not match}}
+-#else
+-// expected-no-diagnostics
+-#endif
+-
+ template <class T>
+ struct U {
+   auto operator+(U) { return 0; }
+@@ -94,3 +87,10 @@ void foo() {
+ 
+     __fn{}(U<int>(), U<int>());
+ }
++
++#ifdef DIFFERENT
++// expected-error@B.cppm:* {{call to object of type '__fn' is ambiguous}}
++// expected-note@* 1+{{candidate function}}
++#else
++// expected-no-diagnostics
++#endif
+diff --git a/clang/test/Modules/no-eager-load.cppm b/clang/test/Modules/no-eager-load.cppm
+index 6632cc60c8eb..8a2c7656bca2 100644
+--- a/clang/test/Modules/no-eager-load.cppm
++++ b/clang/test/Modules/no-eager-load.cppm
+@@ -9,19 +9,10 @@
+ // RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify %t/d.cpp \
+ // RUN:     -fprebuilt-module-path=%t
+ //
+-// RUN: %clang_cc1 -std=c++20 -emit-module-interface %t/e.cppm -o %t/e.pcm
+-// RUN: %clang_cc1 -std=c++20 -emit-module-interface %t/f.cppm -o %t/f.pcm
+-// RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify %t/g.cpp \
+-// RUN:     -fprebuilt-module-path=%t
+-//
+ // RUN: %clang_cc1 -std=c++20 -emit-module-interface %t/h.cppm \
+ // RUN:     -fprebuilt-module-path=%t -o %t/h.pcm
+-// RUN: %clang_cc1 -std=c++20 -emit-module-interface %t/i.cppm \
+-// RUN:     -fprebuilt-module-path=%t -o %t/i.pcm
+ // RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify %t/j.cpp \
+ // RUN:     -fprebuilt-module-path=%t
+-// RUN: %clang_cc1 -std=c++20 -fsyntax-only -verify %t/k.cpp \
+-// RUN:     -fprebuilt-module-path=%t
+ 
+ //--- a.cppm
+ export module a;
+@@ -53,58 +44,14 @@ void use() {
+            // expected-note@* {{but in 'a' found a different body}}
+ }
+ 
+-//--- foo.h
+-void foo() {
+-
+-}
+-
+-//--- bar.h
+-void bar();
+-void foo() {
+-    bar();
+-}
+-
+-//--- e.cppm
+-module;
+-#include "foo.h"
+-export module e;
+-export using ::foo;
+-
+-//--- f.cppm
+-module;
+-#include "bar.h"
+-export module f;
+-export using ::foo;
+-
+-//--- g.cpp
+-import e;
+-import f;
+-void use() {
+-    foo(); // expected-error@* {{'foo' has different definitions in different modules;}}
+-           // expected-note@* {{but in 'e.<global>' found a different body}}
+-}
+-
+ //--- h.cppm
+ export module h;
+ export import a;
+ export import b;
+ 
+-//--- i.cppm
+-export module i;
+-export import e;
+-export import f;
+-
+ //--- j.cpp
+ import h;
+ void use() {
+     foo(); // expected-error@* {{'foo' has different definitions in different modules;}}
+            // expected-note@* {{but in 'a' found a different body}}
+ }
+-
+-//--- k.cpp
+-import i;
+-void use() {
+-    foo(); // expected-error@* {{'foo' has different definitions in different modules;}}
+-           // expected-note@* {{but in 'e.<global>' found a different body}}
+-}
+-
+diff --git a/clang/test/Modules/polluted-operator.cppm b/clang/test/Modules/polluted-operator.cppm
+index b24464aa6ad2..d4b0041b5d34 100644
+--- a/clang/test/Modules/polluted-operator.cppm
++++ b/clang/test/Modules/polluted-operator.cppm
+@@ -46,12 +46,10 @@ module;
+ export module a;
+ 
+ //--- b.cppm
++// This is actually an ODR violation. But given https://github.com/llvm/llvm-project/issues/79240,
++// we don't count it as an ODR violation any more.
++// expected-no-diagnostics
+ module;
+ #include "bar.h"
+ export module b;
+ import a;
+-
+-// expected-error@* {{has different definitions in different modules; first difference is defined here found data member '_S_copy_ctor' with an initializer}}
+-// expected-note@* {{but in 'a.<global>' found data member '_S_copy_ctor' with a different initializer}}
+-// expected-error@* {{from module 'a.<global>' is not present in definition of 'variant<_Types...>' provided earlier}}
+-// expected-note@* {{declaration of 'swap' does not match}}
+-- 
+2.44.0.683.g7961c838ac-goog
+
