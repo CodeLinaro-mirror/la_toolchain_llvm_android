@@ -955,6 +955,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [C++20] [Modules] Don't perform ODR checks in GMF"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a0b6747804e46665ecfd00295b60432bfe1775b6.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525833
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [FMV] Change feature priorities according to ACLE. (#79316)"
         },
         "platforms": [
