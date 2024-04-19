@@ -786,6 +786,12 @@ class SwigBuilder(base_builders.AutoconfBuilder):
             ldflags.append(f'-Wl,-rpath,{lib_dir}')
         return ldflags
 
+    @property
+    def env(self) -> List[str]:
+        env = super().env
+        env['BISON'] = paths.BISON_BIN_PATH
+        return env
+
 
 class XzBuilder(base_builders.CMakeBuilder, base_builders.LibInfo):
     name: str = 'liblzma'
