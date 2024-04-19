@@ -1441,5 +1441,19 @@
             "from": 522817,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Carving out -Wformat warning about scoped enums into a subwarning"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "88595.patch",
+        "version_range": {
+            "from": 522817,
+            "until": null
+        }
     }
 ]
