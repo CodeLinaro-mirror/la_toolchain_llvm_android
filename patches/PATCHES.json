@@ -689,6 +689,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [SLP]Do not require external uses for roots and single use for other instructions in computeMinimumValueSizes. (#72679)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/18473eb108e29c7c9d9fcb5d0d8c271948aca330.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523832
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [lld][ELF] Allow Arm PC-relative relocations in PIC links (#77304)"
         },
         "platforms": [
