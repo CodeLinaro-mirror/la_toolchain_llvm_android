@@ -1,4 +1,4 @@
-From 6b29a55c864587e80cc26014b73f19f5c7910cff Mon Sep 17 00:00:00 2001
+From cceb020e3497e1af208e546ac971e265f46d2f66 Mon Sep 17 00:00:00 2001
 From: Ryan Prichard <rprichard@google.com>
 Date: Mon, 25 Jul 2022 18:05:30 -0700
 Subject: [PATCH] [libc++abi] Optionally move __cxa_demangle into
@@ -14,7 +14,7 @@ Differential Revision: https://reviews.llvm.org/D139493
  2 files changed, 33 insertions(+), 1 deletion(-)
 
 diff --git a/libcxxabi/CMakeLists.txt b/libcxxabi/CMakeLists.txt
-index f380fe6b6b92..ab34097c2300 100644
+index efe830bd2ad6..17fb41eda1a6 100644
 --- a/libcxxabi/CMakeLists.txt
 +++ b/libcxxabi/CMakeLists.txt
 @@ -79,6 +79,7 @@ option(LIBCXXABI_INSTALL_LIBRARY "Install the libc++abi library." ON)
@@ -25,7 +25,7 @@ index f380fe6b6b92..ab34097c2300 100644
  
  set(LIBCXXABI_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/c++/v1" CACHE STRING "Path to install the libc++abi headers at.")
  
-@@ -128,6 +129,14 @@ option(LIBCXXABI_SILENT_TERMINATE "Set this to make the terminate handler defaul
+@@ -123,6 +124,14 @@ option(LIBCXXABI_SILENT_TERMINATE "Set this to make the terminate handler defaul
  option(LIBCXXABI_NON_DEMANGLING_TERMINATE "Set this to make the terminate handler
  avoid demangling" OFF)
  
@@ -41,7 +41,7 @@ index f380fe6b6b92..ab34097c2300 100644
    message(FATAL_ERROR "libc++abi must be built as either a shared or static library.")
  endif()
 diff --git a/libcxxabi/src/CMakeLists.txt b/libcxxabi/src/CMakeLists.txt
-index 3ad755803ac9..c588a6aaa54d 100644
+index 4198827203fc..2b77f0b24874 100644
 --- a/libcxxabi/src/CMakeLists.txt
 +++ b/libcxxabi/src/CMakeLists.txt
 @@ -3,7 +3,6 @@ set(LIBCXXABI_SOURCES
@@ -65,12 +65,12 @@ index 3ad755803ac9..c588a6aaa54d 100644
  if (LIBCXXABI_ENABLE_NEW_DELETE_DEFINITIONS)
    list(APPEND LIBCXXABI_SOURCES
      stdlib_new_delete.cpp
-@@ -156,6 +161,24 @@ endif()
+@@ -154,6 +159,24 @@ endif()
  
  include(WarningFlags)
  
 +if (LIBCXXABI_STATIC_DEMANGLE_LIBRARY)
-+  add_library(cxxabi_demangle_static STATIC cxa_demangle.cpp ${LIBCXXABI_HEADERS})
++  add_library(cxxabi_demangle_static STATIC abort_message.cpp cxa_demangle.cpp ${LIBCXXABI_HEADERS})
 +  target_link_libraries(cxxabi_demangle_static PRIVATE cxx-headers cxxabi-headers)
 +  set_target_properties(cxxabi_demangle_static
 +    PROPERTIES
@@ -91,5 +91,5 @@ index 3ad755803ac9..c588a6aaa54d 100644
  add_library(cxxabi_shared_objects OBJECT EXCLUDE_FROM_ALL ${LIBCXXABI_SOURCES} ${LIBCXXABI_HEADERS})
  cxx_add_warning_flags(cxxabi_shared_objects ${LIBCXXABI_ENABLE_WERROR} ${LIBCXXABI_ENABLE_PEDANTIC})
 -- 
-2.39.0.314.g84b9a713c41-goog
+2.44.0.769.g3c40516874-goog
 
