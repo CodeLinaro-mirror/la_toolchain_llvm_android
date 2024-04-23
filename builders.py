@@ -776,6 +776,7 @@ class SwigBuilder(base_builders.AutoconfBuilder):
     def config_flags(self) -> List[str]:
         flags = super().config_flags
         flags.append('--without-pcre')
+        flags.append('--disable-ccache')
         return flags
 
     @property
@@ -790,6 +791,7 @@ class SwigBuilder(base_builders.AutoconfBuilder):
     def env(self) -> List[str]:
         env = super().env
         env['BISON'] = paths.BISON_BIN_PATH
+        env['M4'] = paths.M4_BIN_PATH
         return env
 
 
