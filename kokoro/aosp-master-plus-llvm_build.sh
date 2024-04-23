@@ -17,7 +17,20 @@ repo init -u https://android.googlesource.com/platform/manifest -b main --depth=
 repo sync -c
 
 mkdir dist
-DIST_DIR=dist OUT_DIR=out prebuilts/python/linux-x86/bin/python3 \
+USE_RBE=true \
+RBE_instance="projects/android-dev-builds/instances/default_instance" \
+RBE_service="remotebuildexecution.googleapis.com:443" \
+RBE_use_gce_credentials=true \
+RBE_JAVAC=true \
+RBE_JAVAC_EXEC_STRATEGY=remote_local_fallback \
+RBE_D8=true \
+RBE_D8_EXEC_STRATEGY=remote_local_fallback \
+RBE_R8=true \
+RBE_R8_EXEC_STRATEGY=remote_local_fallback \
+RBE_CXX=false \
+DIST_DIR=dist \
+OUT_DIR=out \
+prebuilts/python/linux-x86/bin/python3 \
   toolchain/llvm_android/test_compiler.py --build-only \
   --target ${AOSP_BUILD_TARGET}-trunk_staging-userdebug \
   --clang-package-path ${KOKORO_GFILE_DIR} .
