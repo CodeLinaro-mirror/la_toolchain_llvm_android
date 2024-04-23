@@ -1,7 +1,6 @@
 FROM ubuntu:22.04
 RUN apt-get update \
 && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install --no-install-recommends -y \
-  bison \
   build-essential \
   git \
   libssl-dev \
