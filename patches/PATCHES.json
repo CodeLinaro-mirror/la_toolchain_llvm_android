@@ -1151,6 +1151,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Carving out -Wformat warning about scoped enums into a subwarning (#88595)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/73ed2153beb529973741344874c0084d24c2f268.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 534384
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
@@ -1451,20 +1465,6 @@
             "android"
         ],
         "rel_patch_path": "Revert-Recommit-DAGCombiner-Transform-icmp-eq-ne-and.patch",
-        "version_range": {
-            "from": 522817,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Carving out -Wformat warning about scoped enums into a subwarning"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "88595.patch",
         "version_range": {
             "from": 522817,
             "until": null
