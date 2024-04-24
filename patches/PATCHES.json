@@ -731,6 +731,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [SLP]Fix a crash for reduced values with minbitwidth, which are reused."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/39b2104b4a4e0990eddc763eab99b28e8deab953.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523953
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libunwind][WebAssembly] Fix libunwind.cpp guard (#78230)"
         },
         "platforms": [
