@@ -64,9 +64,9 @@ def fetch_prebuilts(build_id: str, target: str):
         else:
             print("Download successful!")
 
-        # extract the toolchain
-        tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
-        extract_tarball(target, tar)
+            # extract the toolchain
+            tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
+            extract_tarball(target, tar)
 
 
 # Make sure gsutil is installed.
