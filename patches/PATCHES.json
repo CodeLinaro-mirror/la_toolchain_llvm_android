@@ -1179,6 +1179,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Modules] Don't replace local declarations with external declaration with lower visibility"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/487967af82053cd08022635a2ff768385d936c80.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 535006
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
