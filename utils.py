@@ -155,6 +155,7 @@ def clean_out_dir():
     for child in paths.OUT_DIR.iterdir():
         if child.name == 'prebuilt_cached':
             continue
+        logger().info(f'removing {child} in {paths.OUT_DIR}')
         if child.is_dir():
             shutil.rmtree(child)
         else:

@@ -944,12 +944,12 @@ def parse_args():
     incremental_group.add_argument(
         '--incremental',
         action='store_true',
-        default=False,
+        default=True,
         help='Keep paths.OUT_DIR if it exists')
     incremental_group.add_argument(
         '--no-incremental',
         action='store_false',
-        default=False,
+        default=True,
         dest='incremental',
         help='Delete paths.OUT_DIR if it exists (default)')
 
@@ -965,7 +965,8 @@ def main():
             logger().info(f'Removing {paths.OUT_DIR}')
             utils.clean_out_dir()
         else:
-            logger().info(f'Keeping older build in {paths.OUT_DIR}')
+            out_dir_items = ' '.join(map(str, paths.OUT_DIR.iterdir()))
+            logger().info(f'Keeping older build in {paths.OUT_DIR}: {out_dir_items}')
 
     timer.Timer.register_atexit(paths.DIST_DIR / 'build_times.txt')
 
