@@ -1,0 +1,97 @@
+From 487967af82053cd08022635a2ff768385d936c80 Mon Sep 17 00:00:00 2001
+From: Chuanqi Xu <yedeng.yd@linux.alibaba.com>
+Date: Sun, 28 Apr 2024 15:16:07 +0800
+Subject: [PATCH] [Modules] Don't replace local declarations with external
+ declaration with lower visibility
+
+Close https://github.com/llvm/llvm-project/issues/88400
+
+For the reproducer:
+
+```
+//--- header.h
+
+namespace N {
+    template<typename T>
+    concept X = true;
+
+    template<X T>
+    class Y {
+    public:
+        template<X U>
+        friend class Y;
+    };
+
+    inline Y<int> x;
+}
+
+//--- bar.cppm
+module;
+export module bar;
+namespace N {
+    // To make sure N::Y won't get elided.
+    using N::x;
+}
+
+//--- foo.cc
+// expected-no-diagnostics
+import bar;
+void y() {
+    N::Y<int> y{};
+};
+```
+
+it will crash. The root cause is that in
+`StoredDeclsList::replaceExternalDecls`, we will replace the
+existing declarations with external declarations.
+
+Then for the reproducer, the redecl chain for Y is like:
+
+```
+Y (Local) -> Y (Local, friend) -> Y (Imported) -> Y(Imported, friend)
+```
+
+Before the lookup, the stored lookup result is `Y(Local)` then we find
+`Y(Imported)`. And now we repalce `Y(Local)` with `Y(Imported)`. But
+`Y(Imported)` is not visible. So we tried to find if there is any
+redeclarations visible but we find `Y(Local, friend)`, then problem
+happens.
+
+The solution is try to avoid the replace to happen if the external
+declaration has lower visibility then we can always find the local
+declarations. This may help the lookup performance slightly.
+
+Also I found the implementation of
+`StoredDeclsList::replaceExternalDecls` is not efficiency. It has an
+`O(n*m)` complexities. But let's improve that in the future.
+---
+ .../include/clang/AST/DeclContextInternals.h  |  8 ++-
+ 2 files changed, 67 insertions(+), 2 deletions(-)
+ create mode 100644 clang/test/Modules/pr88400.cppm
+
+diff --git a/clang/include/clang/AST/DeclContextInternals.h b/clang/include/clang/AST/DeclContextInternals.h
+index c4734ab57895..42cc677f8213 100644
+--- a/clang/include/clang/AST/DeclContextInternals.h
++++ b/clang/include/clang/AST/DeclContextInternals.h
+@@ -160,12 +160,16 @@ public:
+ 
+   void replaceExternalDecls(ArrayRef<NamedDecl*> Decls) {
+     // Remove all declarations that are either external or are replaced with
+-    // external declarations.
++    // external declarations with higher visibilities.
+     erase_if([Decls](NamedDecl *ND) {
+       if (ND->isFromASTFile())
+         return true;
++      // FIXME: Can we get rid of this loop completely?
+       for (NamedDecl *D : Decls)
+-        if (D->declarationReplaces(ND, /*IsKnownNewer=*/false))
++        // Only replace the local declaration if the external declaration has
++        // higher visibilities.
++        if (D->getModuleOwnershipKind() <= ND->getModuleOwnershipKind() &&
++            D->declarationReplaces(ND, /*IsKnownNewer=*/false))
+           return true;
+       return false;
+     });
+-- 
+2.45.0.rc1.225.g2a3ae87e7f-goog
+
