@@ -66,7 +66,7 @@ SWIG_SRC_DIR: Path = EXTERNAL_DIR / 'swig'
 XZ_SRC_DIR: Path = TOOLCHAIN_DIR / 'xz'
 ZSTD_SRC_DIR: Path = EXTERNAL_DIR / 'zstd'
 
-NDK_BASE: Path = TOOLCHAIN_DIR / 'prebuilts' /'ndk' / constants.NDK_VERSION
+NDK_BASE: Path = TOOLCHAIN_DIR / 'prebuilts' / 'ndk' / 'releases' / constants.NDK_VERSION
 
 RISCV64_ANDROID_SYSROOT: Path = TOOLCHAIN_DIR / 'prebuilts' / 'sysroot' / 'platform' / 'riscv64-linux-android'
 
