@@ -26,20 +26,29 @@ from utils import extract_tarball
 prefix = "gs://android-llvm-kokoro-ci-artifacts/prod/android-llvm/linux-tot/continuous/"
 
 
-def GetCommandLineArgs(sys_argv: Optional[List[str]]):
+def parse_args(sys_argv: Optional[List[str]]):
     """Parse the command line arguments."""
 
     parser = argparse.ArgumentParser(description="Fetch prebuilts from kokoro.")
 
-    parser.add_argument(
-        "build_id",
+    ref = parser.add_mutually_exclusive_group(required=True)
+    ref.add_argument(
+        "--sha",
         type=str,
-        nargs=1,
+        nargs="?",
+        help="the build sha of llvm-project of one Kokoro build in Test fusion",
+    )
+
+    ref.add_argument(
+        "--build_id",
+        type=str,
+        nargs="?",
         help=(
             "the build id in"
             " https://pantheon.corp.google.com/storage/browser/android-llvm-kokoro-ci-artifacts"
         ),
     )
+
     parser.add_argument("target", type=str, nargs=1, help="target path")
     return parser.parse_args(sys_argv)
 
@@ -58,11 +67,11 @@ def fetch_prebuilts(build_id: str, target: str):
         if result.returncode > 0:
             err_string = str(result.stderr, encoding="utf-8")
             if "CommandException: No URLs matched" in err_string:
-                print("Build " + build_id + " failed to build.")
+                print(f"Build {build_id} failed to build.")
             else:
-                print(err_string)
+                print(f"{err_string}")
         else:
-            print("Download successful!")
+            print(f"Download build {build_id} successful!")
 
             # extract the toolchain
             tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
@@ -76,9 +85,9 @@ def check_gsutil():
         subprocess.run(cmd, encoding="utf-8", check=True)
     except FileNotFoundError:
         print(
-            "Fatal: gsutil not installed! Please go to"
-            " https://cloud.google.com/storage/docs/gsutil_install to install"
-            " gsutil",
+            f"Fatal: gsutil not installed! Please go to"
+            f" https://cloud.google.com/storage/docs/gsutil_install to install"
+            f" gsutil",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -98,15 +107,61 @@ def check_valid_path(target: str):
         raise Exception(err_msg)
 
 
+def get_build_number(sha: str):
+    request = """
+        full_job_name: "android-llvm/linux-tot/continuous"
+        multi_scm_revision: {{
+          git_on_borg_scm_revision: {{
+            name: "toolchain/llvm-project",
+            branch: "main",
+            sha1: "{}"
+          }}
+        }}
+    """.format(sha)
+
+    # Send the request.
+    cmd = [
+        "stubby",
+        "call",
+        "blade:kokoro-api",
+        "KokoroApi.GetBuildStatus",
+        request,
+    ]
+
+    try:
+        response = subprocess.check_output(cmd)
+    except subprocess.CalledProcessError as e:
+        raise Exception(e)
+
+    # Parse the response.
+    data = response.decode("utf-8")
+    # Because the format of reponse is not YAML or JSON, we need to split the string.
+
+    build_number = None
+    for line in data.splitlines():
+        if line.startswith("build_number:"):
+            build_number = line.split()[-1]
+            break
+
+    if not build_number:
+        raise ValueError("No build number matched!")
+
+    return build_number
+
+
 def main(sys_argv: List[str]):
     check_gsutil()
 
-    args_output = GetCommandLineArgs(sys_argv)
-    build_id = args_output.build_id[0]
-    check_valid_build(build_id)
+    args_output = parse_args(sys_argv)
 
     target = args_output.target[0]
     check_valid_path(target)
+
+    if args_output.sha:
+        build_id = get_build_number(args_output.sha)
+    else:
+        build_id = args_output.build_id
+        check_valid_build(build_id)
 
     fetch_prebuilts(build_id, target)
 
