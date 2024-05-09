@@ -69,7 +69,7 @@ def fetch_prebuilts(build_id: str, target: str):
             if "CommandException: No URLs matched" in err_string:
                 print(f"Build {build_id} failed to build.")
             else:
-                print(f"{err_string}")
+                print(err_string)
         else:
             print(f"Download build {build_id} successful!")
 
@@ -85,9 +85,9 @@ def check_gsutil():
         subprocess.run(cmd, encoding="utf-8", check=True)
     except FileNotFoundError:
         print(
-            f"Fatal: gsutil not installed! Please go to"
-            f" https://cloud.google.com/storage/docs/gsutil_install to install"
-            f" gsutil",
+            "Fatal: gsutil not installed! Please go to"
+            " https://cloud.google.com/storage/docs/gsutil_install to install"
+            " gsutil",
             file=sys.stderr,
         )
         sys.exit(1)
