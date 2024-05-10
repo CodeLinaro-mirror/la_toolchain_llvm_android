@@ -36,9 +36,10 @@ $ toolchain/llvm_android/docker/test_env.sh
 $ toolchain/llvm_android/build.py --mlgo
 ```
 
-> Use `--no-mlgo` option to build without MLGO.  Building Android with this
-> toolchain will fail with `Requested regalloc eviction advisor analysis could
-> not be created.`.  Use `m THINLTO_USE_MLGO=false` to bypass this error.
+> The default option is `--no-mlgo`, which builds the toolchain without MLGO.
+> Building Android with this toolchain will fail with `Requested regalloc
+> eviction advisor analysis could not be created.`.  Use
+> `m THINLTO_USE_MLGO=false` to bypass this error.
 
 #### Convenience Options
 
