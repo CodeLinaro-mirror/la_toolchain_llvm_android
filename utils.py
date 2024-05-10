@@ -69,11 +69,15 @@ def create_tarball(source_dir, input, output):
         '-f', str(output),
         *map(str, input)
     ], env=xz_env)
+    # print sha of tarball for debugging
+    check_call(['shasum', str(output)])
 
 
 def extract_tarball(output_dir, input, args=[]):
     xz_env = os.environ.copy()
     xz_env["XZ_OPT"] = "-T0"
+    # print sha of tarball for debugging
+    check_call(['shasum', str(input)])
     check_call(['tar', '-xC', str(output_dir), '-f', str(input)] + args, env=xz_env)
 
 
