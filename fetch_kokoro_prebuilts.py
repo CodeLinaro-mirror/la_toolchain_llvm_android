@@ -78,19 +78,26 @@ def fetch_prebuilts(build_id: str, target: str):
             extract_tarball(target, tar)
 
 
-# Make sure gsutil is installed.
 def check_gsutil():
     cmd = ["gsutil", "version"]
     try:
-        subprocess.run(cmd, encoding="utf-8", check=True)
-    except FileNotFoundError:
-        print(
-            "Fatal: gsutil not installed! Please go to"
-            " https://cloud.google.com/storage/docs/gsutil_install to install"
-            " gsutil",
-            file=sys.stderr,
+        subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        sys.exit(1)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def check_stubby():
+    cmd = ["stubby", "--version"]
+    try:
+        subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return True
+    except FileNotFoundError:
+        return False
 
 
 def check_valid_build(build_id: str):
@@ -150,9 +157,24 @@ def get_build_number(sha: str):
 
 
 def main(sys_argv: List[str]):
-    check_gsutil()
-
     args_output = parse_args(sys_argv)
+
+    if not check_gsutil():
+        print(
+            "Fatal: gsutil not installed! Please go to"
+            " https://cloud.google.com/storage/docs/gsutil_install to install"
+            " gsutil",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if args_output.sha and not check_stubby():
+        print(
+            "Fatal: stubby not found. This is only available on gLinux"
+            " (Googlers only). Use --build_id instead",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     target = args_output.target[0]
     check_valid_path(target)
