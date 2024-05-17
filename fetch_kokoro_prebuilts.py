@@ -115,17 +115,31 @@ def check_valid_path(target: str):
 
 
 def get_build_number(sha: str):
-    request = """
+    """Find the build number that contains the SHA.
+
+    Find if SHA is the latest change in any build.
+    If not, find if the SHA is included in the latest build and get the
+    latest build number so we can walk the kokoro builds.
+    Keep looking at older builds until we find a match or exhaust all builds.
+
+    Args:
+        sha: the SHA of the llvm-project change.
+
+    Returns:
+        The build number that contains the SHA.
+    """
+    request = f"""
         full_job_name: "android-llvm/linux-tot/continuous"
         multi_scm_revision: {{
           git_on_borg_scm_revision: {{
             name: "toolchain/llvm-project",
             branch: "main",
-            sha1: "{}"
+            sha1: "{sha}"
           }}
         }}
-    """.format(sha)
+    """
 
+    build_number = None
     # Send the request.
     cmd = [
         "stubby",
@@ -135,23 +149,62 @@ def get_build_number(sha: str):
         request,
     ]
 
-    try:
-        response = subprocess.check_output(cmd)
-    except subprocess.CalledProcessError as e:
-        raise Exception(e)
+    response = subprocess.run(cmd, capture_output=True, text=True)
+    if response.returncode == 0:
+        # The sha is from the latest change in any build.
+        data = response.stdout
+        for line in data.splitlines():
+            if line.startswith("build_number:"):
+                build_number = line.split()[-1]
+                return build_number
 
-    # Parse the response.
-    data = response.decode("utf-8")
-    # Because the format of reponse is not YAML or JSON, we need to split the string.
+    found = False
+    id_line = f'id: "{sha}"'
+    request = """
+        full_job_name: "android-llvm/linux-tot/continuous"
+        multi_scm_revision: {
+        git_on_borg_scm_revision: {
+            name: "toolchain/llvm-project",
+            branch: "main"
+        }
+        }
+    """
 
-    build_number = None
-    for line in data.splitlines():
-        if line.startswith("build_number:"):
-            build_number = line.split()[-1]
-            break
+    while not found:
+        try:
+            cmd[-1] = request
+            response = subprocess.check_output(cmd)
+        except subprocess.CalledProcessError as e:
+            print(
+                "No build number matched!",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    if not build_number:
-        raise ValueError("No build number matched!")
+        # Parse the response.
+        data = response.decode("utf-8")
+        for line in data.splitlines():
+            line = line.strip()
+            if line == id_line:
+                found = True
+            if line.startswith("build_number:"):
+                build_number = line.split()[-1]
+                break
+
+        # The current build doesn't have the SHA.
+        # Try to find the SHA in the next older build.
+        if not found:
+            build_number = str(int(build_number) - 1)
+            request = f"""
+                build_number: {build_number}
+                full_job_name: "android-llvm/linux-tot/continuous"
+                multi_scm_revision: {{
+                git_on_borg_scm_revision: {{
+                    name: "toolchain/llvm-project",
+                    branch: "main"
+                }}
+                }}
+            """
 
     return build_number
 
@@ -183,7 +236,8 @@ def main(sys_argv: List[str]):
         build_id = get_build_number(args_output.sha)
     else:
         build_id = args_output.build_id
-        check_valid_build(build_id)
+
+    check_valid_build(build_id)
 
     fetch_prebuilts(build_id, target)
 
