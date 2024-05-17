@@ -522,7 +522,7 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
 
         # To prevent cmake from checking libstdcxx version.
         defines['LLVM_ENABLE_LIBCXX'] = 'ON'
-        defines['LLVM_LINK_STATIC_CXX_STDLIB'] = 'ON'
+        defines['LLVM_STATIC_LINK_CXX_STDLIB'] = 'ON'
 
         if self._config.target_os.is_darwin:
             defines['LLVM_USE_LINKER'] = 'ld'
