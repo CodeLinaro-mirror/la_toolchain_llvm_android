@@ -204,9 +204,6 @@ def parse_args():
         help='Build BOLT instrumented compiler and gather profiles')
 
     args = parser.parse_args()
-    if args.clang_path and args.clang_package_path:
-        parser.error('Only one of --clang-path and --clang-package-path must'
-                     'be specified')
     if args.build_only and not args.target:
         parser.error('Build target is not specified in build only mode.')
 
