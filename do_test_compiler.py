@@ -115,6 +115,11 @@ def parse_args():
         nargs='?',
         help='Directory of a pre-packaged (.tar.xz) bootstrap (stage-1) Clang. '
         'Clang extracted from the package will be used for building a full toolchain.')
+    clang_group.add_argument(
+        '--clang-kokoro-build-id',
+        nargs='?',
+        help='Kokoro TOT Clang build ID'
+        'Clang pulled from that build will be used.')
 
     parser.add_argument(
         '-k',
@@ -381,6 +386,21 @@ def extract_packaged_clang(package_path: Path) -> Path:
     return clang_path
 
 
+def fetch_kokoro_prebuilt(build_id: str) -> Path:
+    # Extract package to $OUT_DIR/extracted
+    extract_dir = paths.OUT_DIR / 'extracted'
+    if extract_dir.exists():
+        shutil.rmtree(extract_dir)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    utils.check_call([
+        paths.SCRIPTS_DIR / "fetch_kokoro_prebuilts.py", "--build_id", build_id,
+        extract_dir
+    ])
+
+    return extract_dir / f'clang-{build_id}'
+
+
 def main():
     logging.basicConfig(level=logging.DEBUG)
 
@@ -392,6 +412,8 @@ def main():
         clang_path = Path(args.clang_path)
     elif args.clang_package_path is not None:
         clang_path = extract_packaged_clang(Path(args.clang_package_path))
+    elif args.clang_kokoro_build_id is not None:
+        clang_path = fetch_kokoro_prebuilt(args.clang_kokoro_build_id)
     else:
         cmd = [paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
         if not args.no_mlgo:
