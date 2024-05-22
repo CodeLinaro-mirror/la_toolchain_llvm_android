@@ -629,6 +629,9 @@ class AndroidConfig(_BaseConfig):
 
         cflags.append('-ffunction-sections')
         cflags.append('-fdata-sections')
+        if (self.target_arch == hosts.Arch.X86_64 or
+                self.target_arch == hosts.Arch.AARCH64):
+            cflags.append('-D__BIONIC_NO_PAGE_SIZE_MACRO')
         return cflags
 
     @property
