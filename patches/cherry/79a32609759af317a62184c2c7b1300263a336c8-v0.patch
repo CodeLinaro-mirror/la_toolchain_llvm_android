@@ -1,0 +1,59 @@
+From 1c98e236e33abf4590fd28845d330f08855e001c Mon Sep 17 00:00:00 2001
+From: Evgenii Stepanov <eugeni.stepanov@gmail.com>
+Date: Tue, 21 May 2024 17:15:08 -0700
+Subject: [PATCH] [hwasan] Remove memory attrs from instrumented functions.
+ (#92974)
+
+HWASan instrumentation makes writeonly attribute on function parameters,
+as well as most memory(*) attributes invalid. This causes
+miscompilations with LTO, when more optimizations are run after the
+HWASan pass.
+---
+ .../Instrumentation/HWAddressSanitizer.cpp        |  8 ++++++++
+ .../HWAddressSanitizer/mem-attr.ll                | 15 +++++++++++++++
+ 2 files changed, 23 insertions(+)
+ create mode 100644 llvm/test/Instrumentation/HWAddressSanitizer/mem-attr.ll
+
+diff --git a/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp b/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
+index f7f8fed643e9..d1970ac73494 100644
+--- a/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
++++ b/llvm/lib/Transforms/Instrumentation/HWAddressSanitizer.cpp
+@@ -1532,6 +1532,14 @@ void HWAddressSanitizer::sanitizeFunction(Function &F,
+ 
+   assert(!ShadowBase);
+ 
++  // Remove memory attributes that are about to become invalid.
++  // HWASan checks read from shadow, which invalidates memory(argmem: *)
++  // Short granule checks on function arguments read from the argument memory
++  // (last byte of the granule), which invalidates writeonly.
++  F.removeFnAttr(llvm::Attribute::Memory);
++  for (auto &A : F.args())
++    A.removeAttr(llvm::Attribute::WriteOnly);
++
+   Instruction *InsertPt = &*F.getEntryBlock().begin();
+   IRBuilder<> EntryIRB(InsertPt);
+   emitPrologue(EntryIRB,
+diff --git a/llvm/test/Instrumentation/HWAddressSanitizer/mem-attr.ll b/llvm/test/Instrumentation/HWAddressSanitizer/mem-attr.ll
+new file mode 100644
+index 000000000000..c0e370f20213
+--- /dev/null
++++ b/llvm/test/Instrumentation/HWAddressSanitizer/mem-attr.ll
+@@ -0,0 +1,15 @@
++; Test that HWASan remove writeonly and memory(*) attributes from instrumented functions.
++; RUN: opt -S -passes=hwasan %s | FileCheck %s
++
++target datalayout = "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
++target triple = "aarch64-unknown-linux-android30"
++
++; CHECK: define dso_local void @test_writeonly(ptr nocapture noundef %p) local_unnamed_addr #0
++define dso_local void @test_writeonly(ptr nocapture noundef writeonly %p) local_unnamed_addr #0 {
++entry:
++  store i32 42, ptr %p, align 4
++  ret void
++}
++
++; CHECK: attributes #0 = { sanitize_hwaddress uwtable }
++attributes #0 = { sanitize_hwaddress memory(argmem: write) uwtable }
+-- 
+2.45.1.288.g0e0cd299f1-goog
+

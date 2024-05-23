@@ -857,6 +857,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [hwasan] Remove memory attrs from instrumented functions. (#92974)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/79a32609759af317a62184c2c7b1300263a336c8-v0.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525365
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Move raw_string_ostream back to raw_ostream.cpp (#79224)"
         },
         "platforms": [
@@ -1188,6 +1202,20 @@
         "version_range": {
             "from": 522817,
             "until": 535006
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [hwasan] Remove memory attrs from instrumented functions. (#92974)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/79a32609759af317a62184c2c7b1300263a336c8.patch",
+        "version_range": {
+            "from": 525365,
+            "until": 537320
         }
     },
     {
