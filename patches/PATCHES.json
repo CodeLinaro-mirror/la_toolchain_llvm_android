@@ -1525,5 +1525,19 @@
             "from": 522817,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [libc++] Fix diagnostic for <stdatomic.h> before C++23 (#83351)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-Fix-diagnostic-for-stdatomic.h-before-C++23.patch",
+        "version_range": {
+            "from": 529470,
+            "until": null
+        }
     }
 ]
