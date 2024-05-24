@@ -937,6 +937,7 @@ class LldbServerBuilder(base_builders.LLVMRuntimeBuilder):
         triple = self._config.llvm_triple
         defines['LLVM_HOST_TRIPLE'] = triple.replace('i686', 'i386')
         defines['LLDB_ENABLE_LUA'] = 'OFF'
+        defines['LLDB_INCLUDE_TESTS'] = 'OFF'
         return defines
 
     def install_config(self) -> None:
