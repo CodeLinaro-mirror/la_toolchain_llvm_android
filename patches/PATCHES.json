@@ -1137,6 +1137,76 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[compiler-rt] Avoid generating coredumps when piped to a tool\" (#85390)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0b9f19a9880eb786871194af116f223d2ad30c52.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 530765
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[libc++] Fix tests on musl (#85085)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0847c903c8a04a2bdf53d5f1b93be5705d998801.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 530881
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[RISCV] Recursively split concat_vector into smaller LMULs (#83035)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ef520ca6b18cf65fc7a13fcad1534f1d70332a88.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 531102
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[Float2Int] Resolve FIXME: Pick the smallest legal type that fits\" (#85843)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a6e231bb2a7924f4269e6735d29a54b2318cd16c.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 531161
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[InstCombine] Canonicalize `(sitofp x)` -> `(uitofp x)` if `x >= 0`\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6960ace534c4021301dd5a9933ca06ba96edea23.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 531220
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] clang driver: enable fast unaligned access for Android on RISCV64 (#85704)"
         },
         "platforms": [
@@ -1165,6 +1235,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Don't push and pop extensions diagnostics when using clang modules (#85917)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f886dfed3ae6cf70827cedc8d8aefde6250a239b.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 531617
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [clang][Sema] Fix a CTAD regression after 42239d2e9 (#86914)"
         },
         "platforms": [
@@ -1174,6 +1258,34 @@
         "version_range": {
             "from": 522817,
             "until": 532220
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[AArch64] Add support for -ffixed-x30\" (#88019)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7ad481e76c9bee5b9895ebfa0fdb52f31cb7de77.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 532997
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[C++20] [Modules] Don't import non-inline function bodies even if it is marked as always_inline\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/aa2741449c3609b2ae244d8d3f3e14ad16de72e4.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 533579
         }
     },
     {

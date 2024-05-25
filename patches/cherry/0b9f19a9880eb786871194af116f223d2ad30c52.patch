@@ -1,0 +1,73 @@
+From 0b9f19a9880eb786871194af116f223d2ad30c52 Mon Sep 17 00:00:00 2001
+From: antoine moynault <antoine.moynault@linaro.org>
+Date: Fri, 15 Mar 2024 15:07:40 +0100
+Subject: [PATCH] Revert "[compiler-rt] Avoid generating coredumps when piped
+ to a tool" (#85390)
+
+This reverts commit 27e5312a8bc8935f9c5620ff061c647d9fbcec85.
+
+This commit broke some bots:
+- clang-aarch64-sve-vla
+https://lab.llvm.org/buildbot/#/builders/197/builds/13609
+- clang-aarch64-sve-vls
+https://lab.llvm.org/buildbot/#/builders/184/builds/10988
+- clang-aarch64-lld-2stage
+https://lab.llvm.org/buildbot/#/builders/185/builds/6312
+
+https://github.com/llvm/llvm-project/pull/83701
+---
+ .../sanitizer_posix_libcdep.cpp               | 19 +------------------
+ .../sanitizer_common/TestCases/corelimit.cpp  |  7 +------
+ 2 files changed, 2 insertions(+), 24 deletions(-)
+
+diff --git a/compiler-rt/lib/sanitizer_common/sanitizer_posix_libcdep.cpp b/compiler-rt/lib/sanitizer_common/sanitizer_posix_libcdep.cpp
+index 3605d0d666e3..ef1fc3549743 100644
+--- a/compiler-rt/lib/sanitizer_common/sanitizer_posix_libcdep.cpp
++++ b/compiler-rt/lib/sanitizer_common/sanitizer_posix_libcdep.cpp
+@@ -104,24 +104,7 @@ static void setlim(int res, rlim_t lim) {
+ 
+ void DisableCoreDumperIfNecessary() {
+   if (common_flags()->disable_coredump) {
+-    rlimit rlim;
+-    CHECK_EQ(0, getrlimit(RLIMIT_CORE, &rlim));
+-    // On Linux, if the kernel.core_pattern sysctl starts with a '|' (i.e. it
+-    // is being piped to a coredump handler such as systemd-coredumpd), the
+-    // kernel ignores RLIMIT_CORE (since we aren't creating a file in the file
+-    // system) except for the magic value of 1, which disables coredumps when
+-    // piping. 1 byte is too small for any kind of valid core dump, so it
+-    // also disables coredumps if kernel.core_pattern creates files directly.
+-    // While most piped coredump handlers do respect the crashing processes'
+-    // RLIMIT_CORE, this is notable not the case for Debian's systemd-coredump
+-    // due to a local patch that changes sysctl.d/50-coredump.conf to ignore
+-    // the specified limit and instead use RLIM_INFINITY.
+-    //
+-    // The alternative to using RLIMIT_CORE=1 would be to use prctl() with the
+-    // PR_SET_DUMPABLE flag, however that also prevents ptrace(), so makes it
+-    // impossible to attach a debugger.
+-    rlim.rlim_cur = Min<rlim_t>(SANITIZER_LINUX ? 1 : 0, rlim.rlim_max);
+-    CHECK_EQ(0, setrlimit(RLIMIT_CORE, &rlim));
++    setlim(RLIMIT_CORE, 0);
+   }
+ }
+ 
+diff --git a/compiler-rt/test/sanitizer_common/TestCases/corelimit.cpp b/compiler-rt/test/sanitizer_common/TestCases/corelimit.cpp
+index fed2e1d89cbf..2378a4cfdced 100644
+--- a/compiler-rt/test/sanitizer_common/TestCases/corelimit.cpp
++++ b/compiler-rt/test/sanitizer_common/TestCases/corelimit.cpp
+@@ -10,12 +10,7 @@ int main() {
+   getrlimit(RLIMIT_CORE, &lim_core);
+   void *p;
+   if (sizeof(p) == 8) {
+-#ifdef __linux__
+-    // See comments in DisableCoreDumperIfNecessary().
+-    assert(lim_core.rlim_cur == 1);
+-#else
+-    assert(lim_core.rlim_cur == 0);
+-#endif
++    assert(0 == lim_core.rlim_cur);
+   }
+   return 0;
+ }
+-- 
+2.45.1.288.g0e0cd299f1-goog
+

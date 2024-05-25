@@ -1,0 +1,61 @@
+From aa2741449c3609b2ae244d8d3f3e14ad16de72e4 Mon Sep 17 00:00:00 2001
+From: Chuanqi Xu <yedeng.yd@linux.alibaba.com>
+Date: Mon, 15 Apr 2024 16:56:44 +0800
+Subject: [PATCH] Revert "[C++20] [Modules] Don't import non-inline function
+ bodies even if it is marked as always_inline"
+
+This reverts commit 1ecbab56dcbb78268c8d19af34a50591f90b12a0.
+
+See the discussion in https://github.com/llvm/llvm-project/issues/86893.
+
+The original commit receives too many complaints. Let's try to
+workaround the issue to give better user experiences.
+---
+ clang/lib/CodeGen/CodeGenModule.cpp                  | 3 ++-
+ clang/test/CodeGenCXX/module-funcs-from-imports.cppm | 6 +++---
+ 2 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 73a9cb9d6e04..e44749672d58 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -3952,7 +3952,8 @@ bool CodeGenModule::shouldEmitFunction(GlobalDecl GD) {
+   // behavior may break ABI compatibility of the current unit.
+   if (const Module *M = F->getOwningModule();
+       M && M->getTopLevelModule()->isNamedModule() &&
+-      getContext().getCurrentNamedModule() != M->getTopLevelModule())
++      getContext().getCurrentNamedModule() != M->getTopLevelModule() &&
++      !F->hasAttr<AlwaysInlineAttr>())
+     return false;
+ 
+   if (F->hasAttr<NoInlineAttr>())
+diff --git a/clang/test/CodeGenCXX/module-funcs-from-imports.cppm b/clang/test/CodeGenCXX/module-funcs-from-imports.cppm
+index 8d04328eaf3f..33cdf437110a 100644
+--- a/clang/test/CodeGenCXX/module-funcs-from-imports.cppm
++++ b/clang/test/CodeGenCXX/module-funcs-from-imports.cppm
+@@ -53,11 +53,11 @@ int use() {
+     return exported_func() + always_inline_func();
+ }
+ 
+-// Checks that none of the function in the importees
++// Checks that none of the function (except the always_inline_func) in the importees
+ // are generated in the importer's code.
+ // CHECK-O0: define{{.*}}_Z3usev(
+ // CHECK-O0: declare{{.*}}_ZW1M13exported_funcv(
+-// CHECK-O0: declare{{.*}}_ZW1M18always_inline_funcv(
++// CHECK-O0: define{{.*}}available_externally{{.*}}_ZW1M18always_inline_funcv(
+ // CHECK-O0-NOT: func_in_gmf
+ // CHECK-O0-NOT: func_in_gmf_not_called
+ // CHECK-O0-NOT: non_exported_func
+@@ -68,7 +68,7 @@ int use() {
+ // O0 to keep consistent ABI.
+ // CHECK-O1: define{{.*}}_Z3usev(
+ // CHECK-O1: declare{{.*}}_ZW1M13exported_funcv(
+-// CHECK-O1: declare{{.*}}_ZW1M18always_inline_funcv(
++// CHECK-O1: define{{.*}}available_externally{{.*}}_ZW1M18always_inline_funcv(
+ // CHECK-O1-NOT: func_in_gmf
+ // CHECK-O1-NOT: func_in_gmf_not_called
+ // CHECK-O1-NOT: non_exported_func
+-- 
+2.45.1.288.g0e0cd299f1-goog
+

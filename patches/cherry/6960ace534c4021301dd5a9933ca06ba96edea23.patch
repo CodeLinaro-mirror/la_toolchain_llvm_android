@@ -1,0 +1,755 @@
+From 6960ace534c4021301dd5a9933ca06ba96edea23 Mon Sep 17 00:00:00 2001
+From: Noah Goldstein <goldstein.w.n@gmail.com>
+Date: Tue, 19 Mar 2024 23:26:51 -0500
+Subject: [PATCH] Revert "[InstCombine] Canonicalize `(sitofp x)` -> `(uitofp
+ x)` if `x >= 0`"
+
+This reverts commit d80d5b923c6f611590a12543bdb33e0c16044d44.
+
+It wasn't a particularly important transform to begin with and caused
+some codegen regressions on targets that prefer `sitofp` so dropping.
+
+Might re-visit along with adding `nneg` flag to `uitofp` so its easily
+reversable for the backend.
+---
+ clang/test/Headers/__clang_hip_math.hip       | 24 ++++----
+ .../InstCombine/InstCombineCasts.cpp          |  6 +-
+ .../test/Transforms/InstCombine/add-sitofp.ll | 10 ++--
+ .../Transforms/InstCombine/binop-itofp.ll     | 28 +++++-----
+ .../Transforms/InstCombine/clamp-to-minmax.ll |  6 +-
+ llvm/test/Transforms/InstCombine/fpcast.ll    | 12 ++--
+ .../Transforms/InstCombine/minmax-fold.ll     | 10 ++--
+ llvm/test/Transforms/InstCombine/minmax-fp.ll |  2 +-
+ llvm/test/Transforms/InstCombine/pr27236.ll   |  2 +-
+ .../LoopVectorize/X86/float-induction-x86.ll  |  6 +-
+ .../LoopVectorize/float-induction.ll          | 56 +++++++++----------
+ 11 files changed, 79 insertions(+), 83 deletions(-)
+
+diff --git a/clang/test/Headers/__clang_hip_math.hip b/clang/test/Headers/__clang_hip_math.hip
+index 701f93853ab9..37099de74fb8 100644
+--- a/clang/test/Headers/__clang_hip_math.hip
++++ b/clang/test/Headers/__clang_hip_math.hip
+@@ -1685,7 +1685,7 @@ extern "C" __device__ double test_j1(double x) {
+ // DEFAULT-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// DEFAULT-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// DEFAULT-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // DEFAULT-NEXT:    [[DIV_I:%.*]] = fdiv contract float [[CONV_I]], [[Y]]
+ // DEFAULT-NEXT:    [[MUL8_I:%.*]] = fmul contract float [[__X1_0_I3]], [[DIV_I]]
+ // DEFAULT-NEXT:    [[SUB_I]] = fsub contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -1718,7 +1718,7 @@ extern "C" __device__ double test_j1(double x) {
+ // FINITEONLY-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// FINITEONLY-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// FINITEONLY-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // FINITEONLY-NEXT:    [[DIV_I:%.*]] = fdiv nnan ninf contract float [[CONV_I]], [[Y]]
+ // FINITEONLY-NEXT:    [[MUL8_I:%.*]] = fmul nnan ninf contract float [[__X1_0_I3]], [[DIV_I]]
+ // FINITEONLY-NEXT:    [[SUB_I]] = fsub nnan ninf contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -1751,7 +1751,7 @@ extern "C" __device__ double test_j1(double x) {
+ // APPROX-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// APPROX-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// APPROX-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // APPROX-NEXT:    [[DIV_I:%.*]] = fdiv contract float [[CONV_I]], [[Y]]
+ // APPROX-NEXT:    [[MUL8_I:%.*]] = fmul contract float [[__X1_0_I3]], [[DIV_I]]
+ // APPROX-NEXT:    [[SUB_I]] = fsub contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -1788,7 +1788,7 @@ extern "C" __device__ float test_jnf(int x, float y) {
+ // DEFAULT-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// DEFAULT-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// DEFAULT-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // DEFAULT-NEXT:    [[DIV_I:%.*]] = fdiv contract double [[CONV_I]], [[Y]]
+ // DEFAULT-NEXT:    [[MUL8_I:%.*]] = fmul contract double [[__X1_0_I3]], [[DIV_I]]
+ // DEFAULT-NEXT:    [[SUB_I]] = fsub contract double [[MUL8_I]], [[__X0_0_I2]]
+@@ -1821,7 +1821,7 @@ extern "C" __device__ float test_jnf(int x, float y) {
+ // FINITEONLY-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// FINITEONLY-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// FINITEONLY-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // FINITEONLY-NEXT:    [[DIV_I:%.*]] = fdiv nnan ninf contract double [[CONV_I]], [[Y]]
+ // FINITEONLY-NEXT:    [[MUL8_I:%.*]] = fmul nnan ninf contract double [[__X1_0_I3]], [[DIV_I]]
+ // FINITEONLY-NEXT:    [[SUB_I]] = fsub nnan ninf contract double [[MUL8_I]], [[__X0_0_I2]]
+@@ -1854,7 +1854,7 @@ extern "C" __device__ float test_jnf(int x, float y) {
+ // APPROX-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// APPROX-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// APPROX-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // APPROX-NEXT:    [[DIV_I:%.*]] = fdiv contract double [[CONV_I]], [[Y]]
+ // APPROX-NEXT:    [[MUL8_I:%.*]] = fmul contract double [[__X1_0_I3]], [[DIV_I]]
+ // APPROX-NEXT:    [[SUB_I]] = fsub contract double [[MUL8_I]], [[__X0_0_I2]]
+@@ -4222,7 +4222,7 @@ extern "C" __device__ double test_y1(double x) {
+ // DEFAULT-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// DEFAULT-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// DEFAULT-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // DEFAULT-NEXT:    [[DIV_I:%.*]] = fdiv contract float [[CONV_I]], [[Y]]
+ // DEFAULT-NEXT:    [[MUL8_I:%.*]] = fmul contract float [[__X1_0_I3]], [[DIV_I]]
+ // DEFAULT-NEXT:    [[SUB_I]] = fsub contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -4255,7 +4255,7 @@ extern "C" __device__ double test_y1(double x) {
+ // FINITEONLY-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// FINITEONLY-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// FINITEONLY-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // FINITEONLY-NEXT:    [[DIV_I:%.*]] = fdiv nnan ninf contract float [[CONV_I]], [[Y]]
+ // FINITEONLY-NEXT:    [[MUL8_I:%.*]] = fmul nnan ninf contract float [[__X1_0_I3]], [[DIV_I]]
+ // FINITEONLY-NEXT:    [[SUB_I]] = fsub nnan ninf contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -4288,7 +4288,7 @@ extern "C" __device__ double test_y1(double x) {
+ // APPROX-NEXT:    [[__X1_0_I3:%.*]] = phi float [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[__X0_0_I2:%.*]] = phi float [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// APPROX-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to float
++// APPROX-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to float
+ // APPROX-NEXT:    [[DIV_I:%.*]] = fdiv contract float [[CONV_I]], [[Y]]
+ // APPROX-NEXT:    [[MUL8_I:%.*]] = fmul contract float [[__X1_0_I3]], [[DIV_I]]
+ // APPROX-NEXT:    [[SUB_I]] = fsub contract float [[MUL8_I]], [[__X0_0_I2]]
+@@ -4325,7 +4325,7 @@ extern "C" __device__ float test_ynf(int x, float y) {
+ // DEFAULT-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // DEFAULT-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// DEFAULT-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// DEFAULT-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // DEFAULT-NEXT:    [[DIV_I:%.*]] = fdiv contract double [[CONV_I]], [[Y]]
+ // DEFAULT-NEXT:    [[MUL8_I:%.*]] = fmul contract double [[__X1_0_I3]], [[DIV_I]]
+ // DEFAULT-NEXT:    [[SUB_I]] = fsub contract double [[MUL8_I]], [[__X0_0_I2]]
+@@ -4358,7 +4358,7 @@ extern "C" __device__ float test_ynf(int x, float y) {
+ // FINITEONLY-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // FINITEONLY-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// FINITEONLY-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// FINITEONLY-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // FINITEONLY-NEXT:    [[DIV_I:%.*]] = fdiv nnan ninf contract double [[CONV_I]], [[Y]]
+ // FINITEONLY-NEXT:    [[MUL8_I:%.*]] = fmul nnan ninf contract double [[__X1_0_I3]], [[DIV_I]]
+ // FINITEONLY-NEXT:    [[SUB_I]] = fsub nnan ninf contract double [[MUL8_I]], [[__X0_0_I2]]
+@@ -4391,7 +4391,7 @@ extern "C" __device__ float test_ynf(int x, float y) {
+ // APPROX-NEXT:    [[__X1_0_I3:%.*]] = phi double [ [[SUB_I:%.*]], [[FOR_BODY_I]] ], [ [[CALL_I21_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[__X0_0_I2:%.*]] = phi double [ [[__X1_0_I3]], [[FOR_BODY_I]] ], [ [[CALL_I_I]], [[IF_END4_I]] ]
+ // APPROX-NEXT:    [[MUL_I:%.*]] = shl nuw nsw i32 [[__I_0_I4]], 1
+-// APPROX-NEXT:    [[CONV_I:%.*]] = uitofp i32 [[MUL_I]] to double
++// APPROX-NEXT:    [[CONV_I:%.*]] = sitofp i32 [[MUL_I]] to double
+ // APPROX-NEXT:    [[DIV_I:%.*]] = fdiv contract double [[CONV_I]], [[Y]]
+ // APPROX-NEXT:    [[MUL8_I:%.*]] = fmul contract double [[__X1_0_I3]], [[DIV_I]]
+ // APPROX-NEXT:    [[SUB_I]] = fsub contract double [[MUL8_I]], [[__X0_0_I2]]
+diff --git a/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp b/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp
+index b19da1e07581..089a70c6e6cc 100644
+--- a/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp
++++ b/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp
+@@ -1961,11 +1961,7 @@ Instruction *InstCombinerImpl::visitUIToFP(CastInst &CI) {
+ }
+ 
+ Instruction *InstCombinerImpl::visitSIToFP(CastInst &CI) {
+-  if (Instruction *R = commonCastTransforms(CI))
+-    return R;
+-  if (isKnownNonNegative(CI.getOperand(0), SQ))
+-    return new UIToFPInst(CI.getOperand(0), CI.getType());
+-  return nullptr;
++  return commonCastTransforms(CI);
+ }
+ 
+ Instruction *InstCombinerImpl::visitIntToPtr(IntToPtrInst &CI) {
+diff --git a/llvm/test/Transforms/InstCombine/add-sitofp.ll b/llvm/test/Transforms/InstCombine/add-sitofp.ll
+index 861525f424fb..2bdc808d9771 100644
+--- a/llvm/test/Transforms/InstCombine/add-sitofp.ll
++++ b/llvm/test/Transforms/InstCombine/add-sitofp.ll
+@@ -33,7 +33,7 @@ define double @test(i32 %a) {
+ define float @test_neg(i32 %a) {
+ ; CHECK-LABEL: @test_neg(
+ ; CHECK-NEXT:    [[A_AND:%.*]] = and i32 [[A:%.*]], 1073741823
+-; CHECK-NEXT:    [[A_AND_FP:%.*]] = uitofp i32 [[A_AND]] to float
++; CHECK-NEXT:    [[A_AND_FP:%.*]] = sitofp i32 [[A_AND]] to float
+ ; CHECK-NEXT:    [[RES:%.*]] = fadd float [[A_AND_FP]], 1.000000e+00
+ ; CHECK-NEXT:    ret float [[RES]]
+ ;
+@@ -67,8 +67,8 @@ define float @test_2_neg(i32 %a, i32 %b) {
+ ; CHECK-LABEL: @test_2_neg(
+ ; CHECK-NEXT:    [[A_AND:%.*]] = and i32 [[A:%.*]], 1073741823
+ ; CHECK-NEXT:    [[B_AND:%.*]] = and i32 [[B:%.*]], 1073741823
+-; CHECK-NEXT:    [[A_AND_FP:%.*]] = uitofp i32 [[A_AND]] to float
+-; CHECK-NEXT:    [[B_AND_FP:%.*]] = uitofp i32 [[B_AND]] to float
++; CHECK-NEXT:    [[A_AND_FP:%.*]] = sitofp i32 [[A_AND]] to float
++; CHECK-NEXT:    [[B_AND_FP:%.*]] = sitofp i32 [[B_AND]] to float
+ ; CHECK-NEXT:    [[RES:%.*]] = fadd float [[A_AND_FP]], [[B_AND_FP]]
+ ; CHECK-NEXT:    ret float [[RES]]
+ ;
+@@ -122,8 +122,8 @@ define <4 x float> @test_4_neg(<4 x i32> %a, <4 x i32> %b) {
+ ; CHECK-LABEL: @test_4_neg(
+ ; CHECK-NEXT:    [[A_AND:%.*]] = and <4 x i32> [[A:%.*]], <i32 1073741823, i32 1073741823, i32 1073741823, i32 1073741823>
+ ; CHECK-NEXT:    [[B_AND:%.*]] = and <4 x i32> [[B:%.*]], <i32 1073741823, i32 1073741823, i32 1073741823, i32 1073741823>
+-; CHECK-NEXT:    [[A_AND_FP:%.*]] = uitofp <4 x i32> [[A_AND]] to <4 x float>
+-; CHECK-NEXT:    [[B_AND_FP:%.*]] = uitofp <4 x i32> [[B_AND]] to <4 x float>
++; CHECK-NEXT:    [[A_AND_FP:%.*]] = sitofp <4 x i32> [[A_AND]] to <4 x float>
++; CHECK-NEXT:    [[B_AND_FP:%.*]] = sitofp <4 x i32> [[B_AND]] to <4 x float>
+ ; CHECK-NEXT:    [[RES:%.*]] = fadd <4 x float> [[A_AND_FP]], [[B_AND_FP]]
+ ; CHECK-NEXT:    ret <4 x float> [[RES]]
+ ;
+diff --git a/llvm/test/Transforms/InstCombine/binop-itofp.ll b/llvm/test/Transforms/InstCombine/binop-itofp.ll
+index c72e4ac413a3..82cdb3ce6bee 100644
+--- a/llvm/test/Transforms/InstCombine/binop-itofp.ll
++++ b/llvm/test/Transforms/InstCombine/binop-itofp.ll
+@@ -166,7 +166,7 @@ define half @test_si_si_i8_sub(i8 noundef %x_in, i8 noundef %y_in) {
+ ; CHECK-NEXT:    [[X:%.*]] = and i8 [[X_IN:%.*]], 63
+ ; CHECK-NEXT:    [[Y:%.*]] = or i8 [[Y_IN:%.*]], -64
+ ; CHECK-NEXT:    [[TMP1:%.*]] = sub nsw i8 [[X]], [[Y]]
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i8 [[TMP1]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i8 [[TMP1]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %x = and i8 %x_in, 63
+@@ -181,7 +181,7 @@ define half @test_si_si_i8_sub_fail_overflow(i8 noundef %x_in, i8 noundef %y_in)
+ ; CHECK-LABEL: @test_si_si_i8_sub_fail_overflow(
+ ; CHECK-NEXT:    [[X:%.*]] = and i8 [[X_IN:%.*]], 63
+ ; CHECK-NEXT:    [[Y:%.*]] = or i8 [[Y_IN:%.*]], -65
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i8 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i8 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i8 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fsub half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -198,7 +198,7 @@ define half @test_si_si_i8_sub_C(i8 noundef %x_in) {
+ ; CHECK-LABEL: @test_si_si_i8_sub_C(
+ ; CHECK-NEXT:    [[X:%.*]] = and i8 [[X_IN:%.*]], 63
+ ; CHECK-NEXT:    [[TMP1:%.*]] = or disjoint i8 [[X]], 64
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i8 [[TMP1]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i8 [[TMP1]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %x = and i8 %x_in, 63
+@@ -315,7 +315,7 @@ define half @test_si_si_i8_mul_fail_maybe_zero(i8 noundef %x_in, i8 noundef %y_i
+ ; CHECK-LABEL: @test_si_si_i8_mul_fail_maybe_zero(
+ ; CHECK-NEXT:    [[X:%.*]] = and i8 [[X_IN:%.*]], 7
+ ; CHECK-NEXT:    [[Y:%.*]] = or i8 [[Y_IN:%.*]], -8
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i8 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i8 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i8 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -332,7 +332,7 @@ define half @test_si_si_i8_mul_C_fail_no_repr(i8 noundef %x_in) {
+ ; CHECK-LABEL: @test_si_si_i8_mul_C_fail_no_repr(
+ ; CHECK-NEXT:    [[XX:%.*]] = and i8 [[X_IN:%.*]], 6
+ ; CHECK-NEXT:    [[X:%.*]] = or disjoint i8 [[XX]], 1
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i8 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i8 [[X]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], 0xHC780
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+@@ -347,7 +347,7 @@ define half @test_si_si_i8_mul_C_fail_overflow(i8 noundef %x_in) {
+ ; CHECK-LABEL: @test_si_si_i8_mul_C_fail_overflow(
+ ; CHECK-NEXT:    [[XX:%.*]] = and i8 [[X_IN:%.*]], 6
+ ; CHECK-NEXT:    [[X:%.*]] = or disjoint i8 [[XX]], 1
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i8 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i8 [[X]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], 0xHCCC0
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+@@ -401,7 +401,7 @@ define half @test_ui_si_i8_mul_fail_signed(i8 noundef %x_in, i8 noundef %y_in) {
+ ; CHECK-NEXT:    [[XX:%.*]] = and i8 [[X_IN:%.*]], 7
+ ; CHECK-NEXT:    [[X:%.*]] = add nuw nsw i8 [[XX]], 1
+ ; CHECK-NEXT:    [[Y:%.*]] = or i8 [[Y_IN:%.*]], -4
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i8 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i8 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = uitofp i8 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -541,7 +541,7 @@ define half @test_si_si_i16_sub_fail_no_promotion(i16 noundef %x_in, i16 noundef
+ ; CHECK-LABEL: @test_si_si_i16_sub_fail_no_promotion(
+ ; CHECK-NEXT:    [[X:%.*]] = and i16 [[X_IN:%.*]], 2047
+ ; CHECK-NEXT:    [[Y:%.*]] = or i16 [[Y_IN:%.*]], -2049
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i16 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i16 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i16 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fsub half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -575,7 +575,7 @@ define half @test_ui_si_i16_sub_fail_maybe_signed(i16 noundef %x_in, i16 noundef
+ ; CHECK-NEXT:    [[X:%.*]] = or i16 [[X_IN:%.*]], -2048
+ ; CHECK-NEXT:    [[Y:%.*]] = and i16 [[Y_IN:%.*]], 2047
+ ; CHECK-NEXT:    [[XF:%.*]] = uitofp i16 [[X]] to half
+-; CHECK-NEXT:    [[YF:%.*]] = uitofp i16 [[Y]] to half
++; CHECK-NEXT:    [[YF:%.*]] = sitofp i16 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fsub half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+@@ -643,7 +643,7 @@ define half @test_si_si_i16_mul_fail_overflow(i16 noundef %x_in, i16 noundef %y_
+ ; CHECK-NEXT:    [[XX:%.*]] = and i16 [[X_IN:%.*]], 126
+ ; CHECK-NEXT:    [[X:%.*]] = or disjoint i16 [[XX]], 1
+ ; CHECK-NEXT:    [[Y:%.*]] = or i16 [[Y_IN:%.*]], -257
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i16 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i16 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i16 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -821,7 +821,7 @@ define half @test_si_si_i12_sub(i12 noundef %x_in, i12 noundef %y_in) {
+ ; CHECK-NEXT:    [[X:%.*]] = and i12 [[X_IN:%.*]], 1023
+ ; CHECK-NEXT:    [[Y:%.*]] = or i12 [[Y_IN:%.*]], -1024
+ ; CHECK-NEXT:    [[TMP1:%.*]] = sub nsw i12 [[X]], [[Y]]
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i12 [[TMP1]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i12 [[TMP1]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %x = and i12 %x_in, 1023
+@@ -915,7 +915,7 @@ define half @test_si_si_i12_mul_fail_overflow(i12 noundef %x_in, i12 noundef %y_
+ ; CHECK-NEXT:    [[XX:%.*]] = and i12 [[X_IN:%.*]], 30
+ ; CHECK-NEXT:    [[X:%.*]] = or disjoint i12 [[XX]], 1
+ ; CHECK-NEXT:    [[Y:%.*]] = or i12 [[Y_IN:%.*]], -128
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i12 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i12 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i12 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -933,7 +933,7 @@ define half @test_si_si_i12_mul_fail_maybe_non_zero(i12 noundef %x_in, i12 nound
+ ; CHECK-LABEL: @test_si_si_i12_mul_fail_maybe_non_zero(
+ ; CHECK-NEXT:    [[X:%.*]] = and i12 [[X_IN:%.*]], 30
+ ; CHECK-NEXT:    [[Y:%.*]] = or i12 [[Y_IN:%.*]], -128
+-; CHECK-NEXT:    [[XF:%.*]] = uitofp i12 [[X]] to half
++; CHECK-NEXT:    [[XF:%.*]] = sitofp i12 [[X]] to half
+ ; CHECK-NEXT:    [[YF:%.*]] = sitofp i12 [[Y]] to half
+ ; CHECK-NEXT:    [[R:%.*]] = fmul half [[XF]], [[YF]]
+ ; CHECK-NEXT:    ret half [[R]]
+@@ -950,7 +950,7 @@ define half @test_si_si_i12_mul_C(i12 noundef %x_in) {
+ ; CHECK-LABEL: @test_si_si_i12_mul_C(
+ ; CHECK-NEXT:    [[X:%.*]] = or i12 [[X_IN:%.*]], -64
+ ; CHECK-NEXT:    [[TMP1:%.*]] = mul nsw i12 [[X]], -16
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i12 [[TMP1]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i12 [[TMP1]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %x = or i12 %x_in, -64
+diff --git a/llvm/test/Transforms/InstCombine/clamp-to-minmax.ll b/llvm/test/Transforms/InstCombine/clamp-to-minmax.ll
+index 3f3939ea73bd..9da9eb36d381 100644
+--- a/llvm/test/Transforms/InstCombine/clamp-to-minmax.ll
++++ b/llvm/test/Transforms/InstCombine/clamp-to-minmax.ll
+@@ -504,7 +504,7 @@ define float @mixed_clamp_to_float_1(i32 %x) {
+ ; CHECK-LABEL: @mixed_clamp_to_float_1(
+ ; CHECK-NEXT:    [[SI_MIN:%.*]] = call i32 @llvm.smin.i32(i32 [[X:%.*]], i32 255)
+ ; CHECK-NEXT:    [[R1:%.*]] = call i32 @llvm.smax.i32(i32 [[SI_MIN]], i32 1)
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[R1]] to float
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[R1]] to float
+ ; CHECK-NEXT:    ret float [[R]]
+ ;
+   %si_min_cmp = icmp sgt i32 %x, 255
+@@ -539,7 +539,7 @@ define float @mixed_clamp_to_float_2(i32 %x) {
+ ; CHECK-LABEL: @mixed_clamp_to_float_2(
+ ; CHECK-NEXT:    [[SI_MIN:%.*]] = call i32 @llvm.smin.i32(i32 [[X:%.*]], i32 255)
+ ; CHECK-NEXT:    [[R1:%.*]] = call i32 @llvm.smax.i32(i32 [[SI_MIN]], i32 1)
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[R1]] to float
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[R1]] to float
+ ; CHECK-NEXT:    ret float [[R]]
+ ;
+   %si_min_cmp = icmp sgt i32 %x, 255
+@@ -572,7 +572,7 @@ define <2 x float> @mixed_clamp_to_float_vec(<2 x i32> %x) {
+ ; CHECK-LABEL: @mixed_clamp_to_float_vec(
+ ; CHECK-NEXT:    [[SI_MIN:%.*]] = call <2 x i32> @llvm.smin.v2i32(<2 x i32> [[X:%.*]], <2 x i32> <i32 255, i32 255>)
+ ; CHECK-NEXT:    [[R1:%.*]] = call <2 x i32> @llvm.smax.v2i32(<2 x i32> [[SI_MIN]], <2 x i32> <i32 1, i32 1>)
+-; CHECK-NEXT:    [[R:%.*]] = uitofp <2 x i32> [[R1]] to <2 x float>
++; CHECK-NEXT:    [[R:%.*]] = sitofp <2 x i32> [[R1]] to <2 x float>
+ ; CHECK-NEXT:    ret <2 x float> [[R]]
+ ;
+   %si_min_cmp = icmp sgt <2 x i32> %x, <i32 255, i32 255>
+diff --git a/llvm/test/Transforms/InstCombine/fpcast.ll b/llvm/test/Transforms/InstCombine/fpcast.ll
+index 1f0bfbc40ac1..32bfdb52bb5f 100644
+--- a/llvm/test/Transforms/InstCombine/fpcast.ll
++++ b/llvm/test/Transforms/InstCombine/fpcast.ll
+@@ -170,7 +170,7 @@ define half @sint_to_fptrunc(i32 %x) {
+ define half @masked_sint_to_fptrunc1(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fptrunc1(
+ ; CHECK-NEXT:    [[M:%.*]] = and i32 [[X:%.*]], 16777215
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[M]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[M]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %m = and i32 %x, 16777215
+@@ -182,7 +182,7 @@ define half @masked_sint_to_fptrunc1(i32 %x) {
+ define half @masked_sint_to_fptrunc2(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fptrunc2(
+ ; CHECK-NEXT:    [[M:%.*]] = lshr i32 [[X:%.*]], 8
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[M]] to half
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[M]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+   %m = lshr i32 %x, 8
+@@ -194,7 +194,7 @@ define half @masked_sint_to_fptrunc2(i32 %x) {
+ define half @masked_sint_to_fptrunc3(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fptrunc3(
+ ; CHECK-NEXT:    [[M:%.*]] = lshr i32 [[X:%.*]], 7
+-; CHECK-NEXT:    [[F:%.*]] = uitofp i32 [[M]] to float
++; CHECK-NEXT:    [[F:%.*]] = sitofp i32 [[M]] to float
+ ; CHECK-NEXT:    [[R:%.*]] = fptrunc float [[F]] to half
+ ; CHECK-NEXT:    ret half [[R]]
+ ;
+@@ -218,7 +218,7 @@ define double @sint_to_fpext(i32 %x) {
+ define double @masked_sint_to_fpext1(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fpext1(
+ ; CHECK-NEXT:    [[M:%.*]] = and i32 [[X:%.*]], 16777215
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[M]] to double
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[M]] to double
+ ; CHECK-NEXT:    ret double [[R]]
+ ;
+   %m = and i32 %x, 16777215
+@@ -230,7 +230,7 @@ define double @masked_sint_to_fpext1(i32 %x) {
+ define double @masked_sint_to_fpext2(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fpext2(
+ ; CHECK-NEXT:    [[M:%.*]] = lshr i32 [[X:%.*]], 8
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[M]] to double
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[M]] to double
+ ; CHECK-NEXT:    ret double [[R]]
+ ;
+   %m = lshr i32 %x, 8
+@@ -242,7 +242,7 @@ define double @masked_sint_to_fpext2(i32 %x) {
+ define double @masked_sint_to_fpext3(i32 %x) {
+ ; CHECK-LABEL: @masked_sint_to_fpext3(
+ ; CHECK-NEXT:    [[M:%.*]] = lshr i32 [[X:%.*]], 7
+-; CHECK-NEXT:    [[F:%.*]] = uitofp i32 [[M]] to float
++; CHECK-NEXT:    [[F:%.*]] = sitofp i32 [[M]] to float
+ ; CHECK-NEXT:    [[R:%.*]] = fpext float [[F]] to double
+ ; CHECK-NEXT:    ret double [[R]]
+ ;
+diff --git a/llvm/test/Transforms/InstCombine/minmax-fold.ll b/llvm/test/Transforms/InstCombine/minmax-fold.ll
+index fff4bc5943da..8391fe33eb9b 100644
+--- a/llvm/test/Transforms/InstCombine/minmax-fold.ll
++++ b/llvm/test/Transforms/InstCombine/minmax-fold.ll
+@@ -131,7 +131,7 @@ define i64 @t9(i32 %a) {
+ define float @t10(i32 %x) {
+ ; CHECK-LABEL: @t10(
+ ; CHECK-NEXT:    [[R1:%.*]] = call i32 @llvm.smax.i32(i32 [[X:%.*]], i32 255)
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i32 [[R1]] to float
++; CHECK-NEXT:    [[R:%.*]] = sitofp i32 [[R1]] to float
+ ; CHECK-NEXT:    ret float [[R]]
+ ;
+   %f_x = sitofp i32 %x to float
+@@ -143,7 +143,7 @@ define float @t10(i32 %x) {
+ define float @t11(i64 %x) {
+ ; CHECK-LABEL: @t11(
+ ; CHECK-NEXT:    [[R1:%.*]] = call i64 @llvm.smax.i64(i64 [[X:%.*]], i64 255)
+-; CHECK-NEXT:    [[R:%.*]] = uitofp i64 [[R1]] to float
++; CHECK-NEXT:    [[R:%.*]] = sitofp i64 [[R1]] to float
+ ; CHECK-NEXT:    ret float [[R]]
+ ;
+   %f_x = sitofp i64 %x to float
+@@ -526,7 +526,7 @@ falselabel:
+ define double @PR31751_umin1(i32 %x) {
+ ; CHECK-LABEL: @PR31751_umin1(
+ ; CHECK-NEXT:    [[SEL:%.*]] = call i32 @llvm.umin.i32(i32 [[X:%.*]], i32 2147483647)
+-; CHECK-NEXT:    [[CONV:%.*]] = uitofp i32 [[SEL]] to double
++; CHECK-NEXT:    [[CONV:%.*]] = sitofp i32 [[SEL]] to double
+ ; CHECK-NEXT:    ret double [[CONV]]
+ ;
+   %cmp = icmp slt i32 %x, 0
+@@ -538,7 +538,7 @@ define double @PR31751_umin1(i32 %x) {
+ define double @PR31751_umin2(i32 %x) {
+ ; CHECK-LABEL: @PR31751_umin2(
+ ; CHECK-NEXT:    [[SEL:%.*]] = call i32 @llvm.umin.i32(i32 [[X:%.*]], i32 2147483647)
+-; CHECK-NEXT:    [[CONV:%.*]] = uitofp i32 [[SEL]] to double
++; CHECK-NEXT:    [[CONV:%.*]] = sitofp i32 [[SEL]] to double
+ ; CHECK-NEXT:    ret double [[CONV]]
+ ;
+   %cmp = icmp ult i32 %x, 2147483647
+@@ -550,7 +550,7 @@ define double @PR31751_umin2(i32 %x) {
+ define double @PR31751_umin3(i32 %x) {
+ ; CHECK-LABEL: @PR31751_umin3(
+ ; CHECK-NEXT:    [[SEL:%.*]] = call i32 @llvm.umin.i32(i32 [[X:%.*]], i32 2147483647)
+-; CHECK-NEXT:    [[CONV:%.*]] = uitofp i32 [[SEL]] to double
++; CHECK-NEXT:    [[CONV:%.*]] = sitofp i32 [[SEL]] to double
+ ; CHECK-NEXT:    ret double [[CONV]]
+ ;
+   %cmp = icmp ugt i32 %x, 2147483647
+diff --git a/llvm/test/Transforms/InstCombine/minmax-fp.ll b/llvm/test/Transforms/InstCombine/minmax-fp.ll
+index 728950ddb40c..f89e8a18e634 100644
+--- a/llvm/test/Transforms/InstCombine/minmax-fp.ll
++++ b/llvm/test/Transforms/InstCombine/minmax-fp.ll
+@@ -257,7 +257,7 @@ define double @t16(i32 %x) {
+ define double @t17(i32 %x) {
+ ; CHECK-LABEL: @t17(
+ ; CHECK-NEXT:    [[SEL1:%.*]] = call i32 @llvm.smax.i32(i32 [[X:%.*]], i32 2)
+-; CHECK-NEXT:    [[SEL:%.*]] = uitofp i32 [[SEL1]] to double
++; CHECK-NEXT:    [[SEL:%.*]] = sitofp i32 [[SEL1]] to double
+ ; CHECK-NEXT:    ret double [[SEL]]
+ ;
+   %cmp = icmp sgt i32 %x, 2
+diff --git a/llvm/test/Transforms/InstCombine/pr27236.ll b/llvm/test/Transforms/InstCombine/pr27236.ll
+index 7aad0a90281a..61ea344b1bdb 100644
+--- a/llvm/test/Transforms/InstCombine/pr27236.ll
++++ b/llvm/test/Transforms/InstCombine/pr27236.ll
+@@ -4,7 +4,7 @@
+ define float @test1(i32 %scale) {
+ ; CHECK-LABEL: @test1(
+ ; CHECK-NEXT:    [[TMP1:%.*]] = call i32 @llvm.smax.i32(i32 [[SCALE:%.*]], i32 1)
+-; CHECK-NEXT:    [[TMP2:%.*]] = uitofp i32 [[TMP1]] to float
++; CHECK-NEXT:    [[TMP2:%.*]] = sitofp i32 [[TMP1]] to float
+ ; CHECK-NEXT:    ret float [[TMP2]]
+ ;
+   %1 = icmp sgt i32 1, %scale
+diff --git a/llvm/test/Transforms/LoopVectorize/X86/float-induction-x86.ll b/llvm/test/Transforms/LoopVectorize/X86/float-induction-x86.ll
+index c81ca46039f8..c55e732c9014 100644
+--- a/llvm/test/Transforms/LoopVectorize/X86/float-induction-x86.ll
++++ b/llvm/test/Transforms/LoopVectorize/X86/float-induction-x86.ll
+@@ -25,7 +25,7 @@ define void @fp_iv_loop1(ptr noalias nocapture %A, i32 %N) #0 {
+ ; AUTO_VEC-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; AUTO_VEC:       vector.ph:
+ ; AUTO_VEC-NEXT:    [[N_VEC:%.*]] = and i64 [[ZEXT]], 2147483616
+-; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; AUTO_VEC-NEXT:    [[TMP0:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; AUTO_VEC-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP0]], 1.000000e+00
+ ; AUTO_VEC-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -201,7 +201,7 @@ define double @external_use_with_fast_math(ptr %a, i64 %n) {
+ ; AUTO_VEC-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; AUTO_VEC:       vector.ph:
+ ; AUTO_VEC-NEXT:    [[N_VEC:%.*]] = and i64 [[SMAX]], 9223372036854775792
+-; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to double
++; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to double
+ ; AUTO_VEC-NEXT:    [[TMP0:%.*]] = fmul fast double [[DOTCAST]], 3.000000e+00
+ ; AUTO_VEC-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; AUTO_VEC:       vector.body:
+@@ -366,7 +366,7 @@ define void @fadd_reassoc_FMF(ptr nocapture %p, i32 %N) {
+ ; AUTO_VEC-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; AUTO_VEC:       vector.ph:
+ ; AUTO_VEC-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 4294967264
+-; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; AUTO_VEC-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; AUTO_VEC-NEXT:    [[TMP1:%.*]] = fmul reassoc float [[DOTCAST]], 4.200000e+01
+ ; AUTO_VEC-NEXT:    [[IND_END:%.*]] = fadd reassoc float [[TMP1]], 1.000000e+00
+ ; AUTO_VEC-NEXT:    br label [[VECTOR_BODY:%.*]]
+diff --git a/llvm/test/Transforms/LoopVectorize/float-induction.ll b/llvm/test/Transforms/LoopVectorize/float-induction.ll
+index 4dba183a44b9..caea114e3d44 100644
+--- a/llvm/test/Transforms/LoopVectorize/float-induction.ll
++++ b/llvm/test/Transforms/LoopVectorize/float-induction.ll
+@@ -29,7 +29,7 @@ define void @fp_iv_loop1_fast_FMF(float %init, ptr noalias nocapture %A, i32 %N)
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483644
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP1:%.*]] = fmul fast float [[FPINC]], [[DOTCAST]]
+ ; VEC4_INTERL1-NEXT:    [[IND_END:%.*]] = fsub fast float [[INIT:%.*]], [[TMP1]]
+ ; VEC4_INTERL1-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -84,7 +84,7 @@ define void @fp_iv_loop1_fast_FMF(float %init, ptr noalias nocapture %A, i32 %N)
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483640
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[FPINC]], [[DOTCAST]]
+ ; VEC4_INTERL2-NEXT:    [[IND_END:%.*]] = fsub fast float [[INIT:%.*]], [[TMP1]]
+ ; VEC4_INTERL2-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -142,7 +142,7 @@ define void @fp_iv_loop1_fast_FMF(float %init, ptr noalias nocapture %A, i32 %N)
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[FPINC]], [[DOTCAST]]
+ ; VEC1_INTERL2-NEXT:    [[IND_END:%.*]] = fsub fast float [[INIT:%.*]], [[TMP1]]
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -193,7 +193,7 @@ define void @fp_iv_loop1_fast_FMF(float %init, ptr noalias nocapture %A, i32 %N)
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP1:%.*]] = fmul fast float [[FPINC]], [[DOTCAST]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END:%.*]] = fsub fast float [[INIT:%.*]], [[TMP1]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <2 x float> poison, float [[INIT]], i64 0
+@@ -276,7 +276,7 @@ define void @fp_iv_loop1_reassoc_FMF(float %init, ptr noalias nocapture %A, i32
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483644
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP1:%.*]] = fmul reassoc float [[FPINC]], [[DOTCAST]]
+ ; VEC4_INTERL1-NEXT:    [[IND_END:%.*]] = fsub reassoc float [[INIT:%.*]], [[TMP1]]
+ ; VEC4_INTERL1-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -331,7 +331,7 @@ define void @fp_iv_loop1_reassoc_FMF(float %init, ptr noalias nocapture %A, i32
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483640
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP1:%.*]] = fmul reassoc float [[FPINC]], [[DOTCAST]]
+ ; VEC4_INTERL2-NEXT:    [[IND_END:%.*]] = fsub reassoc float [[INIT:%.*]], [[TMP1]]
+ ; VEC4_INTERL2-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -389,7 +389,7 @@ define void @fp_iv_loop1_reassoc_FMF(float %init, ptr noalias nocapture %A, i32
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP1:%.*]] = fmul reassoc float [[FPINC]], [[DOTCAST]]
+ ; VEC1_INTERL2-NEXT:    [[IND_END:%.*]] = fsub reassoc float [[INIT:%.*]], [[TMP1]]
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -442,7 +442,7 @@ define void @fp_iv_loop1_reassoc_FMF(float %init, ptr noalias nocapture %A, i32
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP1:%.*]] = fmul reassoc float [[FPINC]], [[DOTCAST]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END:%.*]] = fsub reassoc float [[INIT:%.*]], [[TMP1]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <2 x float> poison, float [[INIT]], i64 0
+@@ -526,7 +526,7 @@ define void @fp_iv_loop2(float %init, ptr noalias nocapture %A, i32 %N) #0 {
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483644
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC4_INTERL1-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], [[INIT:%.*]]
+ ; VEC4_INTERL1-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -574,7 +574,7 @@ define void @fp_iv_loop2(float %init, ptr noalias nocapture %A, i32 %N) #0 {
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483640
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC4_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], [[INIT:%.*]]
+ ; VEC4_INTERL2-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -625,7 +625,7 @@ define void @fp_iv_loop2(float %init, ptr noalias nocapture %A, i32 %N) #0 {
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC1_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], [[INIT:%.*]]
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -675,7 +675,7 @@ define void @fp_iv_loop2(float %init, ptr noalias nocapture %A, i32 %N) #0 {
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], [[INIT:%.*]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <2 x float> poison, float [[INIT]], i64 0
+@@ -758,10 +758,10 @@ define void @fp_iv_loop3(float %init, ptr noalias nocapture %A, ptr noalias noca
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP1]], 2147483644
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP2:%.*]] = fmul fast float [[DOTCAST]], -5.000000e-01
+ ; VEC4_INTERL1-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP2]], 0x3FB99999A0000000
+-; VEC4_INTERL1-NEXT:    [[DOTCAST2:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST2:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP3:%.*]] = fmul fast float [[TMP0]], [[DOTCAST2]]
+ ; VEC4_INTERL1-NEXT:    [[IND_END3:%.*]] = fadd fast float [[TMP3]], [[INIT:%.*]]
+ ; VEC4_INTERL1-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -835,10 +835,10 @@ define void @fp_iv_loop3(float %init, ptr noalias nocapture %A, ptr noalias noca
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP1]], 2147483640
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP2:%.*]] = fmul fast float [[DOTCAST]], -5.000000e-01
+ ; VEC4_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP2]], 0x3FB99999A0000000
+-; VEC4_INTERL2-NEXT:    [[DOTCAST2:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST2:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP3:%.*]] = fmul fast float [[TMP0]], [[DOTCAST2]]
+ ; VEC4_INTERL2-NEXT:    [[IND_END3:%.*]] = fadd fast float [[TMP3]], [[INIT:%.*]]
+ ; VEC4_INTERL2-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <4 x float> poison, float [[INIT]], i64 0
+@@ -922,10 +922,10 @@ define void @fp_iv_loop3(float %init, ptr noalias nocapture %A, ptr noalias noca
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP1]], 2147483646
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP2:%.*]] = fmul fast float [[DOTCAST]], -5.000000e-01
+ ; VEC1_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP2]], 0x3FB99999A0000000
+-; VEC1_INTERL2-NEXT:    [[DOTCAST2:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST2:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP3:%.*]] = fmul fast float [[TMP0]], [[DOTCAST2]]
+ ; VEC1_INTERL2-NEXT:    [[IND_END3:%.*]] = fadd fast float [[TMP3]], [[INIT:%.*]]
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -1000,10 +1000,10 @@ define void @fp_iv_loop3(float %init, ptr noalias nocapture %A, ptr noalias noca
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP1]], 2147483646
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP2:%.*]] = fmul fast float [[DOTCAST]], -5.000000e-01
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP2]], 0x3FB99999A0000000
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST2:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST2:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP3:%.*]] = fmul fast float [[TMP0]], [[DOTCAST2]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END3:%.*]] = fadd fast float [[TMP3]], [[INIT:%.*]]
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTSPLATINSERT:%.*]] = insertelement <2 x float> poison, float [[INIT]], i64 0
+@@ -1113,7 +1113,7 @@ define void @fp_iv_loop4(ptr noalias nocapture %A, i32 %N) {
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483644
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC4_INTERL1-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], 1.000000e+00
+ ; VEC4_INTERL1-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -1158,7 +1158,7 @@ define void @fp_iv_loop4(ptr noalias nocapture %A, i32 %N) {
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483640
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC4_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], 1.000000e+00
+ ; VEC4_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -1206,7 +1206,7 @@ define void @fp_iv_loop4(ptr noalias nocapture %A, i32 %N) {
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC1_INTERL2-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], 1.000000e+00
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -1256,7 +1256,7 @@ define void @fp_iv_loop4(ptr noalias nocapture %A, i32 %N) {
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[TMP0]], 2147483646
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[TMP1:%.*]] = fmul fast float [[DOTCAST]], 5.000000e-01
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[IND_END:%.*]] = fadd fast float [[TMP1]], 1.000000e+00
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br label [[VECTOR_BODY:%.*]]
+@@ -1319,7 +1319,7 @@ define void @non_primary_iv_float_scalar(ptr %A, i64 %N) {
+ ; VEC4_INTERL1-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL1:       vector.ph:
+ ; VEC4_INTERL1-NEXT:    [[N_VEC:%.*]] = and i64 [[SMAX]], 9223372036854775804
+-; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL1-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL1-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; VEC4_INTERL1:       vector.body:
+ ; VEC4_INTERL1-NEXT:    [[INDEX:%.*]] = phi i64 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[PRED_STORE_CONTINUE8:%.*]] ]
+@@ -1396,7 +1396,7 @@ define void @non_primary_iv_float_scalar(ptr %A, i64 %N) {
+ ; VEC4_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC4_INTERL2:       vector.ph:
+ ; VEC4_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[SMAX]], 9223372036854775800
+-; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC4_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC4_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; VEC4_INTERL2:       vector.body:
+ ; VEC4_INTERL2-NEXT:    [[INDEX:%.*]] = phi i64 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[PRED_STORE_CONTINUE17:%.*]] ]
+@@ -1512,7 +1512,7 @@ define void @non_primary_iv_float_scalar(ptr %A, i64 %N) {
+ ; VEC1_INTERL2-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[SCALAR_PH:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC1_INTERL2:       vector.ph:
+ ; VEC1_INTERL2-NEXT:    [[N_VEC:%.*]] = and i64 [[SMAX]], 9223372036854775806
+-; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC1_INTERL2-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC1_INTERL2-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; VEC1_INTERL2:       vector.body:
+ ; VEC1_INTERL2-NEXT:    [[INDEX:%.*]] = phi i64 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[PRED_STORE_CONTINUE4:%.*]] ]
+@@ -1570,7 +1570,7 @@ define void @non_primary_iv_float_scalar(ptr %A, i64 %N) {
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br i1 [[MIN_ITERS_CHECK]], label [[FOR_BODY:%.*]], label [[VECTOR_PH:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.ph:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[N_VEC:%.*]] = and i64 [[SMAX]], 9223372036854775806
+-; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = uitofp i64 [[N_VEC]] to float
++; VEC2_INTERL1_PRED_STORE-NEXT:    [[DOTCAST:%.*]] = sitofp i64 [[N_VEC]] to float
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    br label [[VECTOR_BODY:%.*]]
+ ; VEC2_INTERL1_PRED_STORE:       vector.body:
+ ; VEC2_INTERL1_PRED_STORE-NEXT:    [[INDEX:%.*]] = phi i64 [ 0, [[VECTOR_PH]] ], [ [[INDEX_NEXT:%.*]], [[PRED_STORE_CONTINUE4:%.*]] ]
+-- 
+2.45.1.288.g0e0cd299f1-goog
+
