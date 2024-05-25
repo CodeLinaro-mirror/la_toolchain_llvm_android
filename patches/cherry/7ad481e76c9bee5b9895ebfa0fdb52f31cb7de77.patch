@@ -1,0 +1,108 @@
+From 7ad481e76c9bee5b9895ebfa0fdb52f31cb7de77 Mon Sep 17 00:00:00 2001
+From: Eli Friedman <efriedma@quicinc.com>
+Date: Mon, 8 Apr 2024 15:16:00 -0700
+Subject: [PATCH] Revert "[AArch64] Add support for -ffixed-x30" (#88019)
+
+This reverts commit e770153865c53c4fd72a68f23acff33c24e42a08.
+
+This wasn't reviewed, and the functionality in question was
+intentionally rejected the last time it was discussed in
+https://reviews.llvm.org/D56305 .
+---
+ clang/lib/Driver/ToolChains/Arch/AArch64.cpp    | 3 ---
+ clang/test/Driver/aarch64-fixed-x-register.c    | 4 ----
+ llvm/lib/Target/AArch64/AArch64.td              | 2 +-
+ llvm/test/CodeGen/AArch64/arm64-platform-reg.ll | 7 +------
+ 4 files changed, 2 insertions(+), 14 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Arch/AArch64.cpp b/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
+index 3e6e29584df3..2cd2b35ee51b 100644
+--- a/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/AArch64.cpp
+@@ -402,9 +402,6 @@ void aarch64::getAArch64TargetFeatures(const Driver &D,
+   if (Args.hasArg(options::OPT_ffixed_x28))
+     Features.push_back("+reserve-x28");
+ 
+-  if (Args.hasArg(options::OPT_ffixed_x30))
+-    Features.push_back("+reserve-x30");
+-
+   if (Args.hasArg(options::OPT_fcall_saved_x8))
+     Features.push_back("+call-saved-x8");
+ 
+diff --git a/clang/test/Driver/aarch64-fixed-x-register.c b/clang/test/Driver/aarch64-fixed-x-register.c
+index 29024fde4125..7fc3e3e61105 100644
+--- a/clang/test/Driver/aarch64-fixed-x-register.c
++++ b/clang/test/Driver/aarch64-fixed-x-register.c
+@@ -94,10 +94,6 @@
+ // RUN: FileCheck --check-prefix=CHECK-FIXED-X28 < %t %s
+ // CHECK-FIXED-X28: "-target-feature" "+reserve-x28"
+ 
+-// RUN: %clang --target=aarch64-none-gnu -ffixed-x30 -### %s 2> %t
+-// RUN: FileCheck --check-prefix=CHECK-FIXED-X30 < %t %s
+-// CHECK-FIXED-X30: "-target-feature" "+reserve-x30"
+-
+ // Test multiple of reserve-x# options together.
+ // RUN: %clang --target=aarch64-none-gnu \
+ // RUN: -ffixed-x1 \
+diff --git a/llvm/lib/Target/AArch64/AArch64.td b/llvm/lib/Target/AArch64/AArch64.td
+index 3af427d526f8..741c97a3dc00 100644
+--- a/llvm/lib/Target/AArch64/AArch64.td
++++ b/llvm/lib/Target/AArch64/AArch64.td
+@@ -212,7 +212,7 @@ def FeatureStrictAlign : SubtargetFeature<"strict-align",
+                                           "Disallow all unaligned memory "
+                                           "access">;
+ 
+-foreach i = {1-7,9-15,18,20-28,30} in
++foreach i = {1-7,9-15,18,20-28} in
+     def FeatureReserveX#i : SubtargetFeature<"reserve-x"#i, "ReserveXRegister["#i#"]", "true",
+                                              "Reserve X"#i#", making it unavailable "
+                                              "as a GPR">;
+diff --git a/llvm/test/CodeGen/AArch64/arm64-platform-reg.ll b/llvm/test/CodeGen/AArch64/arm64-platform-reg.ll
+index c598306c2de3..3df2ef7aa59f 100644
+--- a/llvm/test/CodeGen/AArch64/arm64-platform-reg.ll
++++ b/llvm/test/CodeGen/AArch64/arm64-platform-reg.ll
+@@ -34,7 +34,6 @@
+ ; RUN: llc -mtriple=arm64-linux-gnu -mattr=+reserve-x26 -o - %s | FileCheck %s --check-prefixes=CHECK-RESERVE,CHECK-RESERVE-X26
+ ; RUN: llc -mtriple=arm64-linux-gnu -mattr=+reserve-x27 -o - %s | FileCheck %s --check-prefixes=CHECK-RESERVE,CHECK-RESERVE-X27
+ ; RUN: llc -mtriple=arm64-linux-gnu -mattr=+reserve-x28 -o - %s | FileCheck %s --check-prefixes=CHECK-RESERVE,CHECK-RESERVE-X28
+-; RUN: llc -mtriple=arm64-linux-gnu -mattr=+reserve-x30 -o - %s | FileCheck %s --check-prefixes=CHECK-RESERVE,CHECK-RESERVE-X30
+ 
+ ; Test multiple of reserve-x# options together.
+ ; RUN: llc -mtriple=arm64-linux-gnu \
+@@ -73,7 +72,6 @@
+ ; RUN: -mattr=+reserve-x26 \
+ ; RUN: -mattr=+reserve-x27 \
+ ; RUN: -mattr=+reserve-x28 \
+-; RUN: -mattr=+reserve-x30 \
+ ; RUN: -reserve-regs-for-regalloc=X8,X16,X17,X19 \
+ ; RUN: -o - %s | FileCheck %s \
+ ; RUN: --check-prefix=CHECK-RESERVE \
+@@ -104,8 +102,7 @@
+ ; RUN: --check-prefix=CHECK-RESERVE-X25 \
+ ; RUN: --check-prefix=CHECK-RESERVE-X26 \
+ ; RUN: --check-prefix=CHECK-RESERVE-X27 \
+-; RUN: --check-prefix=CHECK-RESERVE-X28 \
+-; RUN: --check-prefix=CHECK-RESERVE-X30
++; RUN: --check-prefix=CHECK-RESERVE-X28
+ 
+ ; x18 is reserved as a platform register on Darwin but not on other
+ ; systems. Create loads of register pressure and make sure this is respected.
+@@ -152,7 +149,6 @@ define void @keep_live() {
+ ; CHECK-RESERVE-X26-NOT: ldr x26
+ ; CHECK-RESERVE-X27-NOT: ldr x27
+ ; CHECK-RESERVE-X28-NOT: ldr x28
+-; CHECK-RESERVE-X30-NOT: ldr x30
+ ; CHECK-RESERVE: Spill
+ ; CHECK-RESERVE-NOT: ldr fp
+ ; CHECK-RESERVE-X1-NOT: ldr x1,
+@@ -182,7 +178,6 @@ define void @keep_live() {
+ ; CHECK-RESERVE-X26-NOT: ldr x26
+ ; CHECK-RESERVE-X27-NOT: ldr x27
+ ; CHECK-RESERVE-X28-NOT: ldr x28
+-; CHECK-RESERVE-X30-NOT: ldr x30
+ ; CHECK-RESERVE: ret
+   ret void
+ }
+-- 
+2.45.1.288.g0e0cd299f1-goog
+
