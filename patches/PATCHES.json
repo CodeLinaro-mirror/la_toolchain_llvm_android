@@ -1137,6 +1137,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang][CodeGen] Allow `memcpy` replace with trivial auto var init"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b433076fcbacba8a3b91446390bbea5843322bcd.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 530567
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[compiler-rt] Avoid generating coredumps when piped to a tool\" (#85390)"
         },
         "platforms": [
@@ -1226,9 +1240,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/b433076fcbacba8a3b91446390bbea5843322bcd.patch",
+        "rel_patch_path": "cherry/b433076fcbacba8a3b91446390bbea5843322bcd-v2.patch",
         "version_range": {
-            "from": 522817,
+            "from": 530567,
             "until": 531383
         }
     },
