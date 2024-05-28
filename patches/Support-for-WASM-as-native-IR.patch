@@ -63,11 +63,10 @@ Should leave original behavior unchanged.
 ---
  clang/lib/Basic/Targets/WebAssembly.h         |   3 +
  llvm/include/llvm/TargetParser/Triple.h       |   8 ++
- .../WebAssembly/WebAssemblyFastISel.cpp       |   3 +-
- .../WebAssembly/WebAssemblyISelLowering.cpp   | 109 ++++++++++++++----
+ .../WebAssembly/WebAssemblyISelLowering.cpp   | 106 ++++++++++++++----
  .../WebAssembly/WebAssemblyTargetMachine.cpp  |  12 +-
  llvm/lib/TargetParser/Triple.cpp              |   2 +
- 6 files changed, 107 insertions(+), 30 deletions(-)
+ 5 files changed, 103 insertions(+), 28 deletions(-)
 
 diff --git a/clang/lib/Basic/Targets/WebAssembly.h b/clang/lib/Basic/Targets/WebAssembly.h
 index 83b1711f9fdf..4ad7d000bc79 100644
@@ -109,34 +108,10 @@ index e73207021392..d18707cfd7a4 100644
    /// Tests whether the target is DXIL.
    bool isDXIL() const {
      return getArch() == Triple::dxil;
-diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
-index 1c62290704fe..cd3d9b0f7c19 100644
---- a/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
-+++ b/llvm/lib/Target/WebAssembly/WebAssemblyFastISel.cpp
-@@ -889,7 +889,8 @@ bool WebAssemblyFastISel::selectCall(const Instruction *I) {
-     // CALL_INDIRECT takes an i32, but in wasm64 we represent function pointers
-     // as 64-bit for uniformity with other pointer types.
-     // See also: WebAssemblyISelLowering.cpp: LowerCallResults
--    if (Subtarget->hasAddr64()) {
-+    if (!Subtarget->getTargetTriple().isNativeAndroid() &&
-+        Subtarget->hasAddr64()) {
-       auto Wrap = BuildMI(*FuncInfo.MBB, std::prev(FuncInfo.InsertPt), MIMD,
-                           TII.get(WebAssembly::I32_WRAP_I64));
-       Register Reg32 = createResultReg(&WebAssembly::I32RegClass);
 diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
 index 7c47790d1e35..baff53953d88 100644
 --- a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
 +++ b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
-@@ -580,7 +580,8 @@ LowerCallResults(MachineInstr &CallResults, DebugLoc DL, MachineBasicBlock *BB,
-   // CALL_INDIRECT takes an i32, but in wasm64 we represent function pointers
-   // as 64-bit for uniformity with other pointer types.
-   // See also: WebAssemblyFastISel::selectCall
--  if (IsIndirect && MF.getSubtarget<WebAssemblySubtarget>().hasAddr64()) {
-+  if (!Subtarget->getTargetTriple().isNativeAndroid() && IsIndirect &&
-+      MF.getSubtarget<WebAssemblySubtarget>().hasAddr64()) {
-     Register Reg32 =
-         MF.getRegInfo().createVirtualRegister(&WebAssembly::I32RegClass);
-     auto &FnPtr = CallParams.getOperand(0);
 @@ -1003,6 +1004,22 @@ static bool callingConvSupported(CallingConv::ID CallConv) {
           CallConv == CallingConv::Swift;
  }
