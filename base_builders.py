@@ -817,6 +817,8 @@ class LLVMBuilder(LLVMBaseBuilder):
             runtimes_passthrough_args = [
                     'CMAKE_POSITION_INDEPENDENT_CODE',
                     'LLVM_ENABLE_LIBCXX',
+                    'LIBCXXABI_USE_LLVM_UNWINDER',
+                    'LIBCXXABI_ENABLE_STATIC_UNWINDER',
             ]
 
             for _config in runtime_configs:
@@ -853,6 +855,11 @@ class LLVMBuilder(LLVMBaseBuilder):
                         defines[f'{base}_{triple}_LIBCXXABI_HAS_PTHREAD_LIB'] = 'NO'
 
                     for arg in runtimes_passthrough_args:
+                        if _config.is_musl and (
+                            arg == 'LIBCXXABI_USE_LLVM_UNWINDER'
+                            or arg == 'LIBCXXABI_ENABLE_STATIC_UNWINDER'
+                        ):
+                            continue
                         defines[f'{base}_{triple}_{arg}'] = defines[arg]
 
                     # Don't depend on the host libatomic library.
