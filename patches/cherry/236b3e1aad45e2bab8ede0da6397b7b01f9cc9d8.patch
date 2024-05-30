@@ -1,0 +1,699 @@
+From 8174f98a118def9cacd57f0c877d3ac61fefb98c Mon Sep 17 00:00:00 2001
+From: Owen Pan <owenpiano@gmail.com>
+Date: Mon, 6 May 2024 19:55:55 -0700
+Subject: [PATCH] [clang-format] Handle Java switch expressions (#91112)
+
+Also adds AllowShortCaseExpressionOnASingleLine option and
+AlignCaseArrows suboption of AlignConsecutiveShortCaseStatements.
+
+Fixes #55903.
+
+---
+ clang/docs/ClangFormatStyleOptions.rst        |  36 +++-
+ clang/docs/ReleaseNotes.rst                   |   3 +
+ clang/include/clang/Format/Format.h           |  36 +++-
+ clang/lib/Format/Format.cpp                   |   4 +
+ clang/lib/Format/FormatToken.h                |   3 +
+ clang/lib/Format/TokenAnnotator.cpp           |   2 +
+ clang/lib/Format/UnwrappedLineFormatter.cpp   |   6 +
+ clang/lib/Format/UnwrappedLineParser.cpp      |  46 ++++-
+ clang/lib/Format/UnwrappedLineParser.h        |   2 +-
+ clang/lib/Format/WhitespaceManager.cpp        |  22 ++-
+ clang/lib/Format/WhitespaceManager.h          |   2 +-
+ clang/unittests/Format/ConfigParseTest.cpp    |   2 +
+ clang/unittests/Format/FormatTestJava.cpp     | 171 ++++++++++++++++++
+ clang/unittests/Format/TokenAnnotatorTest.cpp |  18 ++
+ 14 files changed, 332 insertions(+), 21 deletions(-)
+
+diff --git a/clang/docs/ClangFormatStyleOptions.rst b/clang/docs/ClangFormatStyleOptions.rst
+index 5b00a8f4c00f..a7ca8169dcae 100644
+--- a/clang/docs/ClangFormatStyleOptions.rst
++++ b/clang/docs/ClangFormatStyleOptions.rst
+@@ -861,7 +861,8 @@ the configuration (without a prefix: ``Auto``).
+ 
+ **AlignConsecutiveShortCaseStatements** (``ShortCaseStatementsAlignmentStyle``) :versionbadge:`clang-format 17` :ref:`¶ <AlignConsecutiveShortCaseStatements>`
+   Style of aligning consecutive short case labels.
+-  Only applies if ``AllowShortCaseLabelsOnASingleLine`` is ``true``.
++  Only applies if ``AllowShortCaseExpressionOnASingleLine`` or
++  ``AllowShortCaseLabelsOnASingleLine`` is ``true``.
+ 
+ 
+   .. code-block:: yaml
+@@ -935,6 +936,24 @@ the configuration (without a prefix: ``Auto``).
+       default: return "";
+       }
+ 
++  * ``bool AlignCaseArrows`` Whether to align the case arrows when aligning short case expressions.
++
++    .. code-block:: java
++
++      true:
++      i = switch (day) {
++        case THURSDAY, SATURDAY -> 8;
++        case WEDNESDAY          -> 9;
++        default                 -> 0;
++      };
++
++      false:
++      i = switch (day) {
++        case THURSDAY, SATURDAY -> 8;
++        case WEDNESDAY ->          9;
++        default ->                 0;
++      };
++
+   * ``bool AlignCaseColons`` Whether aligned case labels are aligned on the colon, or on the
+     , or on the tokens after the colon.
+ 
+@@ -1547,6 +1566,21 @@ the configuration (without a prefix: ``Auto``).
+ 
+ 
+ 
++.. _AllowShortCaseExpressionOnASingleLine:
++
++**AllowShortCaseExpressionOnASingleLine** (``Boolean``) :versionbadge:`clang-format 19` :ref:`¶ <AllowShortCaseExpressionOnASingleLine>`
++  Whether to merge a short switch labeled rule into a single line.
++
++  .. code-block:: java
++
++    true:                               false:
++    switch (a) {           vs.          switch (a) {
++    case 1 -> 1;                        case 1 ->
++    default -> 0;                         1;
++    };                                  default ->
++                                          0;
++                                        };
++
+ .. _AllowShortCaseLabelsOnASingleLine:
+ 
+ **AllowShortCaseLabelsOnASingleLine** (``Boolean``) :versionbadge:`clang-format 3.6` :ref:`¶ <AllowShortCaseLabelsOnASingleLine>`
+diff --git a/clang/docs/ReleaseNotes.rst b/clang/docs/ReleaseNotes.rst
+index abeb5a8b77bf..c4b749bb9ce1 100644
+--- a/clang/docs/ReleaseNotes.rst
++++ b/clang/docs/ReleaseNotes.rst
+@@ -485,6 +485,9 @@ clang-format
+   ``BreakTemplateDeclarations``.
+ - ``AlwaysBreakAfterReturnType`` is deprecated and renamed to
+   ``BreakAfterReturnType``.
++- Handles Java ``switch`` expressions.
++- Adds ``AllowShortCaseExpressionOnASingleLine`` option.
++- Adds ``AlignCaseArrows`` suboption to ``AlignConsecutiveShortCaseStatements``.
+ 
+ libclang
+ --------
+diff --git a/clang/include/clang/Format/Format.h b/clang/include/clang/Format/Format.h
+index 590297fd89a3..2bf2717cd6b6 100644
+--- a/clang/include/clang/Format/Format.h
++++ b/clang/include/clang/Format/Format.h
+@@ -375,6 +375,23 @@ struct FormatStyle {
+     ///   }
+     /// \endcode
+     bool AcrossComments;
++    /// Whether to align the case arrows when aligning short case expressions.
++    /// \code{.java}
++    ///   true:
++    ///   i = switch (day) {
++    ///     case THURSDAY, SATURDAY -> 8;
++    ///     case WEDNESDAY          -> 9;
++    ///     default                 -> 0;
++    ///   };
++    ///
++    ///   false:
++    ///   i = switch (day) {
++    ///     case THURSDAY, SATURDAY -> 8;
++    ///     case WEDNESDAY ->          9;
++    ///     default ->                 0;
++    ///   };
++    /// \endcode
++    bool AlignCaseArrows;
+     /// Whether aligned case labels are aligned on the colon, or on the
+     /// , or on the tokens after the colon.
+     /// \code
+@@ -396,12 +413,14 @@ struct FormatStyle {
+     bool operator==(const ShortCaseStatementsAlignmentStyle &R) const {
+       return Enabled == R.Enabled && AcrossEmptyLines == R.AcrossEmptyLines &&
+              AcrossComments == R.AcrossComments &&
++             AlignCaseArrows == R.AlignCaseArrows &&
+              AlignCaseColons == R.AlignCaseColons;
+     }
+   };
+ 
+   /// Style of aligning consecutive short case labels.
+-  /// Only applies if ``AllowShortCaseLabelsOnASingleLine`` is ``true``.
++  /// Only applies if ``AllowShortCaseExpressionOnASingleLine`` or
++  /// ``AllowShortCaseLabelsOnASingleLine`` is ``true``.
+   ///
+   /// \code{.yaml}
+   ///   # Example of usage:
+@@ -709,6 +728,19 @@ struct FormatStyle {
+   /// \version 3.5
+   ShortBlockStyle AllowShortBlocksOnASingleLine;
+ 
++  /// Whether to merge a short switch labeled rule into a single line.
++  /// \code{.java}
++  ///   true:                               false:
++  ///   switch (a) {           vs.          switch (a) {
++  ///   case 1 -> 1;                        case 1 ->
++  ///   default -> 0;                         1;
++  ///   };                                  default ->
++  ///                                         0;
++  ///                                       };
++  /// \endcode
++  /// \version 19
++  bool AllowShortCaseExpressionOnASingleLine;
++
+   /// If ``true``, short case labels will be contracted to a single line.
+   /// \code
+   ///   true:                                   false:
+@@ -4838,6 +4870,8 @@ struct FormatStyle {
+            AllowBreakBeforeNoexceptSpecifier ==
+                R.AllowBreakBeforeNoexceptSpecifier &&
+            AllowShortBlocksOnASingleLine == R.AllowShortBlocksOnASingleLine &&
++           AllowShortCaseExpressionOnASingleLine ==
++               R.AllowShortCaseExpressionOnASingleLine &&
+            AllowShortCaseLabelsOnASingleLine ==
+                R.AllowShortCaseLabelsOnASingleLine &&
+            AllowShortCompoundRequirementOnASingleLine ==
+diff --git a/clang/lib/Format/Format.cpp b/clang/lib/Format/Format.cpp
+index e64ba7eebc1c..3b88d1e25b9f 100644
+--- a/clang/lib/Format/Format.cpp
++++ b/clang/lib/Format/Format.cpp
+@@ -128,6 +128,7 @@ struct MappingTraits<FormatStyle::ShortCaseStatementsAlignmentStyle> {
+     IO.mapOptional("Enabled", Value.Enabled);
+     IO.mapOptional("AcrossEmptyLines", Value.AcrossEmptyLines);
+     IO.mapOptional("AcrossComments", Value.AcrossComments);
++    IO.mapOptional("AlignCaseArrows", Value.AlignCaseArrows);
+     IO.mapOptional("AlignCaseColons", Value.AlignCaseColons);
+   }
+ };
+@@ -930,6 +931,8 @@ template <> struct MappingTraits<FormatStyle> {
+                    Style.AllowBreakBeforeNoexceptSpecifier);
+     IO.mapOptional("AllowShortBlocksOnASingleLine",
+                    Style.AllowShortBlocksOnASingleLine);
++    IO.mapOptional("AllowShortCaseExpressionOnASingleLine",
++                   Style.AllowShortCaseExpressionOnASingleLine);
+     IO.mapOptional("AllowShortCaseLabelsOnASingleLine",
+                    Style.AllowShortCaseLabelsOnASingleLine);
+     IO.mapOptional("AllowShortCompoundRequirementOnASingleLine",
+@@ -1435,6 +1438,7 @@ FormatStyle getLLVMStyle(FormatStyle::LanguageKind Language) {
+   LLVMStyle.AllowAllParametersOfDeclarationOnNextLine = true;
+   LLVMStyle.AllowBreakBeforeNoexceptSpecifier = FormatStyle::BBNSS_Never;
+   LLVMStyle.AllowShortBlocksOnASingleLine = FormatStyle::SBS_Never;
++  LLVMStyle.AllowShortCaseExpressionOnASingleLine = true;
+   LLVMStyle.AllowShortCaseLabelsOnASingleLine = false;
+   LLVMStyle.AllowShortCompoundRequirementOnASingleLine = true;
+   LLVMStyle.AllowShortEnumsOnASingleLine = true;
+diff --git a/clang/lib/Format/FormatToken.h b/clang/lib/Format/FormatToken.h
+index f4566e4a3351..3ec0c65f2b1b 100644
+--- a/clang/lib/Format/FormatToken.h
++++ b/clang/lib/Format/FormatToken.h
+@@ -38,6 +38,7 @@ namespace format {
+   TYPE(BitFieldColon)                                                          \
+   TYPE(BlockComment)                                                           \
+   TYPE(BracedListLBrace)                                                       \
++  TYPE(CaseLabelArrow)                                                         \
+   /* The colon at the end of a case label. */                                  \
+   TYPE(CaseLabelColon)                                                         \
+   TYPE(CastRParen)                                                             \
+@@ -148,6 +149,8 @@ namespace format {
+   TYPE(StructLBrace)                                                           \
+   TYPE(StructRBrace)                                                           \
+   TYPE(StructuredBindingLSquare)                                               \
++  TYPE(SwitchExpressionLabel)                                                  \
++  TYPE(SwitchExpressionLBrace)                                                 \
+   TYPE(TableGenBangOperator)                                                   \
+   TYPE(TableGenCondOperator)                                                   \
+   TYPE(TableGenCondOperatorColon)                                              \
+diff --git a/clang/lib/Format/TokenAnnotator.cpp b/clang/lib/Format/TokenAnnotator.cpp
+index d7b84e309e09..a3108cc259ac 100644
+--- a/clang/lib/Format/TokenAnnotator.cpp
++++ b/clang/lib/Format/TokenAnnotator.cpp
+@@ -4970,6 +4970,8 @@ bool TokenAnnotator::spaceRequiredBefore(const AnnotatedLine &Line,
+       return true; // "x! as string", "x! in y"
+     }
+   } else if (Style.Language == FormatStyle::LK_Java) {
++    if (Left.is(TT_CaseLabelArrow) || Right.is(TT_CaseLabelArrow))
++      return true;
+     if (Left.is(tok::r_square) && Right.is(tok::l_brace))
+       return true;
+     // spaces inside square brackets.
+diff --git a/clang/lib/Format/UnwrappedLineFormatter.cpp b/clang/lib/Format/UnwrappedLineFormatter.cpp
+index fb31980ab9f4..769dac1d9b7b 100644
+--- a/clang/lib/Format/UnwrappedLineFormatter.cpp
++++ b/clang/lib/Format/UnwrappedLineFormatter.cpp
+@@ -515,6 +515,12 @@ private:
+       }
+     }
+ 
++    if (TheLine->First->is(TT_SwitchExpressionLabel)) {
++      return Style.AllowShortCaseExpressionOnASingleLine
++                 ? tryMergeShortCaseLabels(I, E, Limit)
++                 : 0;
++    }
++
+     if (TheLine->Last->is(tok::l_brace)) {
+       bool ShouldMerge = false;
+       // Try to merge records.
+diff --git a/clang/lib/Format/UnwrappedLineParser.cpp b/clang/lib/Format/UnwrappedLineParser.cpp
+index e3f0af176b56..767b2b6aabc9 100644
+--- a/clang/lib/Format/UnwrappedLineParser.cpp
++++ b/clang/lib/Format/UnwrappedLineParser.cpp
+@@ -433,9 +433,9 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
+         assert(Next);
+       } while (Next->is(tok::comment));
+       FormatTok = Tokens->setPosition(StoredPosition);
+-      if (Next->isNot(tok::colon)) {
+-        // default not followed by ':' is not a case label; treat it like
+-        // an identifier.
++      if (!Next->isOneOf(tok::colon, tok::arrow)) {
++        // default not followed by `:` or `->` is not a case label; treat it
++        // like an identifier.
+         parseStructuralElement();
+         break;
+       }
+@@ -454,6 +454,7 @@ bool UnwrappedLineParser::parseLevel(const FormatToken *OpeningBrace,
+       }
+       if (!SwitchLabelEncountered &&
+           (Style.IndentCaseLabels ||
++           (OpeningBrace && OpeningBrace->is(TT_SwitchExpressionLBrace)) ||
+            (Line->InPPDirective && Line->Level == 1))) {
+         ++Line->Level;
+       }
+@@ -1524,9 +1525,9 @@ void UnwrappedLineParser::parseStructuralElement(
+       // 'switch: string' field declaration.
+       break;
+     }
+-    parseSwitch();
++    parseSwitch(/*IsExpr=*/false);
+     return;
+-  case tok::kw_default:
++  case tok::kw_default: {
+     // In Verilog default along with other labels are handled in the next loop.
+     if (Style.isVerilog())
+       break;
+@@ -1534,14 +1535,22 @@ void UnwrappedLineParser::parseStructuralElement(
+       // 'default: string' field declaration.
+       break;
+     }
++    auto *Default = FormatTok;
+     nextToken();
+     if (FormatTok->is(tok::colon)) {
+       FormatTok->setFinalizedType(TT_CaseLabelColon);
+       parseLabel();
+       return;
+     }
++    if (FormatTok->is(tok::arrow)) {
++      FormatTok->setFinalizedType(TT_CaseLabelArrow);
++      Default->setFinalizedType(TT_SwitchExpressionLabel);
++      parseLabel();
++      return;
++    }
+     // e.g. "default void f() {}" in a Java interface.
+     break;
++  }
+   case tok::kw_case:
+     // Proto: there are no switch/case statements.
+     if (Style.Language == FormatStyle::LK_Proto) {
+@@ -2066,6 +2075,11 @@ void UnwrappedLineParser::parseStructuralElement(
+     case tok::kw_new:
+       parseNew();
+       break;
++    case tok::kw_switch:
++      if (Style.Language == FormatStyle::LK_Java)
++        parseSwitch(/*IsExpr=*/true);
++      nextToken();
++      break;
+     case tok::kw_case:
+       // Proto: there are no switch/case statements.
+       if (Style.Language == FormatStyle::LK_Proto) {
+@@ -2584,6 +2598,9 @@ bool UnwrappedLineParser::parseParens(TokenType AmpAmpTokenType) {
+       else
+         nextToken();
+       break;
++    case tok::kw_switch:
++      parseSwitch(/*IsExpr=*/true);
++      break;
+     case tok::kw_requires: {
+       auto RequiresToken = FormatTok;
+       nextToken();
+@@ -3240,6 +3257,7 @@ void UnwrappedLineParser::parseLabel(bool LeftAlignLabel) {
+ 
+ void UnwrappedLineParser::parseCaseLabel() {
+   assert(FormatTok->is(tok::kw_case) && "'case' expected");
++  auto *Case = FormatTok;
+ 
+   // FIXME: fix handling of complex expressions here.
+   do {
+@@ -3248,11 +3266,16 @@ void UnwrappedLineParser::parseCaseLabel() {
+       FormatTok->setFinalizedType(TT_CaseLabelColon);
+       break;
+     }
++    if (Style.Language == FormatStyle::LK_Java && FormatTok->is(tok::arrow)) {
++      FormatTok->setFinalizedType(TT_CaseLabelArrow);
++      Case->setFinalizedType(TT_SwitchExpressionLabel);
++      break;
++    }
+   } while (!eof());
+   parseLabel();
+ }
+ 
+-void UnwrappedLineParser::parseSwitch() {
++void UnwrappedLineParser::parseSwitch(bool IsExpr) {
+   assert(FormatTok->is(tok::kw_switch) && "'switch' expected");
+   nextToken();
+   if (FormatTok->is(tok::l_paren))
+@@ -3262,10 +3285,15 @@ void UnwrappedLineParser::parseSwitch() {
+ 
+   if (FormatTok->is(tok::l_brace)) {
+     CompoundStatementIndenter Indenter(this, Style, Line->Level);
+-    FormatTok->setFinalizedType(TT_ControlStatementLBrace);
+-    parseBlock();
++    FormatTok->setFinalizedType(IsExpr ? TT_SwitchExpressionLBrace
++                                       : TT_ControlStatementLBrace);
++    if (IsExpr)
++      parseChildBlock();
++    else
++      parseBlock();
+     setPreviousRBraceType(TT_ControlStatementRBrace);
+-    addUnwrappedLine();
++    if (!IsExpr)
++      addUnwrappedLine();
+   } else {
+     addUnwrappedLine();
+     ++Line->Level;
+diff --git a/clang/lib/Format/UnwrappedLineParser.h b/clang/lib/Format/UnwrappedLineParser.h
+index 619fbb217882..44edb82a7e86 100644
+--- a/clang/lib/Format/UnwrappedLineParser.h
++++ b/clang/lib/Format/UnwrappedLineParser.h
+@@ -166,7 +166,7 @@ private:
+   void parseDoWhile();
+   void parseLabel(bool LeftAlignLabel = false);
+   void parseCaseLabel();
+-  void parseSwitch();
++  void parseSwitch(bool IsExpr);
+   void parseNamespace();
+   bool parseModuleImport();
+   void parseNew();
+diff --git a/clang/lib/Format/WhitespaceManager.cpp b/clang/lib/Format/WhitespaceManager.cpp
+index 753be25bfd67..f33ca4021783 100644
+--- a/clang/lib/Format/WhitespaceManager.cpp
++++ b/clang/lib/Format/WhitespaceManager.cpp
+@@ -107,7 +107,8 @@ const tooling::Replacements &WhitespaceManager::generateReplacements() {
+   llvm::sort(Changes, Change::IsBeforeInFile(SourceMgr));
+   calculateLineBreakInformation();
+   alignConsecutiveMacros();
+-  alignConsecutiveShortCaseStatements();
++  alignConsecutiveShortCaseStatements(/*IsExpr=*/true);
++  alignConsecutiveShortCaseStatements(/*IsExpr=*/false);
+   alignConsecutiveDeclarations();
+   alignConsecutiveBitFields();
+   alignConsecutiveAssignments();
+@@ -877,22 +878,27 @@ void WhitespaceManager::alignConsecutiveColons(
+       Changes, /*StartAt=*/0, AlignStyle);
+ }
+ 
+-void WhitespaceManager::alignConsecutiveShortCaseStatements() {
++void WhitespaceManager::alignConsecutiveShortCaseStatements(bool IsExpr) {
+   if (!Style.AlignConsecutiveShortCaseStatements.Enabled ||
+-      !Style.AllowShortCaseLabelsOnASingleLine) {
++      !(IsExpr ? Style.AllowShortCaseExpressionOnASingleLine
++               : Style.AllowShortCaseLabelsOnASingleLine)) {
+     return;
+   }
+ 
++  const auto Type = IsExpr ? TT_CaseLabelArrow : TT_CaseLabelColon;
++  const auto &Option = Style.AlignConsecutiveShortCaseStatements;
++  const bool AlignArrowOrColon =
++      IsExpr ? Option.AlignCaseArrows : Option.AlignCaseColons;
++
+   auto Matches = [&](const Change &C) {
+-    if (Style.AlignConsecutiveShortCaseStatements.AlignCaseColons)
+-      return C.Tok->is(TT_CaseLabelColon);
++    if (AlignArrowOrColon)
++      return C.Tok->is(Type);
+ 
+     // Ignore 'IsInsideToken' to allow matching trailing comments which
+     // need to be reflowed as that causes the token to appear in two
+     // different changes, which will cause incorrect alignment as we'll
+     // reflow early due to detecting multiple aligning tokens per line.
+-    return !C.IsInsideToken && C.Tok->Previous &&
+-           C.Tok->Previous->is(TT_CaseLabelColon);
++    return !C.IsInsideToken && C.Tok->Previous && C.Tok->Previous->is(Type);
+   };
+ 
+   unsigned MinColumn = 0;
+@@ -943,7 +949,7 @@ void WhitespaceManager::alignConsecutiveShortCaseStatements() {
+     if (Changes[I].Tok->isNot(tok::comment))
+       LineIsComment = false;
+ 
+-    if (Changes[I].Tok->is(TT_CaseLabelColon)) {
++    if (Changes[I].Tok->is(Type)) {
+       LineIsEmptyCase =
+           !Changes[I].Tok->Next || Changes[I].Tok->Next->isTrailingComment();
+ 
+diff --git a/clang/lib/Format/WhitespaceManager.h b/clang/lib/Format/WhitespaceManager.h
+index 9942e0f35738..982ec14ec97d 100644
+--- a/clang/lib/Format/WhitespaceManager.h
++++ b/clang/lib/Format/WhitespaceManager.h
+@@ -238,7 +238,7 @@ private:
+   void alignChainedConditionals();
+ 
+   /// Align consecutive short case statements over all \c Changes.
+-  void alignConsecutiveShortCaseStatements();
++  void alignConsecutiveShortCaseStatements(bool IsExpr);
+ 
+   /// Align consecutive TableGen cond operator colon over all \c Changes.
+   void alignConsecutiveTableGenCondOperatorColons();
+diff --git a/clang/unittests/Format/ConfigParseTest.cpp b/clang/unittests/Format/ConfigParseTest.cpp
+index 8c74ed2d119a..82e72f08ffb5 100644
+--- a/clang/unittests/Format/ConfigParseTest.cpp
++++ b/clang/unittests/Format/ConfigParseTest.cpp
+@@ -153,6 +153,7 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
+   Style.Language = FormatStyle::LK_Cpp;
+   CHECK_PARSE_BOOL(AllowAllArgumentsOnNextLine);
+   CHECK_PARSE_BOOL(AllowAllParametersOfDeclarationOnNextLine);
++  CHECK_PARSE_BOOL(AllowShortCaseExpressionOnASingleLine);
+   CHECK_PARSE_BOOL(AllowShortCaseLabelsOnASingleLine);
+   CHECK_PARSE_BOOL(AllowShortCompoundRequirementOnASingleLine);
+   CHECK_PARSE_BOOL(AllowShortEnumsOnASingleLine);
+@@ -205,6 +206,7 @@ TEST(ConfigParseTest, ParsesConfigurationBools) {
+   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements,
+                           AcrossEmptyLines);
+   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AcrossComments);
++  CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AlignCaseArrows);
+   CHECK_PARSE_NESTED_BOOL(AlignConsecutiveShortCaseStatements, AlignCaseColons);
+   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterCaseLabel);
+   CHECK_PARSE_NESTED_BOOL(BraceWrapping, AfterClass);
+diff --git a/clang/unittests/Format/FormatTestJava.cpp b/clang/unittests/Format/FormatTestJava.cpp
+index 6da5f4fa2543..33998bc7ff85 100644
+--- a/clang/unittests/Format/FormatTestJava.cpp
++++ b/clang/unittests/Format/FormatTestJava.cpp
+@@ -618,6 +618,177 @@ TEST_F(FormatTestJava, ConfigurableSpacesInSquareBrackets) {
+   verifyFormat("types[ i ] = arguments[ i ].getClass();", Spaces);
+ }
+ 
++TEST_F(FormatTestJava, SwitchExpression) {
++  auto Style = getLLVMStyle(FormatStyle::LK_Java);
++  EXPECT_TRUE(Style.AllowShortCaseExpressionOnASingleLine);
++
++  verifyFormat("foo(switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> 8;\n"
++               "  case WEDNESDAY -> 9;\n"
++               "  default -> 1;\n"
++               "});",
++               Style);
++
++  constexpr StringRef Code1{"i = switch (day) {\n"
++                            "  case THURSDAY, SATURDAY -> 8;\n"
++                            "  case WEDNESDAY -> 9;\n"
++                            "  default -> 0;\n"
++                            "};"};
++  verifyFormat(Code1, Style);
++
++  Style.IndentCaseLabels = true;
++  verifyFormat(Code1, Style);
++
++  constexpr StringRef Code2{"i = switch (day) {\n"
++                            "  case THURSDAY, SATURDAY -> {\n"
++                            "    foo();\n"
++                            "    yield 8;\n"
++                            "  }\n"
++                            "  case WEDNESDAY -> {\n"
++                            "    bar();\n"
++                            "    yield 9;\n"
++                            "  }\n"
++                            "  default -> {\n"
++                            "    yield 0;\n"
++                            "  }\n"
++                            "};"};
++  verifyFormat(Code2, Style);
++
++  Style.IndentCaseLabels = false;
++  verifyFormat(Code2, Style);
++
++  constexpr StringRef Code3{"switch (day) {\n"
++                            "case THURSDAY, SATURDAY -> i = 8;\n"
++                            "case WEDNESDAY -> i = 9;\n"
++                            "default -> i = 0;\n"
++                            "};"};
++  verifyFormat(Code3, Style);
++
++  Style.IndentCaseLabels = true;
++  verifyFormat("switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> i = 8;\n"
++               "  case WEDNESDAY -> i = 9;\n"
++               "  default -> i = 0;\n"
++               "};",
++               Code3, Style);
++}
++
++TEST_F(FormatTestJava, ShortCaseExpression) {
++  auto Style = getLLVMStyle(FormatStyle::LK_Java);
++
++  verifyFormat("i = switch (a) {\n"
++               "  case 1 -> 1;\n"
++               "  case 2 -> // comment\n"
++               "    2;\n"
++               "  case 3 ->\n"
++               "    // comment\n"
++               "    3;\n"
++               "  case 4 -> 4; // comment\n"
++               "  default -> 0;\n"
++               "};",
++               Style);
++
++  verifyNoChange("i = switch (a) {\n"
++                 "  case 1 -> 1;\n"
++                 "  // comment\n"
++                 "  case 2 -> 2;\n"
++                 "  // comment 1\n"
++                 "  // comment 2\n"
++                 "  case 3 -> 3; /* comment */\n"
++                 "  case 4 -> /* comment */ 4;\n"
++                 "  case 5 -> x + /* comment */ 1;\n"
++                 "  default ->\n"
++                 "    0; // comment line 1\n"
++                 "       // comment line 2\n"
++                 "};",
++                 Style);
++
++  Style.ColumnLimit = 18;
++  verifyFormat("i = switch (a) {\n"
++               "  case Monday ->\n"
++               "    1;\n"
++               "  default -> 9999;\n"
++               "};",
++               Style);
++
++  Style.ColumnLimit = 80;
++  Style.AllowShortCaseExpressionOnASingleLine = false;
++  Style.IndentCaseLabels = true;
++  verifyFormat("i = switch (n) {\n"
++               "  default /*comments*/ ->\n"
++               "    1;\n"
++               "  case 0 ->\n"
++               "    0;\n"
++               "};",
++               Style);
++
++  Style.AllowShortCaseExpressionOnASingleLine = true;
++  Style.BreakBeforeBraces = FormatStyle::BS_Custom;
++  Style.BraceWrapping.AfterCaseLabel = true;
++  Style.BraceWrapping.AfterControlStatement = FormatStyle::BWACS_Always;
++  verifyFormat("i = switch (n)\n"
++               "{\n"
++               "  case 0 ->\n"
++               "  {\n"
++               "    yield 0;\n"
++               "  }\n"
++               "  default ->\n"
++               "  {\n"
++               "    yield 1;\n"
++               "  }\n"
++               "};",
++               Style);
++}
++
++TEST_F(FormatTestJava, AlignCaseArrows) {
++  auto Style = getLLVMStyle(FormatStyle::LK_Java);
++  Style.AlignConsecutiveShortCaseStatements.Enabled = true;
++
++  verifyFormat("foo(switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> 8;\n"
++               "  case WEDNESDAY ->          9;\n"
++               "  default ->                 1;\n"
++               "});",
++               Style);
++
++  verifyFormat("i = switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> 8;\n"
++               "  case WEDNESDAY ->          9;\n"
++               "  default ->                 0;\n"
++               "};",
++               Style);
++
++  verifyFormat("switch (day) {\n"
++               "case THURSDAY, SATURDAY -> i = 8;\n"
++               "case WEDNESDAY ->          i = 9;\n"
++               "default ->                 i = 0;\n"
++               "};",
++               Style);
++
++  Style.AlignConsecutiveShortCaseStatements.AlignCaseArrows = true;
++
++  verifyFormat("foo(switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> 8;\n"
++               "  case WEDNESDAY          -> 9;\n"
++               "  default                 -> 1;\n"
++               "});",
++               Style);
++
++  verifyFormat("i = switch (day) {\n"
++               "  case THURSDAY, SATURDAY -> 8;\n"
++               "  case WEDNESDAY          -> 9;\n"
++               "  default                 -> 0;\n"
++               "};",
++               Style);
++
++  verifyFormat("switch (day) {\n"
++               "case THURSDAY, SATURDAY -> i = 8;\n"
++               "case WEDNESDAY          -> i = 9;\n"
++               "default                 -> i = 0;\n"
++               "};",
++               Style);
++}
++
+ } // namespace
+ } // namespace test
+ } // namespace format
+diff --git a/clang/unittests/Format/TokenAnnotatorTest.cpp b/clang/unittests/Format/TokenAnnotatorTest.cpp
+index fcba0e63c782..b19b3666b02f 100644
+--- a/clang/unittests/Format/TokenAnnotatorTest.cpp
++++ b/clang/unittests/Format/TokenAnnotatorTest.cpp
+@@ -2731,6 +2731,24 @@ TEST_F(TokenAnnotatorTest, UnderstandsElaboratedTypeSpecifier) {
+   EXPECT_TOKEN(Tokens[7], tok::l_brace, TT_FunctionLBrace);
+ }
+ 
++TEST_F(TokenAnnotatorTest, SwitchExpression) {
++  auto Style = getLLVMStyle(FormatStyle::LK_Java);
++  auto Tokens = annotate("i = switch (day) {\n"
++                         "  case THURSDAY, SATURDAY -> 8;\n"
++                         "  case WEDNESDAY -> 9;\n"
++                         "  default -> 1;\n"
++                         "};",
++                         Style);
++  ASSERT_EQ(Tokens.size(), 26u) << Tokens;
++  EXPECT_TOKEN(Tokens[6], tok::l_brace, TT_SwitchExpressionLBrace);
++  EXPECT_TOKEN(Tokens[7], tok::kw_case, TT_SwitchExpressionLabel);
++  EXPECT_TOKEN(Tokens[11], tok::arrow, TT_CaseLabelArrow);
++  EXPECT_TOKEN(Tokens[14], tok::kw_case, TT_SwitchExpressionLabel);
++  EXPECT_TOKEN(Tokens[16], tok::arrow, TT_CaseLabelArrow);
++  EXPECT_TOKEN(Tokens[19], tok::kw_default, TT_SwitchExpressionLabel);
++  EXPECT_TOKEN(Tokens[20], tok::arrow, TT_CaseLabelArrow);
++}
++
+ } // namespace
+ } // namespace format
+ } // namespace clang
+-- 
+2.45.1.288.g0e0cd299f1-goog
+
