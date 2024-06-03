@@ -23,6 +23,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import sys
 from typing import Dict, List
 
 import constants
@@ -164,3 +165,44 @@ def clean_out_dir():
             shutil.rmtree(child)
         else:
             child.unlink()
+
+
+def check_gsutil():
+    cmd = ['gsutil', 'version']
+    try:
+        subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def check_stubby():
+    cmd = ['stubby', '--version']
+    try:
+        subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def check_tools(use_sha: bool):
+    if not check_gsutil():
+        print(
+            'Fatal: gsutil not installed! Please go to'
+            ' https://cloud.google.com/storage/docs/gsutil_install to install'
+            ' gsutil',
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if use_sha and not check_stubby():
+        print(
+            'Fatal: stubby not found. This is only available on gLinux'
+            ' (Googlers only). Use --build_id instead',
+            file=sys.stderr,
+        )
+        sys.exit(1)

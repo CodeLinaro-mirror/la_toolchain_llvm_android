@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 from typing import List, Optional
-from utils import extract_tarball
+from utils import check_tools, extract_tarball
 
 prefix = "gs://android-llvm-kokoro-ci-artifacts/prod/android-llvm/linux-tot/continuous/"
 
@@ -49,7 +49,12 @@ def parse_args(sys_argv: Optional[List[str]]):
         ),
     )
 
-    parser.add_argument("target", type=str, nargs=1, help="target path")
+    parser.add_argument(
+        "target",
+        type=str,
+        nargs=1,
+        help="Target Clang path (e.g. ANDROID_TOP/prebuilts/clang/linux-x86/)",
+    )
     return parser.parse_args(sys_argv)
 
 
@@ -76,28 +81,8 @@ def fetch_prebuilts(build_id: str, target: str):
             # extract the toolchain
             tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
             extract_tarball(target, tar)
-
-
-def check_gsutil():
-    cmd = ["gsutil", "version"]
-    try:
-        subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        return True
-    except FileNotFoundError:
-        return False
-
-
-def check_stubby():
-    cmd = ["stubby", "--version"]
-    try:
-        subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        return True
-    except FileNotFoundError:
-        return False
+            return True
+    return False
 
 
 def check_valid_build(build_id: str):
@@ -176,7 +161,7 @@ def get_build_number(sha: str):
             response = subprocess.check_output(cmd)
         except subprocess.CalledProcessError as e:
             print(
-                "No build number matched!",
+                f"No build number for {sha} matched!",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -212,22 +197,7 @@ def get_build_number(sha: str):
 def main(sys_argv: List[str]):
     args_output = parse_args(sys_argv)
 
-    if not check_gsutil():
-        print(
-            "Fatal: gsutil not installed! Please go to"
-            " https://cloud.google.com/storage/docs/gsutil_install to install"
-            " gsutil",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    if args_output.sha and not check_stubby():
-        print(
-            "Fatal: stubby not found. This is only available on gLinux"
-            " (Googlers only). Use --build_id instead",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    check_tools(args_output.sha)
 
     target = args_output.target[0]
     check_valid_path(target)
