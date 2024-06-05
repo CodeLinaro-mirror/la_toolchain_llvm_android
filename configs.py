@@ -404,6 +404,9 @@ class LinuxMuslConfig(LinuxConfig):
         defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
         defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
         defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
+        # clang generates call to builtin functions when building
+        # compiler-rt for musl.  Allow use of the builtins library.
+        defines['COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'TRUE'
 
         # The musl sysroots contain empty libdl.a, libpthread.a and librt.a to
         # satisfy the parts of the LLVM build that hardcode -lpthread, etc.,

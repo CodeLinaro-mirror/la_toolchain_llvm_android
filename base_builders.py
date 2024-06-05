@@ -845,21 +845,10 @@ class LLVMBuilder(LLVMBaseBuilder):
                     defines[f'{base}_{triple}_CMAKE_PLATFORM_NO_VERSIONED_SONAME'] = 'ON'
 
                     if _config.is_musl:
-                        # clang generates call to builtin functions when building
-                        # compiler-rt for musl.  Allow use of the builtins library.
-                        defines[f'{base}_{triple}_COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'ON'
-                        # The musl sysroot has empty versions of libpthread and librt, but the Soong
-                        # musl environment doesn't, so avoid creating .deplibs for these libraries.
-                        defines[f'{base}_{triple}_LIBCXX_HAS_RT_LIB'] = 'NO'
-                        defines[f'{base}_{triple}_LIBCXX_HAS_PTHREAD_LIB'] = 'NO'
-                        defines[f'{base}_{triple}_LIBCXXABI_HAS_PTHREAD_LIB'] = 'NO'
+                        for key, value in _config.cmake_defines.items():
+                            defines[f'{base}_{triple}_{key}'] = value
 
                     for arg in runtimes_passthrough_args:
-                        if _config.is_musl and (
-                            arg == 'LIBCXXABI_USE_LLVM_UNWINDER'
-                            or arg == 'LIBCXXABI_ENABLE_STATIC_UNWINDER'
-                        ):
-                            continue
                         defines[f'{base}_{triple}_{arg}'] = defines[arg]
 
                     # Don't depend on the host libatomic library.
