@@ -401,6 +401,12 @@ def fetch_kokoro_prebuilt(build_id: str) -> Path:
     return extract_dir / f'clang-{build_id}'
 
 
+def is_clang_built_with_mlgo(clang_dir: Path):
+    clang = clang_dir / 'bin' / 'clang'
+    output = utils.check_output([str(clang), '--version'])
+    return '+mlgo' in output
+
+
 def main():
     logging.basicConfig(level=logging.DEBUG)
 
@@ -436,6 +442,8 @@ def main():
     clang_version = extract_clang_version(clang_path)
     copy_clang(Path(args.android_path), clang_path)
 
+    no_mlgo = not is_clang_built_with_mlgo(clang_path)
+
     if args.build_only:
         if args.profile:
             profiler = PgoProfileHandler()
@@ -446,7 +454,7 @@ def main():
 
         build_target(Path(args.android_path), clang_version, args.target,
                      modules, args.jobs,
-                     args.enable_fallback, args.with_tidy, args.no_mlgo, profiler)
+                     args.enable_fallback, args.with_tidy, no_mlgo, profiler)
 
         if profiler is not None:
             profiler.mergeProfiles()
@@ -459,7 +467,7 @@ def main():
             result = test_device(Path(args.android_path), clang_version, device,
                                  modules, args.jobs, args.clean_built_target,
                                  Path(args.flashall_path) if args.flashall_path else None,
-                                 args.enable_fallback, args.with_tidy, args.no_mlgo)
+                                 args.enable_fallback, args.with_tidy, no_mlgo)
             if not result and not args.keep_going:
                 break
 
