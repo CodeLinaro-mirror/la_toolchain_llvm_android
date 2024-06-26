@@ -147,7 +147,6 @@ def get_source_info(source_dir: str, patch_output: str) -> PatchInfo:
                 continue
         elif patch is None:
             break
-        print("patch={},{},{}$$".format(patch, type(patch), len(patch)))
         assert patch.endswith('.patch')
         if applied:
             pi.applied_patches.append(patch)
