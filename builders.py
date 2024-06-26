@@ -1104,6 +1104,11 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cflags(self) -> list[str]:
         result = super().cflags
+        result.extend(('-fdebug-info-for-profiling',
+                       '-mllvm', '-enable-fs-discriminator=true',
+                       # TODO(b/266595187): Remove the following feature once it is
+                       # enabled in LLVM by default.
+                       '-mllvm', '-improved-fs-discriminator=true'))
         if self._config.target_arch is hosts.Arch.ARM:
             result.append('-mthumb')
         if self._is_hwasan:
@@ -1148,6 +1153,9 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         executor = paths.LLVM_PATH / 'libcxx' / 'utils' / 'adb_run.py'
 
         defines: Dict[str, str] = super().cmake_defines
+        # debug info is needed for AutoFDO
+        defines['CMAKE_BUILD_TYPE'] = 'RelWithDebInfo'
+
         defines['LLVM_ENABLE_RUNTIMES'] ='libcxx;libcxxabi'
 
         # When the libc++ lit tests invoke clang, they set the triple and
