@@ -1,0 +1,414 @@
+From e9adcc488f96a9f2b8c4344f5e3c7ca6639b9562 Mon Sep 17 00:00:00 2001
+From: Konstantin Varlamov <varconsteq@gmail.com>
+Date: Fri, 7 Jun 2024 08:15:02 -0700
+Subject: [PATCH] [libc++][regex] Correctly adjust match prefix for zero-length
+ matches. (#94550)
+
+For regex patterns that produce zero-length matches, there is one
+(imaginary) match in-between every character in the sequence being
+searched (as well as before the first character and after the last
+character). It's easiest to demonstrate using replacement:
+`std::regex_replace("abc"s, "!", "")` should produce `!a!b!c!`, where
+each exclamation mark makes a zero-length match visible.
+
+Currently our implementation doesn't correctly set the prefix of each
+zero-length match, "swallowing" the characters separating the imaginary
+matches -- e.g. when going through zero-length matches within `abc`, the
+corresponding prefixes should be `{'', 'a', 'b', 'c'}`, but before this
+patch they will all be empty (`{'', '', '', ''}`). This happens in the
+implementation of `regex_iterator::operator++`. Note that the Standard
+spells out quite explicitly that the prefix might need to be adjusted
+when dealing with zero-length matches in
+[`re.regiter.incr`](http://eel.is/c++draft/re.regiter.incr):
+> In all cases in which the call to `regex_search` returns `true`,
+`match.prefix().first` shall be equal to the previous value of
+`match[0].second`... It is unspecified how the implementation makes
+these adjustments.
+
+[Reproduction example](https://godbolt.org/z/8ve6G3dav)
+```cpp
+#include <iostream>
+#include <regex>
+#include <string>
+
+int main() {
+  std::string str = "abc";
+  std::regex empty_matching_pattern("");
+
+  { // The underlying problem is that `regex_iterator::operator++` doesn't update
+    // the prefix correctly.
+    std::sregex_iterator i(str.begin(), str.end(), empty_matching_pattern), e;
+    std::cout << "\"";
+    for (; i != e; ++i) {
+      const std::ssub_match& prefix = i->prefix();
+      std::cout << prefix.str();
+    }
+    std::cout << "\"\n";
+    // Before the patch: ""
+    // After the patch: "abc"
+  }
+
+  { // `regex_replace` makes the problem very visible.
+    std::string replaced = std::regex_replace(str, empty_matching_pattern, "!");
+    std::cout << "\"" << replaced << "\"\n";
+    // Before the patch: "!!!!"
+    // After the patch: "!a!b!c!"
+  }
+}
+```
+
+Fixes #64451
+
+rdar://119912002
+---
+ libcxx/include/regex                          |  21 +-
+ .../zero_length_matches.pass.cpp              |  37 +++
+ .../re.regiter/re.regiter.incr/post.pass.cpp  | 239 +++++++++++-------
+ 3 files changed, 200 insertions(+), 97 deletions(-)
+ create mode 100644 libcxx/test/std/re/re.alg/re.alg.replace/zero_length_matches.pass.cpp
+
+diff --git a/libcxx/include/regex b/libcxx/include/regex
+index b3869d36de1d..46968357d397 100644
+--- a/libcxx/include/regex
++++ b/libcxx/include/regex
+@@ -4700,6 +4700,9 @@ private:
+ 
+   template <class, class>
+   friend class __lookahead;
++
++  template <class, class, class>
++  friend class regex_iterator;
+ };
+ 
+ template <class _BidirectionalIterator, class _Allocator>
+@@ -5410,7 +5413,9 @@ template <class _BidirectionalIterator, class _CharT, class _Traits>
+ regex_iterator<_BidirectionalIterator, _CharT, _Traits>&
+ regex_iterator<_BidirectionalIterator, _CharT, _Traits>::operator++() {
+   __flags_ |= regex_constants::__no_update_pos;
+-  _BidirectionalIterator __start = __match_[0].second;
++  _BidirectionalIterator __start        = __match_[0].second;
++  _BidirectionalIterator __prefix_start = __start;
++
+   if (__match_[0].first == __match_[0].second) {
+     if (__start == __end_) {
+       __match_ = value_type();
+@@ -5424,9 +5429,21 @@ regex_iterator<_BidirectionalIterator, _CharT, _Traits>::operator++() {
+     else
+       ++__start;
+   }
++
+   __flags_ |= regex_constants::match_prev_avail;
+-  if (!std::regex_search(__start, __end_, __match_, *__pregex_, __flags_))
++  if (!std::regex_search(__start, __end_, __match_, *__pregex_, __flags_)) {
+     __match_ = value_type();
++
++  } else {
++    // The Standard mandates that if `regex_search` returns true ([re.regiter.incr]), "`match.prefix().first` shall be
++    // equal to the previous value of `match[0].second`... It is unspecified how the implementation makes these
++    // adjustments." The adjustment is necessary if we incremented `__start` above (the branch that deals with
++    // zero-length matches).
++    auto& __prefix = __match_.__prefix_;
++    __prefix.first = __prefix_start;
++    __prefix.matched = __prefix.first != __prefix.second;
++  }
++
+   return *this;
+ }
+ 
+diff --git a/libcxx/test/std/re/re.alg/re.alg.replace/zero_length_matches.pass.cpp b/libcxx/test/std/re/re.alg/re.alg.replace/zero_length_matches.pass.cpp
+new file mode 100644
+index 000000000000..2f1b6280deb7
+--- /dev/null
++++ b/libcxx/test/std/re/re.alg/re.alg.replace/zero_length_matches.pass.cpp
+@@ -0,0 +1,37 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <regex>
++
++// Test that replacing zero-length matches works correctly.
++
++#include <cassert>
++#include <regex>
++#include <string>
++#include "test_macros.h"
++
++int main(int, char**) {
++  // Various patterns that produce zero-length matches.
++  assert(std::regex_replace("abc", std::regex(""), "!") == "!a!b!c!");
++  assert(std::regex_replace("abc", std::regex("X*"), "!") == "!a!b!c!");
++  assert(std::regex_replace("abc", std::regex("X{0,3}"), "!") == "!a!b!c!");
++
++  // Replacement string has several characters.
++  assert(std::regex_replace("abc", std::regex(""), "[!]") == "[!]a[!]b[!]c[!]");
++
++  // Empty replacement string.
++  assert(std::regex_replace("abc", std::regex(""), "") == "abc");
++
++  // Empty input.
++  assert(std::regex_replace("", std::regex(""), "!") == "!");
++
++  // Not all matches are zero-length.
++  assert(std::regex_replace("abCabCa", std::regex("C*"), "!") == "!a!b!!a!b!!a!");
++
++  return 0;
++}
+diff --git a/libcxx/test/std/re/re.iter/re.regiter/re.regiter.incr/post.pass.cpp b/libcxx/test/std/re/re.iter/re.regiter/re.regiter.incr/post.pass.cpp
+index 9332158f0de9..aefe86f15298 100644
+--- a/libcxx/test/std/re/re.iter/re.regiter/re.regiter.incr/post.pass.cpp
++++ b/libcxx/test/std/re/re.iter/re.regiter/re.regiter.incr/post.pass.cpp
+@@ -17,102 +17,151 @@
+ #include <iterator>
+ #include "test_macros.h"
+ 
+-int main(int, char**)
+-{
+-    {
+-        std::regex phone_numbers("\\d{3}-\\d{4}");
+-        const char phone_book[] = "555-1234, 555-2345, 555-3456";
+-        std::cregex_iterator i(std::begin(phone_book), std::end(phone_book), phone_numbers);
+-        std::cregex_iterator i2 = i;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 0);
+-        assert((*i).str() == "555-1234");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        i++;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 10);
+-        assert((*i).str() == "555-2345");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        i++;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 20);
+-        assert((*i).str() == "555-3456");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        i++;
+-        assert(i == std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-    }
+-    {
+-        std::regex phone_numbers("\\d{3}-\\d{4}");
+-        const char phone_book[] = "555-1234, 555-2345, 555-3456";
+-        std::cregex_iterator i(std::begin(phone_book), std::end(phone_book), phone_numbers);
+-        std::cregex_iterator i2 = i;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 0);
+-        assert((*i).str() == "555-1234");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        ++i;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 10);
+-        assert((*i).str() == "555-2345");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        ++i;
+-        assert(i != std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i).size() == 1);
+-        assert((*i).position() == 20);
+-        assert((*i).str() == "555-3456");
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-        ++i;
+-        assert(i == std::cregex_iterator());
+-        assert(i2!= std::cregex_iterator());
+-        assert((*i2).size() == 1);
+-        assert((*i2).position() == 0);
+-        assert((*i2).str() == "555-1234");
+-    }
+-    { // https://llvm.org/PR33681
+-        std::regex rex(".*");
+-        const char foo[] = "foo";
++void validate_prefixes(const std::regex& empty_matching_pattern) {
++  const char source[] = "abc";
++
++  std::cregex_iterator i(source, source + 3, empty_matching_pattern);
++  assert(!i->prefix().matched);
++  assert(i->prefix().length() == 0);
++  assert(i->prefix().first == source);
++  assert(i->prefix().second == source);
++
++  ++i;
++  assert(i->prefix().matched);
++  assert(i->prefix().length() == 1);
++  assert(i->prefix().first == source);
++  assert(i->prefix().second == source + 1);
++  assert(i->prefix().str() == "a");
++
++  ++i;
++  assert(i->prefix().matched);
++  assert(i->prefix().length() == 1);
++  assert(i->prefix().first == source + 1);
++  assert(i->prefix().second == source + 2);
++  assert(i->prefix().str() == "b");
++
++  ++i;
++  assert(i->prefix().matched);
++  assert(i->prefix().length() == 1);
++  assert(i->prefix().first == source + 2);
++  assert(i->prefix().second == source + 3);
++  assert(i->prefix().str() == "c");
++
++  ++i;
++  assert(i == std::cregex_iterator());
++}
++
++void test_prefix_adjustment() {
++  // Check that we correctly adjust the match prefix when dealing with zero-length matches -- this is explicitly
++  // required by the Standard ([re.regiter.incr]: "In all cases in which the call to `regex_search` returns true,
++  // `match.prefix().first` shall be equal to the previous value of `match[0].second`"). For a pattern that matches
++  // empty sequences, there is an implicit zero-length match between every character in a string -- make sure the
++  // prefix of each of these matches (except the first one) is the preceding character.
++
++  // An empty pattern produces zero-length matches.
++  validate_prefixes(std::regex(""));
++  // Any character repeated zero or more times can produce zero-length matches.
++  validate_prefixes(std::regex("X*"));
++  validate_prefixes(std::regex("X{0,3}"));
++}
++
++int main(int, char**) {
++  {
++    std::regex phone_numbers("\\d{3}-\\d{4}");
++    const char phone_book[] = "555-1234, 555-2345, 555-3456";
++    std::cregex_iterator i(std::begin(phone_book), std::end(phone_book), phone_numbers);
++    std::cregex_iterator i2 = i;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 0);
++    assert((*i).str() == "555-1234");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    i++;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 10);
++    assert((*i).str() == "555-2345");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    i++;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 20);
++    assert((*i).str() == "555-3456");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    i++;
++    assert(i == std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++  }
++  {
++    std::regex phone_numbers("\\d{3}-\\d{4}");
++    const char phone_book[] = "555-1234, 555-2345, 555-3456";
++    std::cregex_iterator i(std::begin(phone_book), std::end(phone_book), phone_numbers);
++    std::cregex_iterator i2 = i;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 0);
++    assert((*i).str() == "555-1234");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    ++i;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 10);
++    assert((*i).str() == "555-2345");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    ++i;
++    assert(i != std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i).size() == 1);
++    assert((*i).position() == 20);
++    assert((*i).str() == "555-3456");
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++    ++i;
++    assert(i == std::cregex_iterator());
++    assert(i2 != std::cregex_iterator());
++    assert((*i2).size() == 1);
++    assert((*i2).position() == 0);
++    assert((*i2).str() == "555-1234");
++  }
++  { // https://llvm.org/PR33681
++    std::regex rex(".*");
++    const char foo[] = "foo";
+     //  The -1 is because we don't want the implicit null from the array.
+-        std::cregex_iterator i(std::begin(foo), std::end(foo) - 1, rex);
+-        std::cregex_iterator e;
+-        assert(i != e);
+-        assert((*i).size() == 1);
+-        assert((*i).str() == "foo");
+-
+-        ++i;
+-        assert(i != e);
+-        assert((*i).size() == 1);
+-        assert((*i).str() == "");
+-
+-        ++i;
+-        assert(i == e);
+-    }
++    std::cregex_iterator i(std::begin(foo), std::end(foo) - 1, rex);
++    std::cregex_iterator e;
++    assert(i != e);
++    assert((*i).size() == 1);
++    assert((*i).str() == "foo");
++
++    ++i;
++    assert(i != e);
++    assert((*i).size() == 1);
++    assert((*i).str() == "");
++
++    ++i;
++    assert(i == e);
++  }
++
++  test_prefix_adjustment();
+ 
+   return 0;
+ }
+-- 
+2.45.2.741.gdbec12cfda-goog
+

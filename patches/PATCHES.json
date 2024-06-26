@@ -1361,6 +1361,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++][regex] Correctly adjust match prefix for zero-length matches. (#94550)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e9adcc488f96a9f2b8c4344f5e3c7ca6639b9562.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 539017
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[hwasan] Add fixed_shadow_base flag\" (#95435)"
         },
         "platforms": [
