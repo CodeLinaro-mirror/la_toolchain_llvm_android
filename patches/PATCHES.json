@@ -1361,6 +1361,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Clang][Sema] Tweak tryCaptureVariable for unevaluated lambdas (#93206)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3d361b225fe89ce1d8c93639f27d689082bd8dad.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 538556
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++][regex] Correctly adjust match prefix for zero-length matches. (#94550)"
         },
         "platforms": [
