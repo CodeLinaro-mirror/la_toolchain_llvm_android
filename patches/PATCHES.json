@@ -1641,20 +1641,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Ignore flags that typically get used with bpf but ar"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Ignore-flags-that-typically-get-used-with-bpf-but-ar.patch",
-        "version_range": {
-            "from": 510928,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[libc++][Android] Hide locale Lit features for Bionic"
         },
         "platforms": [
