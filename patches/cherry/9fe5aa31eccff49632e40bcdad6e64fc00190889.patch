@@ -1,0 +1,129 @@
+From 9fe5aa31eccff49632e40bcdad6e64fc00190889 Mon Sep 17 00:00:00 2001
+From: Younan Zhang <zyn7109@gmail.com>
+Date: Thu, 7 Mar 2024 09:49:02 +0800
+Subject: [PATCH] [clang][Sema] Skip the RequiresExprBodyDecls for lambda
+ dependencies (#83997)
+
+The dependency of a lambda inside of a `RequiresExprBodyDecl` was
+previously affected by its parent, e.g.,
+`ClassTemplateSpecializationDecl`. This made the lambda always dependent
+regardless of the template arguments we had, which caused some crashes
+on the constraint evaluation later.
+
+This fixes https://github.com/llvm/llvm-project/issues/56556, fixes
+https://github.com/llvm/llvm-project/issues/82849 and a case
+demonstrated by
+https://github.com/llvm/llvm-project/issues/49570#issuecomment-1664966972.
+---
+ clang/lib/Sema/TreeTransform.h              | 23 +++++++-
+ clang/test/SemaTemplate/concepts-lambda.cpp | 58 +++++++++++++++++++++
+ 3 files changed, 81 insertions(+), 2 deletions(-)
+
+diff --git a/clang/lib/Sema/TreeTransform.h b/clang/lib/Sema/TreeTransform.h
+index 7389a48fe56f..409aee73d960 100644
+--- a/clang/lib/Sema/TreeTransform.h
++++ b/clang/lib/Sema/TreeTransform.h
+@@ -13649,10 +13649,29 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
+   // use evaluation contexts to distinguish the function parameter case.
+   CXXRecordDecl::LambdaDependencyKind DependencyKind =
+       CXXRecordDecl::LDK_Unknown;
++  DeclContext *DC = getSema().CurContext;
++  // A RequiresExprBodyDecl is not interesting for dependencies.
++  // For the following case,
++  //
++  // template <typename>
++  // concept C = requires { [] {}; };
++  //
++  // template <class F>
++  // struct Widget;
++  //
++  // template <C F>
++  // struct Widget<F> {};
++  //
++  // While we are substituting Widget<F>, the parent of DC would be
++  // the template specialization itself. Thus, the lambda expression
++  // will be deemed as dependent even if there are no dependent template
++  // arguments.
++  // (A ClassTemplateSpecializationDecl is always a dependent context.)
++  while (DC->getDeclKind() == Decl::Kind::RequiresExprBody)
++    DC = DC->getParent();
+   if ((getSema().isUnevaluatedContext() ||
+        getSema().isConstantEvaluatedContext()) &&
+-      (getSema().CurContext->isFileContext() ||
+-       !getSema().CurContext->getParent()->isDependentContext()))
++      (DC->isFileContext() || !DC->getParent()->isDependentContext()))
+     DependencyKind = CXXRecordDecl::LDK_NeverDependent;
+ 
+   CXXRecordDecl *OldClass = E->getLambdaClass();
+diff --git a/clang/test/SemaTemplate/concepts-lambda.cpp b/clang/test/SemaTemplate/concepts-lambda.cpp
+index 0b7580f91043..fac790d09f9c 100644
+--- a/clang/test/SemaTemplate/concepts-lambda.cpp
++++ b/clang/test/SemaTemplate/concepts-lambda.cpp
+@@ -90,6 +90,64 @@ struct Foo {
+ 
+ static_assert(ConstructibleWithN<Foo>);
+ 
++namespace GH56556 {
++
++template <typename It>
++inline constexpr It declare ();
++
++template <typename It, template <typename> typename Template>
++concept D = requires {
++	{ [] <typename T1> (Template<T1> &) {}(declare<It &>()) };
++};
++
++template <typename T>
++struct B {};
++
++template <typename T>
++struct Adapter;
++
++template <D<B> T>
++struct Adapter<T> {};
++
++template struct Adapter<B<int>>;
++
++} // namespace GH56556
++
++namespace GH82849 {
++
++template <class T>
++concept C = requires(T t) {
++  requires requires (T u) {
++    []<class V>(V) {
++      return requires(V v) {
++        [](V w) {}(v);
++      };
++    }(t);
++  };
++};
++
++template <class From>
++struct Widget;
++
++template <C F>
++struct Widget<F> {
++  static F create(F from) {
++    return from;
++  }
++};
++
++template <class>
++bool foo() {
++  return C<int>;
++}
++
++void bar() {
++  // https://github.com/llvm/llvm-project/issues/49570#issuecomment-1664966972
++  Widget<char>::create(0);
++}
++
++} // namespace GH82849
++
+ }
+ 
+ // GH60642 reported an assert being hit, make sure we don't assert.
+-- 
+2.45.2.803.g4e1b14247a-goog
+
