@@ -63,10 +63,10 @@ Should leave original behavior unchanged.
 ---
  clang/lib/Basic/Targets/WebAssembly.h         |   3 +
  llvm/include/llvm/TargetParser/Triple.h       |   8 ++
- .../WebAssembly/WebAssemblyISelLowering.cpp   | 106 ++++++++++++++----
+ .../WebAssembly/WebAssemblyISelLowering.cpp   | 107 ++++++++++++++----
  .../WebAssembly/WebAssemblyTargetMachine.cpp  |  12 +-
  llvm/lib/TargetParser/Triple.cpp              |   2 +
- 5 files changed, 103 insertions(+), 28 deletions(-)
+ 5 files changed, 104 insertions(+), 28 deletions(-)
 
 diff --git a/clang/lib/Basic/Targets/WebAssembly.h b/clang/lib/Basic/Targets/WebAssembly.h
 index 83b1711f9fdf..4ad7d000bc79 100644
@@ -109,9 +109,17 @@ index e73207021392..d18707cfd7a4 100644
    bool isDXIL() const {
      return getArch() == Triple::dxil;
 diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
-index 7c47790d1e35..baff53953d88 100644
+index 905ff3b9018..03cc24a8c88 100644
 --- a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
 +++ b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
+@@ -32,6 +32,7 @@
+ #include "llvm/IR/Function.h"
+ #include "llvm/IR/Intrinsics.h"
+ #include "llvm/IR/IntrinsicsWebAssembly.h"
++#include "llvm/IR/Module.h"
+ #include "llvm/IR/PatternMatch.h"
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorHandling.h"
 @@ -1003,6 +1004,22 @@ static bool callingConvSupported(CallingConv::ID CallConv) {
           CallConv == CallingConv::Swift;
  }
