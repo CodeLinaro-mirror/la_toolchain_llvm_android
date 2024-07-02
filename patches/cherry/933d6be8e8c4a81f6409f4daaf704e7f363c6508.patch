@@ -1,0 +1,341 @@
+From 1ca42b1a9cd9609e6bc3ef9f75e8c759b916e12c Mon Sep 17 00:00:00 2001
+From: Alexandros Lamprineas <alexandros.lamprineas@arm.com>
+Date: Thu, 13 Jun 2024 11:45:39 +0100
+Subject: [PATCH] [FMV][compiler-rt] Fix cpu features initialization. (#95149)
+
+To detect features we either use HWCAPs or directly extract system
+register bitfields and compare with a value. In many cases equality
+comparisons give wrong results for example FEAT_SVE is not set if SVE2
+is available (see the issue #93651). I am also making the access to
+__aarch64_cpu_features atomic.
+
+The corresponding PR for the ACLE specification is
+https://github.com/ARM-software/acle/pull/322.
+
+Change-Id: I07a259c3c89a260e0cbd3c8a08da029c24c6775c
+---
+ .../cpu_model/aarch64/fmv/android.inc         |   4 +-
+ .../cpu_model/aarch64/fmv/freebsd.inc         |   4 +-
+ .../cpu_model/aarch64/fmv/fuchsia.inc         |   8 +-
+ .../builtins/cpu_model/aarch64/fmv/mrs.inc    | 135 ++++++------------
+ .../cpu_model/aarch64/fmv/sysauxv.inc         |   4 +-
+ .../lib/builtins/cpu_model/aarch64/hwcap.inc  |   6 +
+ 6 files changed, 60 insertions(+), 101 deletions(-)
+
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/android.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/android.inc
+index f711431489cc..a9e3594e93c2 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/android.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/android.inc
+@@ -1,6 +1,6 @@
+ void __init_cpu_features_resolver(unsigned long hwcap,
+                                   const __ifunc_arg_t *arg) {
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+   // ifunc resolvers don't have hwcaps in arguments on Android API lower
+@@ -17,7 +17,7 @@ void __init_cpu_features_resolver(unsigned long hwcap,
+ 
+ void CONSTRUCTOR_ATTRIBUTE __init_cpu_features(void) {
+   // CPU features already initialized.
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+   // Don't set any CPU features,
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/freebsd.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/freebsd.inc
+index 793adef44b93..aa975dc854f9 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/freebsd.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/freebsd.inc
+@@ -1,6 +1,6 @@
+ void __init_cpu_features_resolver(unsigned long hwcap,
+                                   const __ifunc_arg_t *arg) {
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+   __init_cpu_features_constructor(hwcap, arg);
+@@ -10,7 +10,7 @@ void CONSTRUCTOR_ATTRIBUTE __init_cpu_features(void) {
+   unsigned long hwcap = 0;
+   unsigned long hwcap2 = 0;
+   // CPU features already initialized.
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+   int res = 0;
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/fuchsia.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/fuchsia.inc
+index d8e0280f4041..1ae4780e4978 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/fuchsia.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/fuchsia.inc
+@@ -2,7 +2,7 @@
+ #include <zircon/syscalls.h>
+ 
+ void __init_cpu_features_resolver() {
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+     // This ensures the vDSO is a direct link-time dependency of anything that
+@@ -13,8 +13,8 @@ void __init_cpu_features_resolver() {
+   if (status != ZX_OK)
+     return;
+ 
+-#define setCPUFeature(cpu_feature)                                             \
+-  __aarch64_cpu_features.features |= 1ULL << cpu_feature
++  unsigned long long feat = 0;
++#define setCPUFeature(cpu_feature) feat |= 1ULL << cpu_feature
+ 
+   if (features & ZX_ARM64_FEATURE_ISA_FP)
+     setCPUFeature(FEAT_FP);
+@@ -48,4 +48,6 @@ void __init_cpu_features_resolver() {
+     setCPUFeature(FEAT_SVE);
+ 
+   setCPUFeature(FEAT_INIT);
++
++  __atomic_store_n(&__aarch64_cpu_features.features, feat, __ATOMIC_RELAXED);
+ }
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/mrs.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/mrs.inc
+index 32a21a2fba9a..e4d5e7f2bd7e 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/mrs.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/mrs.inc
+@@ -3,11 +3,10 @@
+ #define HAVE_SYS_AUXV_H
+ #endif
+ 
+-
+-
+ static void __init_cpu_features_constructor(unsigned long hwcap,
+                                             const __ifunc_arg_t *arg) {
+-#define setCPUFeature(F) __aarch64_cpu_features.features |= 1ULL << F
++  unsigned long long feat = 0;
++#define setCPUFeature(F) feat |= 1ULL << F
+ #define getCPUFeature(id, ftr) __asm__("mrs %0, " #id : "=r"(ftr))
+ #define extractBits(val, start, number)                                        \
+   (val & ((1ULL << number) - 1ULL) << start) >> start
+@@ -20,26 +19,20 @@ static void __init_cpu_features_constructor(unsigned long hwcap,
+     setCPUFeature(FEAT_PMULL);
+   if (hwcap & HWCAP_FLAGM)
+     setCPUFeature(FEAT_FLAGM);
+-  if (hwcap2 & HWCAP2_FLAGM2) {
+-    setCPUFeature(FEAT_FLAGM);
++  if (hwcap2 & HWCAP2_FLAGM2)
+     setCPUFeature(FEAT_FLAGM2);
+-  }
+-  if (hwcap & HWCAP_SM3 && hwcap & HWCAP_SM4)
++  if (hwcap & HWCAP_SM4)
+     setCPUFeature(FEAT_SM4);
+   if (hwcap & HWCAP_ASIMDDP)
+     setCPUFeature(FEAT_DOTPROD);
+   if (hwcap & HWCAP_ASIMDFHM)
+     setCPUFeature(FEAT_FP16FML);
+-  if (hwcap & HWCAP_FPHP) {
++  if (hwcap & HWCAP_FPHP)
+     setCPUFeature(FEAT_FP16);
+-    setCPUFeature(FEAT_FP);
+-  }
+   if (hwcap & HWCAP_DIT)
+     setCPUFeature(FEAT_DIT);
+   if (hwcap & HWCAP_ASIMDRDM)
+     setCPUFeature(FEAT_RDM);
+-  if (hwcap & HWCAP_ILRCPC)
+-    setCPUFeature(FEAT_RCPC2);
+   if (hwcap & HWCAP_AES)
+     setCPUFeature(FEAT_AES);
+   if (hwcap & HWCAP_SHA1)
+@@ -52,23 +45,20 @@ static void __init_cpu_features_constructor(unsigned long hwcap,
+     setCPUFeature(FEAT_FCMA);
+   if (hwcap & HWCAP_SB)
+     setCPUFeature(FEAT_SB);
+-  if (hwcap & HWCAP_SSBS)
++  if (hwcap & HWCAP_SSBS) {
++    setCPUFeature(FEAT_SSBS);
+     setCPUFeature(FEAT_SSBS2);
++  }
+   if (hwcap2 & HWCAP2_MTE) {
+     setCPUFeature(FEAT_MEMTAG);
+     setCPUFeature(FEAT_MEMTAG2);
+   }
+-  if (hwcap2 & HWCAP2_MTE3) {
+-    setCPUFeature(FEAT_MEMTAG);
+-    setCPUFeature(FEAT_MEMTAG2);
++  if (hwcap2 & HWCAP2_MTE3)
+     setCPUFeature(FEAT_MEMTAG3);
+-  }
+   if (hwcap2 & HWCAP2_SVEAES)
+     setCPUFeature(FEAT_SVE_AES);
+-  if (hwcap2 & HWCAP2_SVEPMULL) {
+-    setCPUFeature(FEAT_SVE_AES);
++  if (hwcap2 & HWCAP2_SVEPMULL)
+     setCPUFeature(FEAT_SVE_PMULL128);
+-  }
+   if (hwcap2 & HWCAP2_SVEBITPERM)
+     setCPUFeature(FEAT_SVE_BITPERM);
+   if (hwcap2 & HWCAP2_SVESHA3)
+@@ -105,6 +95,8 @@ static void __init_cpu_features_constructor(unsigned long hwcap,
+     setCPUFeature(FEAT_WFXT);
+   if (hwcap2 & HWCAP2_SME)
+     setCPUFeature(FEAT_SME);
++  if (hwcap2 & HWCAP2_SME2)
++    setCPUFeature(FEAT_SME2);
+   if (hwcap2 & HWCAP2_SME_I16I64)
+     setCPUFeature(FEAT_SME_I64);
+   if (hwcap2 & HWCAP2_SME_F64F64)
+@@ -113,86 +105,45 @@ static void __init_cpu_features_constructor(unsigned long hwcap,
+     setCPUFeature(FEAT_MOPS);
+   if (hwcap & HWCAP_CPUID) {
+     unsigned long ftr;
+-    getCPUFeature(ID_AA64PFR1_EL1, ftr);
+-    // ID_AA64PFR1_EL1.MTE >= 0b0001
+-    if (extractBits(ftr, 8, 4) >= 0x1)
+-      setCPUFeature(FEAT_MEMTAG);
+-    // ID_AA64PFR1_EL1.SSBS == 0b0001
+-    if (extractBits(ftr, 4, 4) == 0x1)
+-      setCPUFeature(FEAT_SSBS);
+-    // ID_AA64PFR1_EL1.SME == 0b0010
+-    if (extractBits(ftr, 24, 4) == 0x2)
+-      setCPUFeature(FEAT_SME2);
+-    getCPUFeature(ID_AA64PFR0_EL1, ftr);
+-    // ID_AA64PFR0_EL1.FP != 0b1111
+-    if (extractBits(ftr, 16, 4) != 0xF) {
+-      setCPUFeature(FEAT_FP);
+-      // ID_AA64PFR0_EL1.AdvSIMD has the same value as ID_AA64PFR0_EL1.FP
+-      setCPUFeature(FEAT_SIMD);
+-    }
+-    // ID_AA64PFR0_EL1.SVE != 0b0000
+-    if (extractBits(ftr, 32, 4) != 0x0) {
+-      // get ID_AA64ZFR0_EL1, that name supported
+-      // if sve enabled only
+-      getCPUFeature(S3_0_C0_C4_4, ftr);
+-      // ID_AA64ZFR0_EL1.SVEver == 0b0000
+-      if (extractBits(ftr, 0, 4) == 0x0)
+-        setCPUFeature(FEAT_SVE);
+-      // ID_AA64ZFR0_EL1.SVEver == 0b0001
+-      if (extractBits(ftr, 0, 4) == 0x1)
+-        setCPUFeature(FEAT_SVE2);
+-      // ID_AA64ZFR0_EL1.BF16 != 0b0000
+-      if (extractBits(ftr, 20, 4) != 0x0)
+-        setCPUFeature(FEAT_SVE_BF16);
+-    }
+-    getCPUFeature(ID_AA64ISAR0_EL1, ftr);
+-    // ID_AA64ISAR0_EL1.SHA3 != 0b0000
+-    if (extractBits(ftr, 32, 4) != 0x0)
+-      setCPUFeature(FEAT_SHA3);
++
+     getCPUFeature(ID_AA64ISAR1_EL1, ftr);
+-    // ID_AA64ISAR1_EL1.DPB >= 0b0001
+-    if (extractBits(ftr, 0, 4) >= 0x1)
+-      setCPUFeature(FEAT_DPB);
+-    // ID_AA64ISAR1_EL1.LRCPC != 0b0000
+-    if (extractBits(ftr, 20, 4) != 0x0)
+-      setCPUFeature(FEAT_RCPC);
+-    // ID_AA64ISAR1_EL1.LRCPC == 0b0011
+-    if (extractBits(ftr, 20, 4) == 0x3)
+-      setCPUFeature(FEAT_RCPC3);
+-    // ID_AA64ISAR1_EL1.SPECRES == 0b0001
+-    if (extractBits(ftr, 40, 4) == 0x2)
++    /* ID_AA64ISAR1_EL1.SPECRES >= 0b0001  */
++    if (extractBits(ftr, 40, 4) >= 0x1)
+       setCPUFeature(FEAT_PREDRES);
+-    // ID_AA64ISAR1_EL1.BF16 != 0b0000
+-    if (extractBits(ftr, 44, 4) != 0x0)
+-      setCPUFeature(FEAT_BF16);
+-    // ID_AA64ISAR1_EL1.LS64 >= 0b0001
++    /* ID_AA64ISAR1_EL1.LS64 >= 0b0001  */
+     if (extractBits(ftr, 60, 4) >= 0x1)
+       setCPUFeature(FEAT_LS64);
+-    // ID_AA64ISAR1_EL1.LS64 >= 0b0010
++    /* ID_AA64ISAR1_EL1.LS64 >= 0b0010  */
+     if (extractBits(ftr, 60, 4) >= 0x2)
+       setCPUFeature(FEAT_LS64_V);
+-    // ID_AA64ISAR1_EL1.LS64 >= 0b0011
++    /* ID_AA64ISAR1_EL1.LS64 >= 0b0011  */
+     if (extractBits(ftr, 60, 4) >= 0x3)
+       setCPUFeature(FEAT_LS64_ACCDATA);
+-  } else {
+-    // Set some features in case of no CPUID support
+-    if (hwcap & (HWCAP_FP | HWCAP_FPHP)) {
+-      setCPUFeature(FEAT_FP);
+-      // FP and AdvSIMD fields have the same value
+-      setCPUFeature(FEAT_SIMD);
+-    }
+-    if (hwcap & HWCAP_DCPOP || hwcap2 & HWCAP2_DCPODP)
+-      setCPUFeature(FEAT_DPB);
+-    if (hwcap & HWCAP_LRCPC || hwcap & HWCAP_ILRCPC)
+-      setCPUFeature(FEAT_RCPC);
+-    if (hwcap2 & HWCAP2_BF16 || hwcap2 & HWCAP2_EBF16)
+-      setCPUFeature(FEAT_BF16);
+-    if (hwcap2 & HWCAP2_SVEBF16)
+-      setCPUFeature(FEAT_SVE_BF16);
+-    if (hwcap2 & HWCAP2_SVE2 && hwcap & HWCAP_SVE)
+-      setCPUFeature(FEAT_SVE2);
+-    if (hwcap & HWCAP_SHA3)
+-      setCPUFeature(FEAT_SHA3);
+   }
++  if (hwcap & HWCAP_FP) {
++    setCPUFeature(FEAT_FP);
++    // FP and AdvSIMD fields have the same value
++    setCPUFeature(FEAT_SIMD);
++  }
++  if (hwcap & HWCAP_DCPOP)
++    setCPUFeature(FEAT_DPB);
++  if (hwcap & HWCAP_LRCPC)
++    setCPUFeature(FEAT_RCPC);
++  if (hwcap & HWCAP_ILRCPC)
++    setCPUFeature(FEAT_RCPC2);
++  if (hwcap2 & HWCAP2_LRCPC3)
++    setCPUFeature(FEAT_RCPC3);
++  if (hwcap2 & HWCAP2_BF16)
++    setCPUFeature(FEAT_BF16);
++  if (hwcap2 & HWCAP2_SVEBF16)
++    setCPUFeature(FEAT_SVE_BF16);
++  if (hwcap & HWCAP_SVE)
++    setCPUFeature(FEAT_SVE);
++  if (hwcap2 & HWCAP2_SVE2)
++    setCPUFeature(FEAT_SVE2);
++  if (hwcap & HWCAP_SHA3)
++    setCPUFeature(FEAT_SHA3);
+   setCPUFeature(FEAT_INIT);
++
++  __atomic_store_n(&__aarch64_cpu_features.features, feat, __ATOMIC_RELAXED);
+ }
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/sysauxv.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/sysauxv.inc
+index fb5722c4306f..486f77a1e4d2 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/sysauxv.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/fmv/sysauxv.inc
+@@ -1,13 +1,13 @@
+ void __init_cpu_features_resolver(unsigned long hwcap,
+                                   const __ifunc_arg_t *arg) {
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+   __init_cpu_features_constructor(hwcap, arg);
+ }
+ 
+ void CONSTRUCTOR_ATTRIBUTE __init_cpu_features(void) {
+   // CPU features already initialized.
+-  if (__aarch64_cpu_features.features)
++  if (__atomic_load_n(&__aarch64_cpu_features.features, __ATOMIC_RELAXED))
+     return;
+ 
+   unsigned long hwcap = getauxval(AT_HWCAP);
+diff --git a/compiler-rt/lib/builtins/cpu_model/aarch64/hwcap.inc b/compiler-rt/lib/builtins/cpu_model/aarch64/hwcap.inc
+index 7ddc125b26da..41aba82ef952 100644
+--- a/compiler-rt/lib/builtins/cpu_model/aarch64/hwcap.inc
++++ b/compiler-rt/lib/builtins/cpu_model/aarch64/hwcap.inc
+@@ -178,6 +178,12 @@
+ #ifndef HWCAP2_SVE_EBF16
+ #define HWCAP2_SVE_EBF16 (1ULL << 33)
+ #endif
++#ifndef HWCAP2_SME2
++#define HWCAP2_SME2 (1UL << 37)
++#endif
+ #ifndef HWCAP2_MOPS
+ #define HWCAP2_MOPS (1ULL << 43)
+ #endif
++#ifndef HWCAP2_LRCPC3
++#define HWCAP2_LRCPC3 (1UL << 46)
++#endif
+-- 
+2.45.2.803.g4e1b14247a-goog
+
