@@ -1389,6 +1389,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [FMV][compiler-rt] Fix cpu features initialization. (#95149)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/933d6be8e8c4a81f6409f4daaf704e7f363c6508.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 539617
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[hwasan] Add fixed_shadow_base flag\" (#95435)"
         },
         "platforms": [
