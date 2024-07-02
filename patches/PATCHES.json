@@ -1417,6 +1417,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] CodeGen, IR: Add target-{cpu,features} attributes to functions created via createWithDefaultAttr()."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/89d8df12015ac3440190d372a8d439614027dc2c.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 540886
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [

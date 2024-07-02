@@ -1,0 +1,264 @@
+From 89d8df12015ac3440190d372a8d439614027dc2c Mon Sep 17 00:00:00 2001
+From: pcc <peter@pcc.me.uk>
+Date: Tue, 25 Jun 2024 20:39:18 -0700
+Subject: [PATCH] CodeGen, IR: Add target-{cpu,features} attributes to
+ functions created via createWithDefaultAttr().
+
+Functions created with createWithDefaultAttr() need to have the
+correct target-{cpu,features} attributes to avoid miscompilations
+such as using the wrong relocation type to access globals (missing
+tagged-globals feature), clobbering registers specified via -ffixed-*
+(missing reserve-* feature), and so on.
+
+There's already a number of attributes copied from the module flags
+onto functions created by createWithDefaultAttr(). I don't think
+module flags are the right choice for the target attributes because
+we don't need the conflict resolution logic between modules with
+different target attributes, nor does it seem sensible to add it:
+there's no unambiguously "correct" set of target attributes when
+merging two modules with different attributes, and nor should there
+be; it's perfectly valid for two modules to be compiled with different
+target attributes, that's the whole reason why they are per-function.
+
+This also implies that it's unnecessary to serialize the attributes in
+bitcode, which implies that they shouldn't be stored on the module. We
+can also observe that for the most part, createWithDefaultAttr()
+is called from compiler passes such as sanitizers, coverage and
+profiling passes that are part of the compile time pipeline, not
+the LTO pipeline. This hints at a solution: we need to store the
+attributes in a non-serialized location associated with the ambient
+compilation context. Therefore in this patch I elected to store the
+attributes on the LLVMContext.
+
+There are calls to createWithDefaultAttr() in the NVPTX and AMDGPU
+backends, and those calls would happen at LTO time. For those callers,
+the bug still potentially exists and it would be necessary to refactor
+them to create the functions at compile time if this issue is relevant
+on those platforms.
+
+Fixes #93633.
+
+Reviewers: fmayer, MaskRay, eugenis
+
+Reviewed By: MaskRay
+
+Pull Request: https://github.com/llvm/llvm-project/pull/96721
+---
+ clang/lib/CodeGen/CodeGenAction.cpp             |  6 ++++++
+ clang/test/CodeGen/asan-frame-pointer.cpp       |  6 +++---
+ clang/test/CodeGen/asan-globals.cpp             |  4 ++--
+ clang/test/CodeGen/coverage-target-attr.c       | 17 +++++++++++++++++
+ .../test/CodeGen/sanitize-metadata-nosanitize.c |  2 +-
+ llvm/include/llvm/IR/Function.h                 |  6 +++++-
+ llvm/include/llvm/IR/LLVMContext.h              | 16 ++++++++++++++++
+ llvm/lib/IR/Function.cpp                        |  6 ++++++
+ llvm/lib/IR/LLVMContext.cpp                     | 16 ++++++++++++++++
+ llvm/lib/IR/LLVMContextImpl.h                   |  3 +++
+ 10 files changed, 75 insertions(+), 7 deletions(-)
+ create mode 100644 clang/test/CodeGen/coverage-target-attr.c
+
+diff --git a/clang/lib/CodeGen/CodeGenAction.cpp b/clang/lib/CodeGen/CodeGenAction.cpp
+index 6d3efdb5ffe3..7766383fdc89 100644
+--- a/clang/lib/CodeGen/CodeGenAction.cpp
++++ b/clang/lib/CodeGen/CodeGenAction.cpp
+@@ -299,6 +299,9 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
+   Ctx.setDiagnosticHandler(std::make_unique<ClangDiagnosticHandler>(
+       CodeGenOpts, this));
+ 
++  Ctx.setDefaultTargetCPU(TargetOpts.CPU);
++  Ctx.setDefaultTargetFeatures(llvm::join(TargetOpts.Features, ","));
++
+   Expected<std::unique_ptr<llvm::ToolOutputFile>> OptRecordFileOrErr =
+     setupLLVMOptimizationRemarks(
+       Ctx, CodeGenOpts.OptRecordFile, CodeGenOpts.OptRecordPasses,
+@@ -1205,6 +1208,9 @@ void CodeGenAction::ExecuteAction() {
+   Ctx.setDiagnosticHandler(
+       std::make_unique<ClangDiagnosticHandler>(CodeGenOpts, &Result));
+ 
++  Ctx.setDefaultTargetCPU(TargetOpts.CPU);
++  Ctx.setDefaultTargetFeatures(llvm::join(TargetOpts.Features, ","));
++
+   Expected<std::unique_ptr<llvm::ToolOutputFile>> OptRecordFileOrErr =
+       setupLLVMOptimizationRemarks(
+           Ctx, CodeGenOpts.OptRecordFile, CodeGenOpts.OptRecordPasses,
+diff --git a/clang/test/CodeGen/asan-frame-pointer.cpp b/clang/test/CodeGen/asan-frame-pointer.cpp
+index ed3624f3146e..ecc1a18c11da 100644
+--- a/clang/test/CodeGen/asan-frame-pointer.cpp
++++ b/clang/test/CodeGen/asan-frame-pointer.cpp
+@@ -8,12 +8,12 @@ int global;
+ 
+ // NONE: define internal void @asan.module_ctor() #[[#ATTR:]] {
+ // NONE: define internal void @asan.module_dtor() #[[#ATTR]] {
+-// NONE: attributes #[[#ATTR]] = { nounwind }
++// NONE: attributes #[[#ATTR]] = { nounwind
+ 
+ // NONLEAF: define internal void @asan.module_ctor() #[[#ATTR:]] {
+ // NONLEAF: define internal void @asan.module_dtor() #[[#ATTR]] {
+-// NONLEAF: attributes #[[#ATTR]] = { nounwind "frame-pointer"="non-leaf" }
++// NONLEAF: attributes #[[#ATTR]] = { nounwind "frame-pointer"="non-leaf"
+ 
+ // ALL: define internal void @asan.module_ctor() #[[#ATTR:]] {
+ // ALL: define internal void @asan.module_dtor() #[[#ATTR]] {
+-// ALL: attributes #[[#ATTR]] = { nounwind "frame-pointer"="all" }
++// ALL: attributes #[[#ATTR]] = { nounwind "frame-pointer"="all"
+diff --git a/clang/test/CodeGen/asan-globals.cpp b/clang/test/CodeGen/asan-globals.cpp
+index 4a370cbd4465..be52ea99de96 100644
+--- a/clang/test/CodeGen/asan-globals.cpp
++++ b/clang/test/CodeGen/asan-globals.cpp
+@@ -67,13 +67,13 @@ void func() {
+ // CHECK-NEXT: call void @__asan_unregister_globals
+ // CHECK-NEXT: ret void
+ 
+-// CHECK: attributes #[[#ATTR]] = { nounwind }
++// CHECK: attributes #[[#ATTR]] = { nounwind
+ 
+ /// If -fasynchronous-unwind-tables, set the module flag "uwtable". ctor/dtor
+ /// will thus get the uwtable attribute.
+ // RUN: %clang_cc1 -emit-llvm -fsanitize=address -funwind-tables=2 -o - %s | FileCheck %s --check-prefixes=UWTABLE
+ // UWTABLE: define internal void @asan.module_dtor() #[[#ATTR:]] {
+-// UWTABLE: attributes #[[#ATTR]] = { nounwind uwtable }
++// UWTABLE: attributes #[[#ATTR]] = { nounwind uwtable
+ // UWTABLE: ![[#]] = !{i32 7, !"uwtable", i32 2}
+ 
+ // IGNORELIST-SRC:     @{{.*}}extra_global{{.*}} ={{.*}} global
+diff --git a/clang/test/CodeGen/coverage-target-attr.c b/clang/test/CodeGen/coverage-target-attr.c
+new file mode 100644
+index 000000000000..8c8e6ee1c3b6
+--- /dev/null
++++ b/clang/test/CodeGen/coverage-target-attr.c
+@@ -0,0 +1,17 @@
++// RUN: %clang_cc1 -emit-llvm -coverage-notes-file=test.gcno -coverage-data-file=test.gcda -triple aarch64-linux-android30 -target-cpu generic -target-feature +tagged-globals -fsanitize=hwaddress %s -o %t
++// RUN: FileCheck %s < %t
++
++// CHECK: define internal void @__llvm_gcov_writeout() unnamed_addr [[ATTR:#[0-9]+]]
++// CHECK: define internal void @__llvm_gcov_reset() unnamed_addr [[ATTR]]
++// CHECK: define internal void @__llvm_gcov_init() unnamed_addr [[ATTR]]
++// CHECK: define internal void @hwasan.module_ctor() [[ATTR2:#[0-9]+]]
++// CHECK: attributes [[ATTR]] = {{.*}} "target-cpu"="generic" "target-features"="+tagged-globals"
++// CHECK: attributes [[ATTR2]] = {{.*}} "target-cpu"="generic" "target-features"="+tagged-globals"
++
++__attribute__((weak)) int foo = 0;
++
++__attribute__((weak)) void bar() {}
++
++int main() {
++  if (foo) bar();
++}
+diff --git a/clang/test/CodeGen/sanitize-metadata-nosanitize.c b/clang/test/CodeGen/sanitize-metadata-nosanitize.c
+index 60f93476b050..6414956fb679 100644
+--- a/clang/test/CodeGen/sanitize-metadata-nosanitize.c
++++ b/clang/test/CodeGen/sanitize-metadata-nosanitize.c
+@@ -93,7 +93,7 @@ __attribute__((no_sanitize("all"))) int test_no_sanitize_all(int *x, int *y) {
+ // CHECK: attributes #1 = { mustprogress nofree norecurse nounwind willreturn memory(write, argmem: readwrite, inaccessiblemem: none) "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
+ // CHECK: attributes #2 = { disable_sanitizer_instrumentation mustprogress nofree norecurse nounwind willreturn memory(write, argmem: readwrite, inaccessiblemem: none) "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
+ // CHECK: attributes #3 = { mustprogress nofree norecurse nounwind willreturn memory(write, argmem: readwrite, inaccessiblemem: none) "min-legal-vector-width"="0" "no-trapping-math"="true" "no_sanitize_thread" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
+-// CHECK: attributes #4 = { nounwind }
++// CHECK: attributes #4 = { nounwind "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
+ //.
+ // CHECK: !2 = !{!"sanmd_covered!C", !3}
+ // CHECK: !3 = !{i64 0}
+diff --git a/llvm/include/llvm/IR/Function.h b/llvm/include/llvm/IR/Function.h
+index 5468cedb0815..6bd997b7ac75 100644
+--- a/llvm/include/llvm/IR/Function.h
++++ b/llvm/include/llvm/IR/Function.h
+@@ -181,10 +181,14 @@ public:
+                           const Twine &N, Module &M);
+ 
+   /// Creates a function with some attributes recorded in llvm.module.flags
+-  /// applied.
++  /// and the LLVMContext applied.
+   ///
+   /// Use this when synthesizing new functions that need attributes that would
+   /// have been set by command line options.
++  ///
++  /// This function should not be called from backends or the LTO pipeline. If
++  /// it is called from one of those places, some default attributes will not be
++  /// applied to the function.
+   static Function *createWithDefaultAttr(FunctionType *Ty, LinkageTypes Linkage,
+                                          unsigned AddrSpace,
+                                          const Twine &N = "",
+diff --git a/llvm/include/llvm/IR/LLVMContext.h b/llvm/include/llvm/IR/LLVMContext.h
+index 89ad6f1572c6..6ffa2bdaa319 100644
+--- a/llvm/include/llvm/IR/LLVMContext.h
++++ b/llvm/include/llvm/IR/LLVMContext.h
+@@ -327,6 +327,22 @@ public:
+   [[deprecated("Always returns false")]]
+   bool supportsTypedPointers() const;
+ 
++  /// Get or set the current "default" target CPU (target-cpu function
++  /// attribute). The intent is that compiler frontends will set this to a value
++  /// that reflects the attribute that a function would get "by default" without
++  /// any specific function attributes, and compiler passes will attach the
++  /// attribute to newly created functions that are not associated with a
++  /// particular function, such as global initializers.
++  /// Function::createWithDefaultAttr() will create functions with this
++  /// attribute. This function should only be called by passes that run at
++  /// compile time and not by the backend or LTO passes.
++  StringRef getDefaultTargetCPU();
++  void setDefaultTargetCPU(StringRef CPU);
++
++  /// Similar to {get,set}DefaultTargetCPU() but for default target-features.
++  StringRef getDefaultTargetFeatures();
++  void setDefaultTargetFeatures(StringRef Features);
++
+ private:
+   // Module needs access to the add/removeModule methods.
+   friend class Module;
+diff --git a/llvm/lib/IR/Function.cpp b/llvm/lib/IR/Function.cpp
+index 9360e6d7d274..1190a3fb9be2 100644
+--- a/llvm/lib/IR/Function.cpp
++++ b/llvm/lib/IR/Function.cpp
+@@ -397,6 +397,12 @@ Function *Function::createWithDefaultAttr(FunctionType *Ty,
+   }
+   if (M->getModuleFlag("function_return_thunk_extern"))
+     B.addAttribute(Attribute::FnRetThunkExtern);
++  StringRef DefaultCPU = F->getContext().getDefaultTargetCPU();
++  if (!DefaultCPU.empty())
++    B.addAttribute("target-cpu", DefaultCPU);
++  StringRef DefaultFeatures = F->getContext().getDefaultTargetFeatures();
++  if (!DefaultFeatures.empty())
++    B.addAttribute("target-features", DefaultFeatures);
+   F->addFnAttrs(B);
+   return F;
+ }
+diff --git a/llvm/lib/IR/LLVMContext.cpp b/llvm/lib/IR/LLVMContext.cpp
+index 8120cccace40..194c7e7581cf 100644
+--- a/llvm/lib/IR/LLVMContext.cpp
++++ b/llvm/lib/IR/LLVMContext.cpp
+@@ -390,3 +390,19 @@ void LLVMContext::setOpaquePointers(bool Enable) const {
+ bool LLVMContext::supportsTypedPointers() const {
+   return false;
+ }
++
++StringRef LLVMContext::getDefaultTargetCPU() {
++  return pImpl->DefaultTargetCPU;
++}
++
++void LLVMContext::setDefaultTargetCPU(StringRef CPU) {
++  pImpl->DefaultTargetCPU = CPU;
++}
++
++StringRef LLVMContext::getDefaultTargetFeatures() {
++  return pImpl->DefaultTargetFeatures;
++}
++
++void LLVMContext::setDefaultTargetFeatures(StringRef Features) {
++  pImpl->DefaultTargetFeatures = Features;
++}
+diff --git a/llvm/lib/IR/LLVMContextImpl.h b/llvm/lib/IR/LLVMContextImpl.h
+index 5f8df87149f0..937a87d68617 100644
+--- a/llvm/lib/IR/LLVMContextImpl.h
++++ b/llvm/lib/IR/LLVMContextImpl.h
+@@ -1723,6 +1723,9 @@ public:
+   }
+ 
+   void deleteTrailingDbgRecords(BasicBlock *B) { TrailingDbgRecords.erase(B); }
++
++  std::string DefaultTargetCPU;
++  std::string DefaultTargetFeatures;
+ };
+ 
+ } // end namespace llvm
+-- 
+2.45.2.803.g4e1b14247a-goog
+
