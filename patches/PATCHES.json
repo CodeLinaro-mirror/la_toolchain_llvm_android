@@ -1431,6 +1431,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Enable frame pointer for non-leaf functions on Android (#97614)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/402eca265f7162e26b8b74d18297fd76c9f100de.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 542126
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [

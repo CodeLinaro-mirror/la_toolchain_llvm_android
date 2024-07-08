@@ -1,0 +1,97 @@
+From dd57f0eb44c17f713b5bc59a845261dddf9a4216 Mon Sep 17 00:00:00 2001
+From: yabinc <yabinc@google.com>
+Date: Mon, 8 Jul 2024 10:01:38 -0700
+Subject: [PATCH] Enable frame pointer for non-leaf functions on Android
+ (#97614)
+
+On Android, we always want frame pointers to make debugging in the field
+easier. Since frame pointers are already enabled for AArch64, ARM and
+RISCV64, effectively this change further enables frame pointers for X86
+and X86_64.
+---
+ clang/lib/Driver/ToolChains/CommonArgs.cpp | 17 +++--------------
+ clang/test/Driver/frame-pointer.c          | 15 +++++++++++----
+ 2 files changed, 14 insertions(+), 18 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/CommonArgs.cpp b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+index 100e71245394..730afef57959 100644
+--- a/clang/lib/Driver/ToolChains/CommonArgs.cpp
++++ b/clang/lib/Driver/ToolChains/CommonArgs.cpp
+@@ -78,19 +78,8 @@ static bool useFramePointerForTargetByDefault(const llvm::opt::ArgList &Args,
+       !Args.hasArg(clang::driver::options::OPT_mfentry))
+     return true;
+ 
+-  if (Triple.isAndroid()) {
+-    switch (Triple.getArch()) {
+-    case llvm::Triple::aarch64:
+-    case llvm::Triple::arm:
+-    case llvm::Triple::armeb:
+-    case llvm::Triple::thumb:
+-    case llvm::Triple::thumbeb:
+-    case llvm::Triple::riscv64:
+-      return true;
+-    default:
+-      break;
+-    }
+-  }
++  if (Triple.isAndroid())
++    return true;
+ 
+   switch (Triple.getArch()) {
+   case llvm::Triple::xcore:
+@@ -200,7 +189,7 @@ getFramePointerKind(const llvm::opt::ArgList &Args,
+       Args.hasFlag(clang::driver::options::OPT_momit_leaf_frame_pointer,
+                    clang::driver::options::OPT_mno_omit_leaf_frame_pointer,
+                    Triple.isAArch64() || Triple.isPS() || Triple.isVE() ||
+-                       (Triple.isAndroid() && Triple.isRISCV64()));
++                       (Triple.isAndroid() && !Triple.isARM()));
+   if (NoOmitFP || mustUseNonLeafFramePointerForTarget(Triple) ||
+       (!OmitFP && useFramePointerForTargetByDefault(Args, Triple))) {
+     if (OmitLeafFP)
+diff --git a/clang/test/Driver/frame-pointer.c b/clang/test/Driver/frame-pointer.c
+index 2b4287bf447c..2015fa520c2a 100644
+--- a/clang/test/Driver/frame-pointer.c
++++ b/clang/test/Driver/frame-pointer.c
+@@ -4,6 +4,9 @@
+ // RUN: %clang --target=i386-pc-linux -### -S -O3 %s 2>&1 | FileCheck -check-prefix=CHECK3-32 %s
+ // RUN: %clang --target=i386-pc-linux -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECKs-32 %s
+ 
++// RUN: %clang --target=i386-linux-android -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=i386-linux-android -### -S -O1 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=i386-linux-android -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
+ 
+ // RUN: %clang --target=x86_64-pc-linux -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK0-64 %s
+ // RUN: %clang --target=x86_64-pc-linux -### -S -O1 %s 2>&1 | FileCheck -check-prefix=CHECK1-64 %s
+@@ -12,6 +15,10 @@
+ // RUN: %clang --target=x86_64-pc-linux -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECKs-64 %s
+ // RUN: %clang --target=x86_64-pc-win32-macho -### -S -O3 %s 2>&1 | FileCheck -check-prefix=CHECK-MACHO-64 %s
+ 
++// RUN: %clang --target=x86_64-linux-android -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=x86_64-linux-android -### -S -O1 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=x86_64-linux-android -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++
+ // Trust the above to get the optimizations right, and just test other targets
+ // that want this by default.
+ // RUN: %clang --target=s390x-pc-linux -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK0-64 %s
+@@ -57,9 +64,9 @@
+ // RUN: %clang --target=riscv64-unknown-linux-gnu -### -S -O3 %s 2>&1 | FileCheck -check-prefix=CHECK3-64 %s
+ // RUN: %clang --target=riscv64-unknown-linux-gnu -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECKs-64 %s
+ 
+-// RUN: %clang --target=riscv64-linux-android -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID-64 %s
+-// RUN: %clang --target=riscv64-linux-android -### -S -O1 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID-64 %s
+-// RUN: %clang --target=riscv64-linux-android -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID-64 %s
++// RUN: %clang --target=riscv64-linux-android -### -S -O0 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=riscv64-linux-android -### -S -O1 %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
++// RUN: %clang --target=riscv64-linux-android -### -S -Os %s 2>&1 | FileCheck -check-prefix=CHECK-ANDROID %s
+ 
+ // RUN: %clang --target=loongarch32 -### -S -O0 %s -o %t.s 2>&1 | FileCheck -check-prefix=CHECK0-32 %s
+ // RUN: %clang --target=loongarch32 -### -S -O1 %s -o %t.s 2>&1 | FileCheck -check-prefix=CHECK1-32 %s
+@@ -86,4 +93,4 @@
+ // CHECKs-64-NOT: -mframe-pointer=all
+ // CHECK-MACHO-64: -mframe-pointer=all
+ 
+-// CHECK-ANDROID-64: -mframe-pointer=non-leaf
++// CHECK-ANDROID: -mframe-pointer=non-leaf
+-- 
+2.45.2.803.g4e1b14247a-goog
+
