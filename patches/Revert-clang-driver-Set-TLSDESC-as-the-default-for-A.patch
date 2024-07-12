@@ -1,0 +1,48 @@
+From 03eadd9bdffde2ae7d8e3760af54508eb465bb8e Mon Sep 17 00:00:00 2001
+From: Yabin Cui <yabinc@google.com>
+Date: Thu, 11 Jul 2024 16:47:35 -0700
+Subject: [PATCH] Revert "[clang][driver] Set TLSDESC as the default for
+ Android on RISC-V (#81198)"
+
+This reverts commit 407f9c06ea2a4f3fc32647ba22e5b60f695ca4b3.
+
+Can be removed once b/352589494 is fixed.
+---
+ clang/test/Driver/tls-dialect.c         | 4 ----
+ llvm/include/llvm/TargetParser/Triple.h | 5 ++++-
+ 2 files changed, 4 insertions(+), 5 deletions(-)
+
+diff --git a/clang/test/Driver/tls-dialect.c b/clang/test/Driver/tls-dialect.c
+index f73915b28ec2..4e105ce3cea5 100644
+--- a/clang/test/Driver/tls-dialect.c
++++ b/clang/test/Driver/tls-dialect.c
+@@ -3,10 +3,6 @@
+ // RUN: %clang -### --target=riscv64-linux %s 2>&1 | FileCheck --check-prefix=NODESC %s
+ // RUN: %clang -### --target=x86_64-linux -mtls-dialect=gnu %s 2>&1 | FileCheck --check-prefix=NODESC %s
+ 
+-/// Android supports TLSDESC by default on RISC-V
+-/// TLSDESC is not on by default in Linux, even on RISC-V, and is covered above
+-// RUN: %clang -### --target=riscv64-android %s 2>&1 | FileCheck --check-prefix=DESC %s
+-
+ /// LTO
+ // RUN: %clang -### --target=riscv64-linux -flto -mtls-dialect=desc %s 2>&1 | FileCheck --check-prefix=LTO-DESC %s
+ // RUN: %clang -### --target=riscv64-linux -flto %s 2>&1 | FileCheck --check-prefix=LTO-NODESC %s
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index f256e2b205a8..6d14cdba38c9 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -1044,7 +1044,10 @@ public:
+ 
+   /// True if the target supports both general-dynamic and TLSDESC, and TLSDESC
+   /// is enabled by default.
+-  bool hasDefaultTLSDESC() const { return isAndroid() && isRISCV64(); }
++  bool hasDefaultTLSDESC() const {
++    // TODO: Improve check for other platforms, like Android, and RISC-V
++    return false;
++  }
+ 
+   /// Tests whether the target uses -data-sections as default.
+   bool hasDefaultDataSections() const {
+-- 
+2.45.2.993.g49e7a77208-goog
+
