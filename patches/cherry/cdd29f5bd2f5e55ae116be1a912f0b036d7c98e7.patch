@@ -1,0 +1,127 @@
+From cdd29f5bd2f5e55ae116be1a912f0b036d7c98e7 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Thu, 11 Jul 2024 17:59:00 -0700
+Subject: [PATCH] [ELF,RISCV] Fix TLSDESC=>IE when there is no TLS section
+
+See the comment in handleTlsRelocation. For TLSDESC=>IE (the TLS symbol
+is defined in another DSO), R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL}
+referencing a non-preemptible label uses the `R_RELAX_TLS_GD_TO_LE` code
+path.
+
+If there is no TLS section, `getTlsTpOffset` will be called with null
+`Out::tlsPhdr`, leading to a null pointer dereference. Since the return
+value is used by `RISCV::relocateAlloc` and ignored there, just return
+0.
+
+LoongArch TLSDESC doesn't use STT_NOTYPE labels. The `if (..) return 0;`
+is a no-op for LoongArch.
+
+This patch is a follow-up to #79239 and fixes some comments.
+
+Pull Request: https://github.com/llvm/llvm-project/pull/98569
+---
+ lld/ELF/Arch/RISCV.cpp       |  4 ++--
+ lld/ELF/InputSection.cpp     |  5 +++++
+ lld/ELF/Relocations.cpp      |  4 ++--
+ lld/test/ELF/riscv-tlsdesc.s | 25 +++++++++++++++++++++++++
+ 4 files changed, 34 insertions(+), 4 deletions(-)
+
+diff --git a/lld/ELF/Arch/RISCV.cpp b/lld/ELF/Arch/RISCV.cpp
+index faacc8f834be..6af89ce3517b 100644
+--- a/lld/ELF/Arch/RISCV.cpp
++++ b/lld/ELF/Arch/RISCV.cpp
+@@ -631,8 +631,8 @@ void RISCV::relocateAlloc(InputSectionBase &sec, uint8_t *buf) const {
+       continue;
+     case R_RELAX_TLS_GD_TO_LE:
+       // See the comment in handleTlsRelocation. For TLSDESC=>IE,
+-      // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12,CALL} also reach here. If isToIe is
+-      // true, this is actually TLSDESC=>IE optimization.
++      // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12,CALL} also reach here. If isToLe is
++      // false, this is actually TLSDESC=>IE optimization.
+       if (rel.type == R_RISCV_TLSDESC_HI20) {
+         tlsdescVal = val;
+         isToLe = true;
+diff --git a/lld/ELF/InputSection.cpp b/lld/ELF/InputSection.cpp
+index 4420be77f668..12ab1f1eac80 100644
+--- a/lld/ELF/InputSection.cpp
++++ b/lld/ELF/InputSection.cpp
+@@ -660,6 +660,11 @@ static int64_t getTlsTpOffset(const Symbol &s) {
+     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1)) - 0x7000;
+   case EM_LOONGARCH:
+   case EM_RISCV:
++    // See the comment in handleTlsRelocation. For TLSDESC=>IE,
++    // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} also reach here. While
++    // `tls` may be null, the return value is ignored.
++    if (s.type != STT_TLS)
++      return 0;
+     return s.getVA(0) + (tls->p_vaddr & (tls->p_align - 1));
+ 
+     // Variant 2.
+diff --git a/lld/ELF/Relocations.cpp b/lld/ELF/Relocations.cpp
+index da4724d8f653..9ad180306bcd 100644
+--- a/lld/ELF/Relocations.cpp
++++ b/lld/ELF/Relocations.cpp
+@@ -1399,8 +1399,8 @@ static unsigned handleTlsRelocation(RelType type, Symbol &sym,
+     // depending on the symbol being locally defined or not.
+     //
+     // R_RISCV_TLSDESC_{LOAD_LO12,ADD_LO12_I,CALL} reference a non-preemptible
+-    // label, so the LE optimization will be categorized as
+-    // R_RELAX_TLS_GD_TO_LE. We fix the categorization in RISCV::relocateAlloc.
++    // label, so TLSDESC=>IE will be categorized as R_RELAX_TLS_GD_TO_LE. We fix
++    // the categorization in RISCV::relocateAlloc.
+     if (sym.isPreemptible) {
+       sym.setFlags(NEEDS_TLSGD_TO_IE);
+       c.addReloc({target->adjustTlsExpr(type, R_RELAX_TLS_GD_TO_IE), type,
+diff --git a/lld/test/ELF/riscv-tlsdesc.s b/lld/test/ELF/riscv-tlsdesc.s
+index 935ecbddfbff..6c0dd9a247a4 100644
+--- a/lld/test/ELF/riscv-tlsdesc.s
++++ b/lld/test/ELF/riscv-tlsdesc.s
+@@ -37,6 +37,11 @@
+ # RUN: llvm-mc -triple=riscv32 -filetype=obj d.s -o d.32.o --defsym ELF32=1
+ # RUN: ld.lld -shared -soname=d.32.so -o d.32.so d.32.o --fatal-warnings
+ 
++## The output has a TLS reference but no TLS section.
++# RUN: llvm-mc -filetype=obj -triple=riscv64 a1.s -o a1.64.o
++# RUN: ld.lld -pie a1.64.o c.64.so -o a1.64
++# RUN: llvm-objdump --no-show-raw-insn -M no-aliases -Rd a1.64 | FileCheck %s --check-prefix=IE64A
++
+ # GD64-RELA:      .rela.dyn {
+ # GD64-RELA-NEXT:   0x2408 R_RISCV_TLSDESC - 0x7FF
+ # GD64-RELA-NEXT:   0x23E8 R_RISCV_TLSDESC a 0x0
+@@ -164,6 +169,17 @@
+ # IE32-NEXT:         lw      a0, 0x80(a0)
+ # IE32-NEXT:         add     a0, a0, tp
+ 
++# IE64A:       OFFSET           TYPE                     VALUE
++# IE64A-NEXT:  0000000000002340 R_RISCV_TLS_TPREL64      c
++# IE64A-EMPTY:
++## &.got[c]-. = 0x2340 - 0x1258 = 0x10e8
++# IE64A-LABEL: <.Ltlsdesc_hi2>:
++# IE64A-NEXT:         addi    zero, zero, 0x0
++# IE64A-NEXT:         addi    zero, zero, 0x0
++# IE64A-NEXT:   1258: auipc   a0, 0x1
++# IE64A-NEXT:         ld      a0, 0xe8(a0)
++# IE64A-NEXT:         add     a0, a0, tp
++
+ #--- a.s
+ .macro load dst, src
+ .ifdef ELF32
+@@ -202,6 +218,15 @@ a:
+ b:
+ .zero 1
+ 
++#--- a1.s
++## a.s without TLS definitions.
++.Ltlsdesc_hi2:
++  auipc a4, %tlsdesc_hi(c)
++  ld    a5, %tlsdesc_load_lo(.Ltlsdesc_hi2)(a4)
++  addi  a0, a4, %tlsdesc_add_lo(.Ltlsdesc_hi2)
++  jalr  t0, 0(a5), %tlsdesc_call(.Ltlsdesc_hi2)
++  add   a0, a0, tp
++
+ #--- c.s
+ .tbss
+ .globl c
+-- 
+2.45.2.993.g49e7a77208-goog
+
