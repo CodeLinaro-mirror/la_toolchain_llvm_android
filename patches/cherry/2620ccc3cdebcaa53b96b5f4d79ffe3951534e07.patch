@@ -1,0 +1,111 @@
+From 2620ccc3cdebcaa53b96b5f4d79ffe3951534e07 Mon Sep 17 00:00:00 2001
+From: Kalesh Singh <kaleshsingh96@gmail.com>
+Date: Fri, 12 Apr 2024 10:43:59 -0700
+Subject: [PATCH] ANDROID: x86_64: Set default max-page-size to 16kB (#87413)
+
+Android now supports both 4kB and 16kB page sizes. The vast majority of
+android apps are developed on x86_64 machines. In order to provide
+emulators that support larger page sizes, Android emulates the page-size
+in x86_64 to support testing apps for large page size support.
+
+For this reason, update Android x86_64 ELFs default max-page-size to
+16384 to support both 4kB and 16kB page-size devices.
+
+Increase max-page-size raises concerns of increased disk space and extra
+VMA slab memory.
+
+In Android, RO partitions use sparse images, so that the holes on ELFs
+don't allocate blocks on disk; and PackageManager ensures to punch holes
+in ELF-paddings on the /data partition when apps are installed.
+
+Extra VMA slab memory is addressed by the bionic loader, which extends
+segment VMAs to cover the gaps between consecutive segment mappings, to
+avoid the extra VMAs needed for the gap PROT_NONE mappings (---p). This
+optimization is done in the crt_pad_segment note [1] is present in the
+ELF.
+
+[1]
+https://cs.android.com/android/platform/superproject/main/+/189e480390ef13199d59e1fb54078e8b78ea6f79:bionic/libc/arch-common/bionic/crt_pad_segment.S
+
+---------
+
+Signed-off-by: Kalesh Singh <kaleshsingh@google.com>
+Co-authored-by: Kalesh Singh <kaleshsingh@google.com>
+---
+ clang/lib/Driver/ToolChains/Linux.cpp |  3 ++-
+ clang/test/Driver/android-link.cpp    | 38 +++++++++++++++++----------
+ 2 files changed, 26 insertions(+), 15 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Linux.cpp b/clang/lib/Driver/ToolChains/Linux.cpp
+index 6c2f23e57bce..fb65881061ef 100644
+--- a/clang/lib/Driver/ToolChains/Linux.cpp
++++ b/clang/lib/Driver/ToolChains/Linux.cpp
+@@ -244,8 +244,9 @@ Linux::Linux(const Driver &D, const llvm::Triple &Triple, const ArgList &Args)
+       // Android ARM uses max-page-size=4096 to reduce VMA usage.
+       ExtraOpts.push_back("-z");
+       ExtraOpts.push_back("max-page-size=4096");
+-    } else if (Triple.isAArch64()) {
++    } else if (Triple.isAArch64() || Triple.getArch() == llvm::Triple::x86_64) {
+       // Android AArch64 uses max-page-size=16384 to support 4k/16k page sizes.
++      // Android emulates a 16k page size for app testing on x86_64 machines.
+       ExtraOpts.push_back("-z");
+       ExtraOpts.push_back("max-page-size=16384");
+     }
+diff --git a/clang/test/Driver/android-link.cpp b/clang/test/Driver/android-link.cpp
+index f9bdd00507d7..ab7dae540558 100644
+--- a/clang/test/Driver/android-link.cpp
++++ b/clang/test/Driver/android-link.cpp
+@@ -1,26 +1,36 @@
+-// Check that we add relevant linker flags for Android ARM/AArch64.
++// Check that we add relevant linker flags for Android ARM/AArch64/i386/x86_64.
+ 
+-// RUN: %clang -### -target arm-linux-androideabi %s 2>&1 | \
+-// RUN:   FileCheck --check-prefix=MAX-PAGE-SIZE %s
++// RUN: %clang -### --target=arm-linux-androideabi %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=MAX-PAGE-SIZE-4KB %s
+ 
+-// RUN: %clang -target aarch64-none-linux-android \
++// RUN: %clang --target=aarch64-none-linux-android \
+ // RUN:   -### -v %s 2> %t
+ // RUN: FileCheck -check-prefix=GENERIC-ARM < %t %s
+-//
+-// RUN: %clang -target aarch64-none-linux-android \
++
++// RUN: %clang --target=aarch64-none-linux-android \
+ // RUN:   -mcpu=cortex-a53 -### -v %s 2> %t
+ // RUN: FileCheck -check-prefix=CORTEX-A53 < %t %s
+-//
+-// RUN: %clang -target aarch64-none-linux-android \
++
++// RUN: %clang --target=aarch64-none-linux-android \
+ // RUN:   -mcpu=cortex-a57 -### -v %s 2> %t
+ // RUN: FileCheck -check-prefix=CORTEX-A57 < %t %s
+-//
+-// RUN: %clang -target aarch64-none-linux-android \
++
++// RUN: %clang --target=aarch64-none-linux-android \
+ // RUN:   -### -v %s 2> %t
+-// RUN: FileCheck -check-prefix=MAX-PAGE-SIZE-AARCH64 < %t %s
+-//
++// RUN: FileCheck -check-prefix=MAX-PAGE-SIZE-16KB < %t %s
++
++// RUN: %clang -### --target=i386-none-linux-android %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=NO-MAX-PAGE-SIZE-16KB %s
++
++// RUN: %clang -### --target=x86_64-none-linux-gnu %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=NO-MAX-PAGE-SIZE-16KB %s
++
++// RUN: %clang -### --target=x86_64-none-linux-android %s 2>&1 | \
++// RUN:   FileCheck --check-prefix=MAX-PAGE-SIZE-16KB %s
++
+ // GENERIC-ARM: --fix-cortex-a53-843419
+ // CORTEX-A53: --fix-cortex-a53-843419
+ // CORTEX-A57-NOT: --fix-cortex-a53-843419
+-// MAX-PAGE-SIZE: "-z" "max-page-size=4096"
+-// MAX-PAGE-SIZE-AARCH64: "-z" "max-page-size=16384"
++// MAX-PAGE-SIZE-4KB: "-z" "max-page-size=4096"
++// MAX-PAGE-SIZE-16KB: "-z" "max-page-size=16384"
++// NO-MAX-PAGE-SIZE-16KB-NOT: "-z" "max-page-size=16384"
+-- 
+2.45.2.993.g49e7a77208-goog
+
