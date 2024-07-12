@@ -1249,6 +1249,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISCV][lld] Set the type of TLSDESC relocation's referenced local symbol to STT_NOTYPE"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/dfe4ca9b7f4a422500d78280dc5eefd1979939e6.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 531573
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Don't push and pop extensions diagnostics when using clang modules (#85917)"
         },
         "platforms": [
@@ -1454,6 +1468,20 @@
         "version_range": {
             "from": 530567,
             "until": 542126
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF,RISCV] Fix TLSDESC=>IE when there is no TLS section"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/cdd29f5bd2f5e55ae116be1a912f0b036d7c98e7.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 542643
         }
     },
     {
@@ -1761,20 +1789,6 @@
         "rel_patch_path": "Revert-Fix-diagnostic-for-stdatomic.h-before-C++23.patch",
         "version_range": {
             "from": 529470,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert [clang][driver] Set TLSDESC as the default for Android on RISC-V (#81198)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-clang-driver-Set-TLSDESC-as-the-default-for-A.patch",
-        "version_range": {
-            "from": 530567,
             "until": null
         }
     }
