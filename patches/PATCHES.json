@@ -1291,6 +1291,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ANDROID: x86_64: Set default max-page-size to 16kB (#87413)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2620ccc3cdebcaa53b96b5f4d79ffe3951534e07.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 533463
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[C++20] [Modules] Don't import non-inline function bodies even if it is marked as always_inline\""
         },
         "platforms": [
