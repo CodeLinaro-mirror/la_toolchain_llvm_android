@@ -36,3 +36,8 @@ prebuilts/python/linux-x86/bin/python3 \
   toolchain/llvm_android/test_compiler.py --build-only \
   --target ${AOSP_BUILD_TARGET}-trunk_staging-userdebug \
   --clang-package-path ${KOKORO_GFILE_DIR} .
+
+if [ -f out/dist/logs/error.log ]; then
+  cat out/dist/logs/error.log
+fi
+
