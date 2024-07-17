@@ -104,11 +104,10 @@ class PatchItem:
 
     @property
     def pr_link(self) -> str:
-        m = next(re.match(r'Pull Request: (.+)', line)
-                 for line in open(f'patches/{self.rel_patch_path}'))
-
-        assert m, f'No PR link found in: {self.rel_patch_path}'
-        return m.group(1)
+        for line in open(f'patches/{self.rel_patch_path}'):
+            if m := re.match(r'Pull Request: (.+)', line):
+                return m.group(1)
+        raise Exception(f'No PR link found in: {self.rel_patch_path}')
 
     @property
     def end_version(self) -> Optional[int]:
@@ -289,7 +288,7 @@ def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: b
 
 def create_patch_for_pr(pr: str, start_version: int) -> PatchList:
     pr_url = f'https://api.github.com/repos/llvm/llvm-project/pulls/{pr}'
-    patch_url_req = urllib.request.Request(f'https://github.com/llvm/llvm-project/pull/{pr}.diff',
+    patch_url_req = urllib.request.Request(f'https://github.com/llvm/llvm-project/pull/{pr}.patch',
                                            method="HEAD")
     patch_url = urllib.request.urlopen(patch_url_req).url
 
@@ -303,12 +302,14 @@ def create_patch_for_pr(pr: str, start_version: int) -> PatchList:
     abs_file_name = paths.SCRIPTS_DIR / 'patches' / file_name
     # Download the file from `patch_url` and save in `abs_file_name`:
     urllib.request.urlretrieve(patch_url, abs_file_name)
-    # Add link to Differential Revision at the beginning of the file
-    patch_prefix = f'Pull Request: {patch_url}\nSubject: {title}'
-    with open(abs_file_name, 'r+') as f:
-        content = f.read()
-        f.seek(0, 0)
-        f.write(patch_prefix + '\n\n---\n' + content)
+    # Add link to Differential Revision
+    link_line = f'Pull Request: {patch_url}\n'
+    data = abs_file_name.read_text()
+    dash_pos = data.find('\n---')
+    assert dash_pos != -1
+    dash_pos += 1
+    data = data[:dash_pos] + link_line + data[dash_pos:]
+    abs_file_name.write_text(data)
 
     # Extend the PATCHES.json
     result = PatchList()
