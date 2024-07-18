@@ -494,6 +494,7 @@ class MinGWConfig(_GccConfig):
 class MSVCConfig(Config):
     """Configuration for MSVC toolchain."""
     target_os: hosts.Host = hosts.Host.Windows
+    is_cross_compiling: bool = True
 
     # We still use lld but don't want -fuse-ld=lld in linker flags.
     use_lld: bool = False
@@ -526,7 +527,7 @@ class MSVCConfig(Config):
         return super().cflags + [
             '-w',
             '-fuse-ld=lld',
-            '--target={self.llvm_triple}',
+            f'--target={self.llvm_triple}',
             '-fms-compatibility-version=19.10',
             '-D_HAS_EXCEPTIONS=1',
             '-D_CRT_STDIO_ISO_WIDE_SPECIFIERS'
