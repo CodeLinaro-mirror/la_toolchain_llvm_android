@@ -19,7 +19,7 @@ Each clang prebuilt directory has a `clang_source_info.md` (starting with clang-
 
 At any point of time, there is an in-progress attempt to release a new clang.  Due to the complexity of the Android code base and breaking changes from llvm-project, there is no guaranteed schedule or cadence in clang updates.
 
-In practice, there have been an average of 3-4 updates a year (rougly new clang every 3-4 months) for the past several months.
+In practice, there have been an average of 3-4 updates a year (rougly new clang every 3-4 months) for the past several years.
 
 > Subscribe to https://groups.google.com/g/android-llvm to get notified when a clang version is planned and when it is released.
 
