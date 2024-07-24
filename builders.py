@@ -1124,10 +1124,6 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         # This doesn't actually control whether thread_local is used in most of the code
         # base, just whether it is used in the implementation of C++ exception storage
         # for libc++abi.
-        if self._config.target_arch is hosts.Arch.RISCV64:
-            # But rv64 doesn't support TLS yet (emulated or otherwise).
-            # https://github.com/google/android-riscv64/issues/3
-            return base
         return base + ['-DHAS_THREAD_LOCAL']
 
     @property
@@ -1143,6 +1139,10 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         else:
             result.append('-unwindlib=libunwind')
 
+        # The oldest OS that the NDK supports lacked packed relocations, so enable
+        # them for the platform only.
+        if self._config.platform:
+            result.append('-Wl,--pack-dyn-relocs=android+relr')
         if self._is_hwasan:
             result.append('-fsanitize=hwaddress')
 
