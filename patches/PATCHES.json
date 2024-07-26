@@ -1719,6 +1719,20 @@
         "rel_patch_path": "Add-cmake-c-cxx-asm-linker-flags.patch",
         "version_range": {
             "from": 510928,
+            "until": 544322
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Add cmake c,cxx,asm,linker flags"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Add-cmake-c-cxx-asm-linker-flags-v2.patch",
+        "version_range": {
+            "from": 544322,
             "until": null
         }
     },
