@@ -31,7 +31,12 @@ def create_map_file(lib_file: Path, map_file: Path, section_name: str) -> None:
         for line in symbols.splitlines():
             _, symbol_type, symbol_name = line.split(' ', 2)
             if symbol_type in ['T', 'W', 'B', 'i']:
-                output.write(f'    {symbol_name};\n')
+                # Add the API surface annotations to libclang_rt.* symbols.
+                # These annotations will be used to generate libclang_rt.* stubs.
+                # systemapi and llndk indicate that these symbols are available to
+                # apexes and vendor/product libraries.
+                # (Please refer to build/soong/docs/map_files.md for detailed documentation).
+                output.write(f'    {symbol_name}; # systemapi llndk\n')
         output.write('  local:\n')
         output.write('    *;\n')
         output.write('};\n')
