@@ -67,10 +67,10 @@ class LibInfo:
                                              '-p', lib])
 
         if target_os.is_linux:
-            regex = f'SONAME\\s*{self.name}.so.([0-9.]*)'
+            regex = fr'SONAME\s*{self.name}\.so\.([0-9.]+)$'
         else:
-            regex = f'name .*/{self.name}.([0-9.]*).dylib \(offset.*'
-        version = re.findall(regex, objdump_output)
+            regex = fr'name .*/{self.name}\.([0-9.]+)\.dylib \(offset.*'
+        version = re.findall(regex, objdump_output, re.MULTILINE)
         if not version:
             print('objdump output is')
             print(objdump_output)
@@ -90,26 +90,42 @@ class LibInfo:
         """Path to headers."""
         return self.install_dir / 'include'
 
+    def _unix_shared_lib_suffix(self, versioned: bool) -> str:
+        # On Linux and Darwin, the shared library has a DT_SONAME (or LC_ID_DYLIB) with a version
+        # number, and there is a symlink from the unversioned name to the versioned file. Use the
+        # unversioned name at link-time, because LLVM's get_library_name CMake function strips
+        # prefixes and suffixes from library names (e.g. `libxml2.so` to `xml2`), but it can't strip
+        # a version number. The result is propagated into `llvm-config --system-libs`, where
+        # `-lxml2` is OK, but `-lxml2.so.2` is not. The versioned library name *does* work on
+        # Darwin, where `libxml2.2.dylib` becomes `xml2.2`, and `-lxml2.2` works, but be consistent
+        # with Linux.
+        target_os = self._config.target_os
+        if target_os.is_linux:
+            return f'.so.{self.lib_version}' if versioned else '.so'
+        elif target_os.is_darwin:
+            return f'.{self.lib_version}.dylib' if versioned else '.dylib'
+        else:
+            raise RuntimeError('Unknown target OS')
+
     @property
-    def _lib_suffix(self) -> str:
+    def _link_lib_suffix(self) -> str:
         target_os = self._config.target_os
         if self._config.target_os.is_windows and win_sdk.is_enabled():
             return '.lib'
-        if self.static_lib:
+        elif self.static_lib:
             return '.a'
-        if target_os.is_linux:
-            return f'.so.{self.lib_version}' if self.with_lib_version else '.so'
-        elif target_os.is_darwin:
-            return f'.{self.lib_version}.dylib' if self.with_lib_version else '.dylib'
         elif target_os.is_windows:
             return '.dll.a'
-        raise RuntimeError('Unknown target OS')
+        else:
+            return self._unix_shared_lib_suffix(versioned=False)
+
+    def _library_paths(self, dir_name: str, suffix: str) -> List[Path]:
+        return list(self.install_dir / dir_name / f'{name}{suffix}' for name in self._lib_names)
 
     @property
     def link_libraries(self) -> List[Path]:
         """Path to the libraries used when linking."""
-        suffix = self._lib_suffix
-        return list(self.install_dir / 'lib' / f'{name}{suffix}' for name in self._lib_names)
+        return self._library_paths('lib', self._link_lib_suffix)
 
     @property
     def install_libraries(self) -> List[Path]:
@@ -117,8 +133,9 @@ class LibInfo:
         if self.static_lib:
             return []
         if self._config.target_os.is_windows:
-            return [self.install_dir / 'bin' / f'{name}.dll' for name in self._lib_names]
-        return self.link_libraries
+            return self._library_paths('bin', '.dll')
+        suffix = self._unix_shared_lib_suffix(versioned=self.with_lib_version)
+        return self._library_paths('lib', suffix)
 
     @property
     def install_tools(self) -> List[Path]:
@@ -136,11 +153,11 @@ class LibInfo:
             return
         if not self._config.target_os.is_darwin:
             return
-        for lib in self.link_libraries:
+        for lib in self.install_libraries:
             # Update LC_ID_DYLIB, so that users of the library won't link with absolute path.
             utils.check_call(['install_name_tool', '-id', f'@rpath/{lib.name}', str(lib)])
             # The lib may already reference other libs.
-            for other_lib in self.link_libraries:
+            for other_lib in self.install_libraries:
                 utils.check_call(['install_name_tool', '-change', str(other_lib),
                                   f'@rpath/{other_lib.name}', str(lib)])
 
@@ -753,7 +770,6 @@ class LLVMBuilder(LLVMBaseBuilder):
             defines['LLVM_ENABLE_ZSTD'] = 'FORCE_ON'
             defines['LLVM_USE_STATIC_ZSTD'] = 'ON'
             defines['zstd_LIBRARY'] = self.libzstd.link_libraries[0]
-            defines['zstd_STATIC_LIBRARY'] = self.libzstd.link_libraries[1]
             defines['zstd_INCLUDE_DIR'] = self.libzstd.include_dir
         else:
             defines['LLVM_ENABLE_ZSTD'] = 'OFF'
