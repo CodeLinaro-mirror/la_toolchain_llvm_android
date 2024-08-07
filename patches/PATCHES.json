@@ -661,6 +661,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [SCCP] Check whether the default case is reachable (#76295)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d218092543b3f9ba2204d7c8fe5ac70befa3d772.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523414
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ELF] Support R_RISCV_SET_ULEB128/R_RISCV_SUB_ULEB128 in SHF_ALLOC sections (#77261)"
         },
         "platforms": [
