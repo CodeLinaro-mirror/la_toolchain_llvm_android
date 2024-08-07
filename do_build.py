@@ -374,7 +374,7 @@ def verify_file_exists(lib_dir: Path, name: str):
 
 def package_toolchain(toolchain_builder: LLVMBuilder,
                       necessary_bin_files: Optional[Set[str]]=None,
-                      strip=True, with_runtimes=True, create_tar=True, llvm_next=False):
+                      strip=True, with_runtimes=True, create_tar=True, llvm_next=False, dev_package=False):
     build_dir = toolchain_builder.install_dir
     host_config = toolchain_builder.config_list[0]
     host = host_config.target_os
@@ -493,7 +493,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     for binary in bin_dir.iterdir():
         if binary.is_file():
             if binary.name not in necessary_bin_files:
-                binary.unlink()
+                if not dev_package:
+                    binary.unlink()
             elif binary.is_symlink():
                 continue
             elif strip and binary.name not in script_bins:
@@ -510,6 +511,11 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     for necessary_bin_file in necessary_bin_files:
         if not (bin_dir / necessary_bin_file).is_file():
             raise RuntimeError(f'Did not find {necessary_bin_file} in {bin_dir}')
+
+    if host.is_linux and dev_package:
+        # Copy FileCheck into the install directory.  This is needed to build the
+        # Rust toolchain.
+        shutil.copy2(toolchain_builder.output_dir / 'bin' / 'FileCheck', bin_dir)
 
     necessary_lib_files = set()
     if with_runtimes:
@@ -548,7 +554,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                                                                      is_darwin_lib=True)
 
     # Remove unnecessary static libraries.
-    remove_static_libraries(lib_dir, necessary_lib_files)
+    if not dev_package:
+        remove_static_libraries(lib_dir, necessary_lib_files)
 
     if host.is_linux:
         install_wrappers(install_dir, llvm_next)
@@ -584,6 +591,12 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
             verify_file_exists(lib_dir / host_config.llvm_triple, necessary_lib_file)
         else:
             verify_file_exists(lib_dir, necessary_lib_file)
+
+    # Copy in the libzstd.a library.  This is needed to compile the Rust
+    # toolchain.
+    if dev_package and toolchain_builder.libzstd is not None:
+        for lib in toolchain_builder.libzstd.link_libraries:
+            shutil.copy2(lib, lib_dir)
 
     # Next, we copy over stdatomic.h and bits/stdatomic.h from bionic.
     libc_include_path = paths.ANDROID_DIR / 'bionic' / 'libc' / 'include'
@@ -872,8 +885,7 @@ def parse_args():
     bootstrap_group.add_argument(
         '--bootstrap-use',
         default='',
-        help='Use the given bootstrap compiler.'
-    )
+        help='Use the given bootstrap compiler.')
     bootstrap_group.add_argument(
         '--bootstrap-use-prebuilt',
         action='store_true',
@@ -919,13 +931,16 @@ def parse_args():
         "--git_am",
         action="store_true",
         default=False,
-        help="If set, use 'git am' to patch instead of GNU 'patch'. ",
-    )
+        help="If set, use 'git am' to patch instead of GNU 'patch'. ",)
 
     parser.add_argument(
         '--windows-sdk',
-        help='Path to a Windows SDK. If set, it will be used instead of MinGW.'
-    )
+        help='Path to a Windows SDK. If set, it will be used instead of MinGW.')
+
+    parser.add_argument(
+        "--dev-package",
+        action="store_true",
+        help="Skip pruning non-allowlisted binaries and install additional files in the final prebuilt archive")
 
     musl_group = parser.add_mutually_exclusive_group()
     musl_group.add_argument(
@@ -1184,7 +1199,8 @@ def main():
             strip=do_strip_host_package,
             with_runtimes=do_runtimes,
             create_tar=args.create_tar,
-            llvm_next=args.build_llvm_next)
+            llvm_next=args.build_llvm_next,
+            dev_package=args.dev_package)
 
     if do_package and need_windows:
         package_toolchain(
@@ -1192,7 +1208,8 @@ def main():
             necessary_bin_files=win_lldb_bins,
             strip=do_strip,
             with_runtimes=do_runtimes,
-            create_tar=args.create_tar)
+            create_tar=args.create_tar,
+            dev_package=args.dev_package)
 
     if build_errors:
         logger().info(toolchain_errors.combine_toolchain_errors(build_errors))
