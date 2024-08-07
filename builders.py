@@ -1099,6 +1099,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
                        # TODO(b/266595187): Remove the following feature once it is
                        # enabled in LLVM by default.
                        '-mllvm', '-improved-fs-discriminator=true'))
+        result.extend(('-flto=thin', '-ffat-lto-objects'))
         if self._config.target_arch is hosts.Arch.ARM:
             result.append('-mthumb')
         if self._is_hwasan:
@@ -1120,6 +1121,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
     def ldflags(self) -> List[str]:
         # Avoid linking the STL because it does not exist yet.
         result = super().ldflags + ['-nostdlib++']
+        result.append('-flto=thin')
 
         # For the platform (including APEX) libc++ builds, use the unwinder API
         # exported from libc.so. Link libunwind.a for NDK builds, which must run
