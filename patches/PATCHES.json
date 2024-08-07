@@ -1501,6 +1501,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [compiler-rt] [HWASan] leave BufferedStackTrace uninit (#102247)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ee870e593a82a6478ff1d8b3f1bd8a45aa1bf650.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 545546
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [

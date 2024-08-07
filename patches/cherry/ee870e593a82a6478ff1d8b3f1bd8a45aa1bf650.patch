@@ -1,0 +1,38 @@
+From ee870e593a82a6478ff1d8b3f1bd8a45aa1bf650 Mon Sep 17 00:00:00 2001
+From: Florian Mayer <fmayer@google.com>
+Date: Tue, 6 Aug 2024 20:43:30 -0700
+Subject: [PATCH] [compiler-rt] [HWASan] leave BufferedStackTrace uninit
+ (#102247)
+
+Otherwise we have to memset 2040 bytes (255 * 8) for each call to a
+malloc-like function.
+
+This caused noticable slowdown on AOSP.
+---
+ compiler-rt/lib/hwasan/hwasan.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/compiler-rt/lib/hwasan/hwasan.h b/compiler-rt/lib/hwasan/hwasan.h
+index df21375e8167..1ae463f845c8 100644
+--- a/compiler-rt/lib/hwasan/hwasan.h
++++ b/compiler-rt/lib/hwasan/hwasan.h
+@@ -139,14 +139,14 @@ void hwasan_free(void *ptr, StackTrace *stack);
+ void InstallAtExitHandler();
+ 
+ #define GET_MALLOC_STACK_TRACE                                            \
+-  BufferedStackTrace stack;                                               \
++  UNINITIALIZED BufferedStackTrace stack;                                 \
+   if (hwasan_inited)                                                      \
+     stack.Unwind(StackTrace::GetCurrentPc(), GET_CURRENT_FRAME(),         \
+                  nullptr, common_flags()->fast_unwind_on_malloc,          \
+                  common_flags()->malloc_context_size)
+ 
+ #define GET_FATAL_STACK_TRACE_PC_BP(pc, bp)              \
+-  BufferedStackTrace stack;                              \
++  UNINITIALIZED BufferedStackTrace stack;                \
+   if (hwasan_inited)                                     \
+     stack.Unwind(pc, bp, nullptr, common_flags()->fast_unwind_on_fatal)
+ 
+-- 
+2.46.0.rc2.264.g509ed76dc8-goog
+
