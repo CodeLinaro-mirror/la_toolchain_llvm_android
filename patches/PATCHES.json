@@ -1151,6 +1151,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [X86][AVX512BF16] Add a few missing insert/extract patterns"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/55c466da2f2f0baa509eb709b8de8926bd498b9b.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 529623
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [clang][Sema] Skip the RequiresExprBodyDecls for lambda dependencies (#83997)"
         },
         "platforms": [

@@ -1,0 +1,102 @@
+From 55c466da2f2f0baa509eb709b8de8926bd498b9b Mon Sep 17 00:00:00 2001
+From: Benjamin Kramer <benny.kra@googlemail.com>
+Date: Wed, 6 Mar 2024 00:48:01 +0100
+Subject: [PATCH] [X86][AVX512BF16] Add a few missing insert/extract patterns
+
+These are really the same as the f16 (and i16) instructions, but we need
+them for any type that can occur.
+---
+ llvm/lib/Target/X86/X86InstrAVX512.td | 12 ++++++++++++
+ llvm/test/CodeGen/X86/bfloat.ll       | 21 +++++++++++++++++++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/llvm/lib/Target/X86/X86InstrAVX512.td b/llvm/lib/Target/X86/X86InstrAVX512.td
+index b610560f7fe4..a76561f092c3 100644
+--- a/llvm/lib/Target/X86/X86InstrAVX512.td
++++ b/llvm/lib/Target/X86/X86InstrAVX512.td
+@@ -494,6 +494,8 @@ defm : vinsert_for_size_lowering<"VINSERTI32x4Z256", v16i8x_info, v32i8x_info,
+               vinsert128_insert, INSERT_get_vinsert128_imm, [HasVLX]>;
+ defm : vinsert_for_size_lowering<"VINSERTF32x4Z256", v8f16x_info, v16f16x_info,
+               vinsert128_insert, INSERT_get_vinsert128_imm, [HasVLX]>;
++defm : vinsert_for_size_lowering<"VINSERTF32x4Z256", v8bf16x_info, v16bf16x_info,
++              vinsert128_insert, INSERT_get_vinsert128_imm, [HasVLX]>;
+ // Codegen pattern with the alternative types insert VEC128 into VEC512
+ defm : vinsert_for_size_lowering<"VINSERTI32x4Z", v8i16x_info, v32i16_info,
+               vinsert128_insert, INSERT_get_vinsert128_imm, [HasAVX512]>;
+@@ -501,6 +503,8 @@ defm : vinsert_for_size_lowering<"VINSERTI32x4Z", v16i8x_info, v64i8_info,
+                vinsert128_insert, INSERT_get_vinsert128_imm, [HasAVX512]>;
+ defm : vinsert_for_size_lowering<"VINSERTF32x4Z", v8f16x_info, v32f16_info,
+               vinsert128_insert, INSERT_get_vinsert128_imm, [HasAVX512]>;
++defm : vinsert_for_size_lowering<"VINSERTF32x4Z", v8bf16x_info, v32bf16_info,
++              vinsert128_insert, INSERT_get_vinsert128_imm, [HasAVX512]>;
+ // Codegen pattern with the alternative types insert VEC256 into VEC512
+ defm : vinsert_for_size_lowering<"VINSERTI64x4Z", v16i16x_info, v32i16_info,
+               vinsert256_insert, INSERT_get_vinsert256_imm, [HasAVX512]>;
+@@ -508,6 +512,8 @@ defm : vinsert_for_size_lowering<"VINSERTI64x4Z", v32i8x_info, v64i8_info,
+               vinsert256_insert, INSERT_get_vinsert256_imm, [HasAVX512]>;
+ defm : vinsert_for_size_lowering<"VINSERTF64x4Z", v16f16x_info, v32f16_info,
+               vinsert256_insert, INSERT_get_vinsert256_imm, [HasAVX512]>;
++defm : vinsert_for_size_lowering<"VINSERTF64x4Z", v16bf16x_info, v32bf16_info,
++              vinsert256_insert, INSERT_get_vinsert256_imm, [HasAVX512]>;
+ 
+ 
+ multiclass vinsert_for_mask_cast<string InstrStr, X86VectorVTInfo From,
+@@ -795,6 +801,8 @@ defm : vextract_for_size_lowering<"VEXTRACTI32x4Z256", v32i8x_info, v16i8x_info,
+           vextract128_extract, EXTRACT_get_vextract128_imm, [HasVLX]>;
+ defm : vextract_for_size_lowering<"VEXTRACTF32x4Z256", v16f16x_info, v8f16x_info,
+           vextract128_extract, EXTRACT_get_vextract128_imm, [HasVLX]>;
++defm : vextract_for_size_lowering<"VEXTRACTF32x4Z256", v16bf16x_info, v8bf16x_info,
++          vextract128_extract, EXTRACT_get_vextract128_imm, [HasVLX]>;
+ 
+ // Codegen pattern with the alternative types extract VEC128 from VEC512
+ defm : vextract_for_size_lowering<"VEXTRACTI32x4Z", v32i16_info, v8i16x_info,
+@@ -803,6 +811,8 @@ defm : vextract_for_size_lowering<"VEXTRACTI32x4Z", v64i8_info, v16i8x_info,
+                  vextract128_extract, EXTRACT_get_vextract128_imm, [HasAVX512]>;
+ defm : vextract_for_size_lowering<"VEXTRACTF32x4Z", v32f16_info, v8f16x_info,
+                  vextract128_extract, EXTRACT_get_vextract128_imm, [HasAVX512]>;
++defm : vextract_for_size_lowering<"VEXTRACTF32x4Z", v32bf16_info, v8bf16x_info,
++                 vextract128_extract, EXTRACT_get_vextract128_imm, [HasAVX512]>;
+ // Codegen pattern with the alternative types extract VEC256 from VEC512
+ defm : vextract_for_size_lowering<"VEXTRACTI64x4Z", v32i16_info, v16i16x_info,
+                  vextract256_extract, EXTRACT_get_vextract256_imm, [HasAVX512]>;
+@@ -810,6 +820,8 @@ defm : vextract_for_size_lowering<"VEXTRACTI64x4Z", v64i8_info, v32i8x_info,
+                  vextract256_extract, EXTRACT_get_vextract256_imm, [HasAVX512]>;
+ defm : vextract_for_size_lowering<"VEXTRACTF64x4Z", v32f16_info, v16f16x_info,
+                  vextract256_extract, EXTRACT_get_vextract256_imm, [HasAVX512]>;
++defm : vextract_for_size_lowering<"VEXTRACTF64x4Z", v32bf16_info, v16bf16x_info,
++                 vextract256_extract, EXTRACT_get_vextract256_imm, [HasAVX512]>;
+ 
+ 
+ // A 128-bit extract from bits [255:128] of a 512-bit vector should use a
+diff --git a/llvm/test/CodeGen/X86/bfloat.ll b/llvm/test/CodeGen/X86/bfloat.ll
+index 0042d477f3b3..6e3020d628ed 100644
+--- a/llvm/test/CodeGen/X86/bfloat.ll
++++ b/llvm/test/CodeGen/X86/bfloat.ll
+@@ -2805,3 +2805,24 @@ define <16 x bfloat> @concat_zero_v8bf16(<8 x bfloat> %x, <8 x bfloat> %y) {
+   %a = shufflevector <8 x bfloat> %x, <8 x bfloat> zeroinitializer, <16 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+   ret <16 x bfloat> %a
+ }
++
++define <16 x bfloat> @concat_dup_v8bf16(<8 x bfloat> %x, <8 x bfloat> %y) {
++; X86-LABEL: concat_dup_v8bf16:
++; X86:       # %bb.0:
++; X86-NEXT:    vmovddup {{.*#+}} xmm0 = xmm0[0,0]
++; X86-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
++; X86-NEXT:    retl
++;
++; SSE2-LABEL: concat_dup_v8bf16:
++; SSE2:       # %bb.0:
++; SSE2-NEXT:    movlhps {{.*#+}} xmm0 = xmm0[0,0]
++; SSE2-NEXT:    retq
++;
++; AVX-LABEL: concat_dup_v8bf16:
++; AVX:       # %bb.0:
++; AVX-NEXT:    vmovddup {{.*#+}} xmm0 = xmm0[0,0]
++; AVX-NEXT:    vinsertf128 $1, %xmm1, %ymm0, %ymm0
++; AVX-NEXT:    retq
++  %a = shufflevector <8 x bfloat> %x, <8 x bfloat> %y, <16 x i32> <i32 0, i32 1, i32 2, i32 3, i32 0, i32 1, i32 2, i32 3, i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
++  ret <16 x bfloat> %a
++}
+-- 
+2.46.0.184.g6999bdac58-goog
+
