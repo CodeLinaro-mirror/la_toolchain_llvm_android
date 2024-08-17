@@ -1593,6 +1593,20 @@
         "rel_patch_path": "Disable-vfork-fork-events.patch",
         "version_range": {
             "from": 468909,
+            "until": 546236
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Disable vfork/fork events"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Disable-vfork-fork-events-v2.patch",
+        "version_range": {
+            "from": 546236,
             "until": null
         }
     },
