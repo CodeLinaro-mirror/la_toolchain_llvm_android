@@ -329,8 +329,8 @@ def update_profiles(download_dir, build_number, bug):
 
         utils.check_call(['git', 'add', '.'])
         message_lines = [f'Check in profiles from build {build_number}']
+        message_lines.append('')
         if bug is not None:
-            message_lines.append('')
             message_lines.append(f'Bug: {format_bug(bug)}')
         message_lines.append('Test: N/A')
         message = '\n'.join(message_lines)
