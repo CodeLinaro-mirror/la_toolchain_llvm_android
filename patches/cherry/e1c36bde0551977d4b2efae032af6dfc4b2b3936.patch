@@ -1,0 +1,139 @@
+From e1c36bde0551977d4b2efae032af6dfc4b2b3936 Mon Sep 17 00:00:00 2001
+From: Sami Tolvanen <samitolvanen@users.noreply.github.com>
+Date: Tue, 20 Aug 2024 16:51:16 -0700
+Subject: [PATCH] Fix KCFI types for generated functions with integer
+ normalization (#104826)
+
+With -fsanitize-cfi-icall-experimental-normalize-integers, Clang
+appends ".normalized" to KCFI types in CodeGenModule::CreateKCFITypeId,
+which changes type hashes also for functions that don't have integer
+types in their signatures. However, llvm::setKCFIType does not take
+integer normalization into account, which means LLVM generated
+functions with KCFI types, e.g. sanitizer constructors, will fail KCFI
+checks when integer normalization is enabled in Clang.
+
+Add a cfi-normalize-integers module flag to indicate integer
+normalization is used, and append ".normalized" to KCFI types also in
+llvm::setKCFIType to fix the type mismatch.
+---
+ clang/lib/CodeGen/CodeGenModule.cpp           |  5 +++
+ clang/test/CodeGen/kcfi-normalize.c           |  1 +
+ llvm/lib/Transforms/Utils/ModuleUtils.cpp     | 12 ++++---
+ .../GCOVProfiling/kcfi-normalize.ll           | 35 +++++++++++++++++++
+ llvm/test/Transforms/GCOVProfiling/kcfi.ll    |  8 +++--
+ 5 files changed, 53 insertions(+), 8 deletions(-)
+ create mode 100644 llvm/test/Transforms/GCOVProfiling/kcfi-normalize.ll
+
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 0b61ef0f8998..0d3b896af8aa 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -1134,6 +1134,11 @@ void CodeGenModule::Release() {
+                               CodeGenOpts.SanitizeCfiCanonicalJumpTables);
+   }
+ 
++  if (CodeGenOpts.SanitizeCfiICallNormalizeIntegers) {
++    getModule().addModuleFlag(llvm::Module::Override, "cfi-normalize-integers",
++                              1);
++  }
++
+   if (LangOpts.Sanitize.has(SanitizerKind::KCFI)) {
+     getModule().addModuleFlag(llvm::Module::Override, "kcfi", 1);
+     // KCFI assumes patchable-function-prefix is the same for all indirectly
+diff --git a/clang/test/CodeGen/kcfi-normalize.c b/clang/test/CodeGen/kcfi-normalize.c
+index 7660c908a7bd..b9150e88f6ab 100644
+--- a/clang/test/CodeGen/kcfi-normalize.c
++++ b/clang/test/CodeGen/kcfi-normalize.c
+@@ -28,6 +28,7 @@ void baz(void (*fn)(int, int, int), int arg1, int arg2, int arg3) {
+     fn(arg1, arg2, arg3);
+ }
+ 
++// CHECK: ![[#]] = !{i32 4, !"cfi-normalize-integers", i32 1}
+ // CHECK: ![[TYPE1]] = !{i32 -1143117868}
+ // CHECK: ![[TYPE2]] = !{i32 -460921415}
+ // CHECK: ![[TYPE3]] = !{i32 -333839615}
+diff --git a/llvm/lib/Transforms/Utils/ModuleUtils.cpp b/llvm/lib/Transforms/Utils/ModuleUtils.cpp
+index 309cf8e70b97..7249571f3449 100644
+--- a/llvm/lib/Transforms/Utils/ModuleUtils.cpp
++++ b/llvm/lib/Transforms/Utils/ModuleUtils.cpp
+@@ -205,11 +205,13 @@ void llvm::setKCFIType(Module &M, Function &F, StringRef MangledType) {
+   // Matches CodeGenModule::CreateKCFITypeId in Clang.
+   LLVMContext &Ctx = M.getContext();
+   MDBuilder MDB(Ctx);
+-  F.setMetadata(
+-      LLVMContext::MD_kcfi_type,
+-      MDNode::get(Ctx, MDB.createConstant(ConstantInt::get(
+-                           Type::getInt32Ty(Ctx),
+-                           static_cast<uint32_t>(xxHash64(MangledType))))));
++  std::string Type = MangledType.str();
++  if (M.getModuleFlag("cfi-normalize-integers"))
++    Type += ".normalized";
++  F.setMetadata(LLVMContext::MD_kcfi_type,
++                MDNode::get(Ctx, MDB.createConstant(ConstantInt::get(
++                                     Type::getInt32Ty(Ctx),
++                                     static_cast<uint32_t>(xxHash64(Type))))));
+   // If the module was compiled with -fpatchable-function-entry, ensure
+   // we use the same patchable-function-prefix.
+   if (auto *MD = mdconst::extract_or_null<ConstantInt>(
+diff --git a/llvm/test/Transforms/GCOVProfiling/kcfi-normalize.ll b/llvm/test/Transforms/GCOVProfiling/kcfi-normalize.ll
+new file mode 100644
+index 000000000000..19122b920d1c
+--- /dev/null
++++ b/llvm/test/Transforms/GCOVProfiling/kcfi-normalize.ll
+@@ -0,0 +1,35 @@
++;; Ensure __llvm_gcov_(writeout|reset|init) have the correct !kcfi_type
++;; with integer normalization.
++; RUN: mkdir -p %t && cd %t
++; RUN: opt < %s -S -passes=insert-gcov-profiling | FileCheck %s
++
++target triple = "x86_64-unknown-linux-gnu"
++
++define dso_local void @empty() !dbg !5 {
++entry:
++  ret void, !dbg !8
++}
++
++!llvm.dbg.cu = !{!0}
++!llvm.module.flags = !{!3, !4, !9, !10}
++
++!0 = distinct !DICompileUnit(language: DW_LANG_C99, file: !1, emissionKind: FullDebug, enums: !2)
++!1 = !DIFile(filename: "a.c", directory: "")
++!2 = !{}
++!3 = !{i32 7, !"Dwarf Version", i32 5}
++!4 = !{i32 2, !"Debug Info Version", i32 3}
++!5 = distinct !DISubprogram(name: "empty", scope: !1, file: !1, line: 1, type: !6, scopeLine: 1, flags: DIFlagAllCallsDescribed, spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !0, retainedNodes: !2)
++!6 = !DISubroutineType(types: !7)
++!7 = !{null}
++!8 = !DILocation(line: 2, column: 1, scope: !5)
++!9 = !{i32 4, !"kcfi", i32 1}
++!10 = !{i32 4, !"cfi-normalize-integers", i32 1}
++
++; CHECK: define internal void @__llvm_gcov_writeout()
++; CHECK-SAME: !kcfi_type ![[#TYPE:]]
++; CHECK: define internal void @__llvm_gcov_reset()
++; CHECK-SAME: !kcfi_type ![[#TYPE]]
++; CHECK: define internal void @__llvm_gcov_init()
++; CHECK-SAME: !kcfi_type ![[#TYPE]]
++
++; CHECK: ![[#TYPE]] = !{i32 -440107680}
+diff --git a/llvm/test/Transforms/GCOVProfiling/kcfi.ll b/llvm/test/Transforms/GCOVProfiling/kcfi.ll
+index b25f40f05d5b..1b97d25294cd 100644
+--- a/llvm/test/Transforms/GCOVProfiling/kcfi.ll
++++ b/llvm/test/Transforms/GCOVProfiling/kcfi.ll
+@@ -24,8 +24,10 @@ entry:
+ !9 = !{i32 4, !"kcfi", i32 1}
+ 
+ ; CHECK: define internal void @__llvm_gcov_writeout()
+-; CHECK-SAME: !kcfi_type
++; CHECK-SAME: !kcfi_type ![[#TYPE:]]
+ ; CHECK: define internal void @__llvm_gcov_reset()
+-; CHECK-SAME: !kcfi_type
++; CHECK-SAME: !kcfi_type ![[#TYPE]]
+ ; CHECK: define internal void @__llvm_gcov_init()
+-; CHECK-SAME: !kcfi_type
++; CHECK-SAME: !kcfi_type ![[#TYPE]]
++
++; CHECK: ![[#TYPE]] = !{i32 -1522505972}
+-- 
+2.46.0.295.g3b9ea8a38a-goog
+

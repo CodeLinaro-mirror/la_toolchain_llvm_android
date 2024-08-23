@@ -1529,6 +1529,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Fix KCFI types for generated functions with integer normalization (#104826)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e1c36bde0551977d4b2efae032af6dfc4b2b3936.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 547053
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
