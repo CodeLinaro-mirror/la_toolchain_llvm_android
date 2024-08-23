@@ -1095,6 +1095,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][GISel] Don't pointlessly lower G_TRUNC (#81479)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/070848c17c2944afa494d42d3ad42929f3379842.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 527460
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix __isOSVersionAtLeast for Android (#80496)"
         },
         "platforms": [

@@ -1,0 +1,77 @@
+From 070848c17c2944afa494d42d3ad42929f3379842 Mon Sep 17 00:00:00 2001
+From: Nikita Popov <npopov@redhat.com>
+Date: Tue, 13 Feb 2024 09:29:56 +0100
+Subject: [PATCH] [AArch64][GISel] Don't pointlessly lower G_TRUNC (#81479)
+
+If we have something like G_TRUNC from v2s32 to v2s16, then lowering
+this to a concat of two G_TRUNC s32 to s16 followed by G_TRUNC from
+v2s16 to v2s8 does not bring us any closer to legality. In fact, the
+first part of that is a G_BUILD_VECTOR whose legalization will produce a
+new G_TRUNC from v2s32 to v2s16, and both G_TRUNCs will then get
+combined to the original, causing a legalization cycle.
+
+Make the lowering condition more precise, by requiring that the original
+vector is >128 bits, which is I believe the only case where this
+specific splitting approach is useful.
+
+Note that this doesn't actually produce a legal result (the alwaysLegal
+is a lie, as before), but it will cause a proper globalisel abort
+instead of an infinite legalization loop.
+
+Fixes https://github.com/llvm/llvm-project/issues/81244.
+---
+ .../AArch64/GISel/AArch64LegalizerInfo.cpp    |  5 ++--
+ .../AArch64/GlobalISel/legalize-xtn.mir       | 24 +++++++++++++++++++
+ 2 files changed, 26 insertions(+), 3 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/GISel/AArch64LegalizerInfo.cpp b/llvm/lib/Target/AArch64/GISel/AArch64LegalizerInfo.cpp
+index ab25e2b9af8b..933f13dd5a19 100644
+--- a/llvm/lib/Target/AArch64/GISel/AArch64LegalizerInfo.cpp
++++ b/llvm/lib/Target/AArch64/GISel/AArch64LegalizerInfo.cpp
+@@ -612,9 +612,8 @@ AArch64LegalizerInfo::AArch64LegalizerInfo(const AArch64Subtarget &ST)
+       .lowerIf([=](const LegalityQuery &Query) {
+         LLT DstTy = Query.Types[0];
+         LLT SrcTy = Query.Types[1];
+-        return DstTy.isVector() && (SrcTy.getSizeInBits() > 128 ||
+-                                    (DstTy.getScalarSizeInBits() * 2 <
+-                                     SrcTy.getScalarSizeInBits()));
++        return DstTy.isVector() && SrcTy.getSizeInBits() > 128 &&
++               DstTy.getScalarSizeInBits() * 2 <= SrcTy.getScalarSizeInBits();
+       })
+ 
+       .alwaysLegal();
+diff --git a/llvm/test/CodeGen/AArch64/GlobalISel/legalize-xtn.mir b/llvm/test/CodeGen/AArch64/GlobalISel/legalize-xtn.mir
+index 16b780a83973..661265173ae8 100644
+--- a/llvm/test/CodeGen/AArch64/GlobalISel/legalize-xtn.mir
++++ b/llvm/test/CodeGen/AArch64/GlobalISel/legalize-xtn.mir
+@@ -529,3 +529,27 @@ body:             |
+     RET_ReallyLR implicit $q0
+ 
+ ...
++
++---
++name:            pr81244
++tracksRegLiveness: true
++body:             |
++  bb.0:
++    liveins: $d0
++    ; CHECK-LABEL: name: pr81244
++    ; CHECK: liveins: $d0
++    ; CHECK-NEXT: {{  $}}
++    ; CHECK-NEXT: [[COPY:%[0-9]+]]:_(<2 x s32>) = COPY $d0
++    ; CHECK-NEXT: [[TRUNC:%[0-9]+]]:_(<2 x s8>) = G_TRUNC [[COPY]](<2 x s32>)
++    ; CHECK-NEXT: [[CONCAT_VECTORS:%[0-9]+]]:_(<4 x s8>) = G_CONCAT_VECTORS [[TRUNC]](<2 x s8>), [[TRUNC]](<2 x s8>)
++    ; CHECK-NEXT: [[ANYEXT:%[0-9]+]]:_(<4 x s16>) = G_ANYEXT [[CONCAT_VECTORS]](<4 x s8>)
++    ; CHECK-NEXT: $d0 = COPY [[ANYEXT]](<4 x s16>)
++    ; CHECK-NEXT: RET_ReallyLR implicit $d0
++    %0:_(<2 x s32>) = COPY $d0
++    %1:_(<2 x s8>) = G_TRUNC %0(<2 x s32>)
++    %2:_(<4 x s8>) = G_CONCAT_VECTORS %1(<2 x s8>), %1(<2 x s8>)
++    %3:_(<4 x s16>) = G_ANYEXT %2(<4 x s8>)
++    $d0 = COPY %3(<4 x s16>)
++    RET_ReallyLR implicit $d0
++
++...
+-- 
+2.46.0.295.g3b9ea8a38a-goog
+
