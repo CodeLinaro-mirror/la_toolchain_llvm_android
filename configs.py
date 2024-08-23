@@ -468,8 +468,10 @@ class MinGWConfig(_GccConfig):
         cflags.append(f'--target={self.llvm_triple}')
         cflags.append('-D_LARGEFILE_SOURCE')
         cflags.append('-D_FILE_OFFSET_BITS=64')
-        cflags.append('-D_WIN32_WINNT=0x0600')
-        cflags.append('-DWINVER=0x0600')
+        # Target >= Windows 10.
+        # Both #defines are needed: https://learn.microsoft.com/en-us/cpp/porting/modifying-winver-and-win32-winnt?view=msvc-170
+        cflags.append('-D_WIN32_WINNT=0x0A00')
+        cflags.append('-DWINVER=0x0A00')
         cflags.append('-D__MSVCRT_VERSION__=0x1400')
         if self.target_arch == hosts.Arch.I386:
             cflags.append('-fsjlj-exceptions')
