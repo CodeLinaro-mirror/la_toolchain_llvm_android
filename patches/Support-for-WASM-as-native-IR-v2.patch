@@ -1,0 +1,298 @@
+From 368c9afb590545ea238af62d0efd7f164a785685 Mon Sep 17 00:00:00 2001
+From: Matthias Blume <blume@google.com>
+Date: Fri, 9 Feb 2024 11:45:11 -0600
+Subject: [PATCH] Squashed commit of the following:
+
+commit 596898a763140d335aba3d20c4f84683cdbea205
+Author: Matthias Blume <blume@google.com>
+Date:   Thu Feb 8 11:55:37 2024 -0600
+
+    Zero-args varargs handling.
+
+    Now uses a varargs allocator intrinsic also for the case where
+    the variable portion is empty.
+
+commit 370fa6d4d66016acf1e0fb07e71eda94a2cbfd7f
+Author: Matthias Blume <blume@google.com>
+Date:   Tue Feb 6 16:00:55 2024 -0600
+
+    Introduces target triple (quadruple?) for native WASM.
+
+    --target=wasm64-unknown-emscripten-nativeandroid
+
+commit 9c44e5009b8b04a2846fdcdb07e5d050e96fc05d
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 15:48:15 2024 -0600
+
+    Some mostly cosmetic improvements.
+
+commit 215fd4a72b44db90cd776d55c8ae68ae3a1c4bfa
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 14:44:26 2024 -0600
+
+    Add missing call to addFnAttrs.
+
+commit 72ea3ee7be301602132243bba3d02ad5f486117e
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Feb 5 12:59:12 2024 -0600
+
+    Varargs allocation using intrisics.
+
+    Flag-controlled (-mllvm -intrinsic-varargs-allocation).
+    Type-specific intrinsics of the form __wasm_allocate_varargs.*
+    get generated on demand.
+
+commit e7a749538d4a6c52790381bc1e8f196879acb386
+Author: Matthias Blume <blume@google.com>
+Date:   Mon Jan 29 11:35:28 2024 -0600
+
+    Omit function pointer 32-bit cast patch.
+
+Data layout logic for nativeandroid.
+
+Don't nest it under isOSEmscripten() since we are not actually
+using emscripten as our "OS".
+
+Adjust stack alignment to be 8-byte (64 bit) to be conservative.
+(We expect alloca() to return 8-byte aligned pointers because
+that is the strictest requirement across all types.)
+
+Restore original code ordering in varargs code.
+
+Should leave original behavior unchanged.
+---
+ clang/lib/Basic/Targets/WebAssembly.h         |   3 +
+ llvm/include/llvm/TargetParser/Triple.h       |   8 ++
+ .../WebAssembly/WebAssemblyISelLowering.cpp   | 107 ++++++++++++++----
+ .../WebAssembly/WebAssemblyTargetMachine.cpp  |  12 +-
+ llvm/lib/TargetParser/Triple.cpp              |   2 +
+ 5 files changed, 104 insertions(+), 28 deletions(-)
+
+diff --git a/clang/lib/Basic/Targets/WebAssembly.h b/clang/lib/Basic/Targets/WebAssembly.h
+index 83b1711f9fdf..4ad7d000bc79 100644
+--- a/clang/lib/Basic/Targets/WebAssembly.h
++++ b/clang/lib/Basic/Targets/WebAssembly.h
+@@ -202,6 +202,9 @@ public:
+     if (T.isOSEmscripten())
+       resetDataLayout("e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-f128:64-n32:64-"
+                       "S128-ni:1:10:20");
++    else if (T.isNativeAndroid())
++      resetDataLayout("e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-f128:64-n32:64-"
++                      "S64-ni:1:10:20");
+     else
+       resetDataLayout(
+           "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20");
+diff --git a/llvm/include/llvm/TargetParser/Triple.h b/llvm/include/llvm/TargetParser/Triple.h
+index e73207021392..d18707cfd7a4 100644
+--- a/llvm/include/llvm/TargetParser/Triple.h
++++ b/llvm/include/llvm/TargetParser/Triple.h
+@@ -250,6 +250,12 @@ public:
+     MuslEABIHF,
+     MuslX32,
+ 
++    // As in wasm64-unknown-unknown-nativeandroid.
++    // Turns off 64->32 function pointer cast on indirect
++    // lookup and compiles varargs calls using intrinsics
++    // for varargs allocation:
++    NativeAndroid,
++
+     MSVC,
+     Itanium,
+     Cygnus,
+@@ -772,6 +778,8 @@ public:
+ 
+   bool isOSLiteOS() const { return getOS() == Triple::LiteOS; }
+ 
++  bool isNativeAndroid() const { return getEnvironment() == Triple::NativeAndroid; }
++
+   /// Tests whether the target is DXIL.
+   bool isDXIL() const {
+     return getArch() == Triple::dxil;
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
+index 905ff3b9018..03cc24a8c88 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyISelLowering.cpp
+@@ -32,6 +32,7 @@
+ #include "llvm/IR/Function.h"
+ #include "llvm/IR/Intrinsics.h"
+ #include "llvm/IR/IntrinsicsWebAssembly.h"
++#include "llvm/IR/Module.h"
+ #include "llvm/IR/PatternMatch.h"
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorHandling.h"
+@@ -1003,6 +1004,22 @@ static bool callingConvSupported(CallingConv::ID CallConv) {
+          CallConv == CallingConv::Swift;
+ }
+ 
++static Function *getVarArgsAllocator(std::string &Name, ArrayRef<Type *> ArgTys,
++                                     Module *M) {
++  Function *F = M->getFunction(Name);
++  if (F != nullptr) {
++    return F;
++  }
++  PointerType *ResTy = PointerType::getUnqual(M->getContext());
++  FunctionType *Ty = FunctionType::get(ResTy, ArgTys, false);
++  F = Function::Create(Ty, GlobalValue::ExternalLinkage, Name, M);
++  llvm::AttrBuilder B(M->getContext());
++  B.addAttribute("wasm-import-module", "env");
++  B.addAttribute("wasm-import-name", F->getName());
++  F->addFnAttrs(B);
++  return F;
++}
++
+ SDValue
+ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+                                      SmallVectorImpl<SDValue> &InVals) const {
+@@ -1170,31 +1187,73 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+ 
+   unsigned NumBytes = CCInfo.getAlignedCallFrameSize();
+ 
+-  SDValue FINode;
+-  if (IsVarArg && NumBytes) {
+-    // For non-fixed arguments, next emit stores to store the argument values
+-    // to the stack buffer at the offsets computed above.
+-    MaybeAlign StackAlign = Layout.getStackAlignment();
+-    assert(StackAlign && "data layout string is missing stack alignment");
+-    int FI = MF.getFrameInfo().CreateStackObject(NumBytes, *StackAlign,
+-                                                 /*isSS=*/false);
+-    unsigned ValNo = 0;
+-    SmallVector<SDValue, 8> Chains;
+-    for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
+-      assert(ArgLocs[ValNo].getValNo() == ValNo &&
+-             "ArgLocs should remain in order and only hold varargs args");
+-      unsigned Offset = ArgLocs[ValNo++].getLocMemOffset();
+-      FINode = DAG.getFrameIndex(FI, getPointerTy(Layout));
+-      SDValue Add = DAG.getNode(ISD::ADD, DL, PtrVT, FINode,
+-                                DAG.getConstant(Offset, DL, PtrVT));
+-      Chains.push_back(
+-          DAG.getStore(Chain, DL, Arg, Add,
+-                       MachinePointerInfo::getFixedStack(MF, FI, Offset)));
++  const GlobalValue *GV = (Callee->getOpcode() == ISD::GlobalAddress)
++                            ? cast<GlobalAddressSDNode>(Callee)->getGlobal()
++                            : nullptr;
++
++  SDValue VANode;  // represents variable portion of argument list
++  if (IsVarArg) {
++    if (Subtarget->getTargetTriple().isNativeAndroid()) {
++      // Use an intrinsic to allocate the variable portion of the arguments.
++      // First make sure we have a module:
++      Module *M = MF.getFunction().getParent();
++      if (M == nullptr) {
++        fail(DL, DAG, "varargs intrinsics require a module");
++      }
++
++      // Obtain the correctly typed intrinsic.
++      SmallVector<Type *, 16> ArgTypes;
++      std::string AllocatorFunName = "__wasm_allocate_varargs";
++      for (SDValue &Arg : drop_begin(OutVals, NumFixedArgs)) {
++        EVT VT = Arg.getValueType();
++        AllocatorFunName += "_" + VT.getEVTString();
++        ArgTypes.push_back(VT.getTypeForEVT(*DAG.getContext()));
++      }
++      if (GV && GV->hasName()) {
++        AllocatorFunName += "%" + GV->getName().str();
++      }
++      Function *AllocatorFun =
++          getVarArgsAllocator(AllocatorFunName, ArgTypes, M);
++
++      // Construct the call of the intrinsic.
++      SmallVector<SDValue, 16> VaOps;
++      VaOps.push_back(Chain);
++      VaOps.push_back(DAG.getGlobalAddress(AllocatorFun, DL, PtrVT));
++      for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
++        VaOps.push_back(Arg);
++      }
++      SDVTList VaInTyList = DAG.getVTList({PtrVT, MVT::Other});
++      SDValue VaRes = DAG.getNode(WebAssemblyISD::CALL, DL, VaInTyList, VaOps);
++
++      // Result is the pointer to allocated varargs.  The secord result
++      // is the chain.
++      VANode = VaRes.getValue(0);
++      Chain = VaRes.getValue(1);
++    } else if (NumBytes) {
++      // For non-fixed arguments, next emit stores to store the argument values
++      // to the stack buffer at the offsets computed above.
++      MaybeAlign StackAlign = Layout.getStackAlignment();
++      assert(StackAlign && "data layout string is missing stack alignment");
++      int FI = MF.getFrameInfo().CreateStackObject(NumBytes, *StackAlign,
++                                                   /*isSS=*/false);
++      unsigned ValNo = 0;
++      SmallVector<SDValue, 8> Chains;
++      for (SDValue Arg : drop_begin(OutVals, NumFixedArgs)) {
++        assert(ArgLocs[ValNo].getValNo() == ValNo &&
++               "ArgLocs should remain in order and only hold varargs args");
++        unsigned Offset = ArgLocs[ValNo++].getLocMemOffset();
++        VANode = DAG.getFrameIndex(FI, getPointerTy(Layout));
++        SDValue Add = DAG.getNode(ISD::ADD, DL, PtrVT, VANode,
++                                  DAG.getConstant(Offset, DL, PtrVT));
++        Chains.push_back(
++            DAG.getStore(Chain, DL, Arg, Add,
++                         MachinePointerInfo::getFixedStack(MF, FI, Offset)));
++      }
++      if (!Chains.empty())
++        Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
++    } else {
++      VANode = DAG.getIntPtrConstant(0, DL);
+     }
+-    if (!Chains.empty())
+-      Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Chains);
+-  } else if (IsVarArg) {
+-    FINode = DAG.getIntPtrConstant(0, DL);
+   }
+ 
+   if (Callee->getOpcode() == ISD::GlobalAddress) {
+@@ -1219,7 +1278,7 @@ WebAssemblyTargetLowering::LowerCall(CallLoweringInfo &CLI,
+              IsVarArg ? OutVals.begin() + NumFixedArgs : OutVals.end());
+   // Add a pointer to the vararg buffer.
+   if (IsVarArg)
+-    Ops.push_back(FINode);
++    Ops.push_back(VANode);
+ 
+   SmallVector<EVT, 8> InTys;
+   for (const auto &In : Ins) {
+diff --git a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
+index 42043a7b8680..d47839fbe856 100644
+--- a/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
++++ b/llvm/lib/Target/WebAssembly/WebAssemblyTargetMachine.cpp
+@@ -117,10 +117,14 @@ WebAssemblyTargetMachine::WebAssemblyTargetMachine(
+     : LLVMTargetMachine(
+           T,
+           TT.isArch64Bit()
+-              ? (TT.isOSEmscripten() ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
+-                                       "f128:64-n32:64-S128-ni:1:10:20"
+-                                     : "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
+-                                       "n32:64-S128-ni:1:10:20")
++              ? (TT.isOSEmscripten()
++                     ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                       "f128:64-n32:64-S128-ni:1:10:20"
++                     : (TT.isNativeAndroid()
++                            ? "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                              "f128:64-n32:64-S64-ni:1:10:20"
++                            : "e-m:e-p:64:64-p10:8:8-p20:8:8-i64:64-"
++                              "n32:64-S128-ni:1:10:20"))
+               : (TT.isOSEmscripten() ? "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-"
+                                        "f128:64-n32:64-S128-ni:1:10:20"
+                                      : "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-"
+diff --git a/llvm/lib/TargetParser/Triple.cpp b/llvm/lib/TargetParser/Triple.cpp
+index 96dbd5ca673b..e45f8570e4c8 100644
+--- a/llvm/lib/TargetParser/Triple.cpp
++++ b/llvm/lib/TargetParser/Triple.cpp
+@@ -299,6 +299,7 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
+   case GNUF64: return "gnuf64";
+   case GNUSF: return "gnusf";
+   case GNUX32: return "gnux32";
++  case NativeAndroid: return "nativeandroid";
+   case GNUILP32: return "gnu_ilp32";
+   case Itanium: return "itanium";
+   case MSVC: return "msvc";
+@@ -672,6 +673,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
+       .StartsWith("musleabihf", Triple::MuslEABIHF)
+       .StartsWith("musleabi", Triple::MuslEABI)
+       .StartsWith("muslx32", Triple::MuslX32)
++      .StartsWith("nativeandroid", Triple::NativeAndroid)
+       .StartsWith("musl", Triple::Musl)
+       .StartsWith("msvc", Triple::MSVC)
+       .StartsWith("itanium", Triple::Itanium)
+-- 
+2.43.0.687.g38aa6559b0-goog
+
