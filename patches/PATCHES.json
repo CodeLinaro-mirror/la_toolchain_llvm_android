@@ -1543,6 +1543,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9a2fd97d391caf1060e303f636d7113501788d2f-v1.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 548556
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
