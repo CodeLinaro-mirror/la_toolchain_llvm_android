@@ -1557,6 +1557,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [sanitizer] Delay sanitizer args parsing (#107280)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/24684bb4a9791145a36a97477eb1fd525a122d8e.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 548724
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
