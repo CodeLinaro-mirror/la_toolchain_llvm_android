@@ -1,0 +1,82 @@
+From 24684bb4a9791145a36a97477eb1fd525a122d8e Mon Sep 17 00:00:00 2001
+From: Evgenii Stepanov <eugeni.stepanov@gmail.com>
+Date: Thu, 5 Sep 2024 14:09:33 -0700
+Subject: [PATCH] [sanitizer] Delay sanitizer args parsing (#107280)
+
+Delay sanitizer arg parsing until after -Xclang flags are forwarded to
+the clang command line. This allows the check in hasTargetFeatureMTE to
+pick up manually specified target feature, and enables the following:
+  -march=armv8-a -Xclang -target-feature -Xclang +mte
+  -fsanitize=memtag-stack
+---
+ clang/lib/Driver/ToolChains/Clang.cpp | 6 ++++--
+ clang/test/Driver/fsanitize.c         | 4 +++-
+ clang/test/Driver/fuchsia.c           | 2 +-
+ 3 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 90a747ca5898..3fe4ce5d893b 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -6786,8 +6786,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+     CmdArgs.push_back("--offload-new-driver");
+   }
+ 
+-  SanitizeArgs.addArgs(TC, Args, CmdArgs, InputType);
+-
+   const XRayArgs &XRay = TC.getXRayArgs();
+   XRay.addArgs(TC, Args, CmdArgs, InputType);
+ 
+@@ -7677,6 +7675,10 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
+     }
+   }
+ 
++  // This needs to run after -Xclang argument forwarding to pick up the target
++  // features enabled through -Xclang -target-feature flags.
++  SanitizeArgs.addArgs(TC, Args, CmdArgs, InputType);
++
+   // With -save-temps, we want to save the unoptimized bitcode output from the
+   // CompileJobAction, use -disable-llvm-passes to get pristine IR generated
+   // by the frontend.
+diff --git a/clang/test/Driver/fsanitize.c b/clang/test/Driver/fsanitize.c
+index f86c978f221c..6ecf0b57bee5 100644
+--- a/clang/test/Driver/fsanitize.c
++++ b/clang/test/Driver/fsanitize.c
+@@ -197,6 +197,8 @@
+ // CHECK-SANMT-MT: "-target-feature" "+mte"
+ // CHECK-SANMT-MT-SAME: "-fsanitize=memtag-stack,memtag-heap,memtag-globals"
+ 
++// RUN: not %clang --target=aarch64-linux -fsanitize=memtag -Xclang -target-feature -Xclang +mte %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANMT-MT
++
+ // RUN: not %clang --target=aarch64-linux -fsanitize=memtag %s -### 2>&1 | FileCheck %s --check-prefix=CHECK-SANMT-NOMT-0
+ // CHECK-SANMT-NOMT-0: '-fsanitize=memtag-stack' requires hardware support (+memtag)
+ 
+@@ -726,8 +728,8 @@
+ // NO-SP-NOT: stack-protector
+ // NO-SP: "-fsanitize=safe-stack"
+ // SP-ASAN: error: invalid argument '-fsanitize=safe-stack' not allowed with '-fsanitize=address'
+-// SP: "-fsanitize=safe-stack"
+ // SP: -stack-protector
++// SP: "-fsanitize=safe-stack"
+ // NO-SP-NOT: stack-protector
+ 
+ // RUN: %clang --target=powerpc64-unknown-linux-gnu -fsanitize=memory %s -### 2>&1 | FileCheck %s -check-prefix=CHECK-SANM
+diff --git a/clang/test/Driver/fuchsia.c b/clang/test/Driver/fuchsia.c
+index c67f7f8c005b..83dee1698169 100644
+--- a/clang/test/Driver/fuchsia.c
++++ b/clang/test/Driver/fuchsia.c
+@@ -30,10 +30,10 @@
+ // CHECK: "-resource-dir" "[[RESOURCE_DIR:[^"]+]]"
+ // CHECK: "-isysroot" "[[SYSROOT:[^"]+]]"
+ // CHECK: "-internal-externc-isystem" "[[SYSROOT]]{{/|\\\\}}include"
++// CHECK: "-stack-protector" "2"
+ // CHECK-AARCH64: "-fsanitize=shadow-call-stack"
+ // CHECK-RISCV64: "-fsanitize=shadow-call-stack"
+ // CHECK-X86_64: "-fsanitize=safe-stack"
+-// CHECK: "-stack-protector" "2"
+ // CHECK-AARCH64: "-target-feature" "+outline-atomics"
+ // CHECK-NOT: "-fcommon"
+ // CHECK: {{.*}}ld.lld{{.*}}" "-z" "max-page-size=4096" "-z" "now" "-z" "start-stop-visibility=hidden" "-z" "rodynamic" "-z" "separate-loadable-segments" "-z" "rel" "--pack-dyn-relocs=relr"
+-- 
+2.46.0.469.g59c65b2a67-goog
+
