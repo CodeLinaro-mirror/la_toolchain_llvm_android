@@ -1,0 +1,84 @@
+From 5f4ee5a2dfa97fe32ee62d1d67aa1413d5a059e6 Mon Sep 17 00:00:00 2001
+From: Shanzhi <chenshanzhi@huawei.com>
+Date: Mon, 29 Jan 2024 19:17:13 +0800
+Subject: [PATCH] [Clang][AST] Fix a crash on attaching doc comments (#78716)
+
+This crash is basically caused by calling
+`ASTContext::getRawCommentForDeclNoCacheImp` with its input arguments
+`RepresentativeLocForDecl` and `CommentsInTheFile` refering to different
+files. A reduced reproducer is provided in this patch.
+
+After the source locations for instantiations of funtion template are
+corrected in the commit 256a0b298c68b89688b80350b034daf2f7785b67, the
+variable `CommitsInThisFile` in the function
+`ASTContext::attachCommentsToJustParsedDecls` would refer to the source
+file rather than the header file for implicit function template
+instantiation. Therefore, in the first loop in
+`ASTContext::attachCommentsToJustParsedDecls`, `D` should also be
+adjusted for relevant scenarios like the second loop.
+
+Fixes #67979
+Fixes #68524
+Fixes #70550
+---
+ clang/lib/AST/ASTContext.cpp                  |  6 +++-
+ .../AST/ast-crash-doc-function-template.cpp   | 30 +++++++++++++++++++
+ 2 files changed, 35 insertions(+), 1 deletion(-)
+ create mode 100644 clang/test/AST/ast-crash-doc-function-template.cpp
+
+diff --git a/clang/lib/AST/ASTContext.cpp b/clang/lib/AST/ASTContext.cpp
+index f7c9e4521b5f..71c9c0003d18 100644
+--- a/clang/lib/AST/ASTContext.cpp
++++ b/clang/lib/AST/ASTContext.cpp
+@@ -498,7 +498,11 @@ void ASTContext::attachCommentsToJustParsedDecls(ArrayRef<Decl *> Decls,
+     return;
+ 
+   FileID File;
+-  for (Decl *D : Decls) {
++  for (const Decl *D : Decls) {
++    if (D->isInvalidDecl())
++      continue;
++
++    D = &adjustDeclToTemplate(*D);
+     SourceLocation Loc = D->getLocation();
+     if (Loc.isValid()) {
+       // See if there are any new comments that are not attached to a decl.
+diff --git a/clang/test/AST/ast-crash-doc-function-template.cpp b/clang/test/AST/ast-crash-doc-function-template.cpp
+new file mode 100644
+index 000000000000..d48eb0dbe02f
+--- /dev/null
++++ b/clang/test/AST/ast-crash-doc-function-template.cpp
+@@ -0,0 +1,30 @@
++// RUN: rm -rf %t
++// RUN: split-file %s %t
++
++// RUN: %clang_cc1 -x c++ -Wdocumentation -fsyntax-only -ast-dump-all %t/t.cpp
++
++//--- t.h
++/// MyClass in the header file
++class MyClass {
++public:
++  template <typename T>
++  void Foo() const;
++
++  /// Bar
++  void Bar() const;
++};
++
++//--- t.cpp
++#include "t.h"
++
++/// MyClass::Bar: Foo<int>() is implicitly instantiated and called here.
++void MyClass::Bar() const {
++  Foo<int>();
++}
++
++/// MyClass::Foo
++template <typename T>
++void MyClass::Foo() const {
++}
++
++// CHECK: TranslationUnitDecl
+-- 
+2.46.0.598.g6f2099f65c-goog
+

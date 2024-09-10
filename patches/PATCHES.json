@@ -1025,6 +1025,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Clang][AST] Fix a crash on attaching doc comments (#78716)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5f4ee5a2dfa97fe32ee62d1d67aa1413d5a059e6.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 525852
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [FMV] Change feature priorities according to ACLE. (#79316)"
         },
         "platforms": [
