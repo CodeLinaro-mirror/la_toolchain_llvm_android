@@ -1571,6 +1571,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Bail out jump threading on indirect branches (#103688)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3c9022c965b85951f30af140da591f819acef8a0.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 549232
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
