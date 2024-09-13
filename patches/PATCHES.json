@@ -1543,6 +1543,22 @@
     {
         "metadata": {
             "info": [],
+            "original_sha": "0a00d32c5f88fce89006dcde6e235bc77d7b495e",
+            "title": "[lldb] Add armv7a and armv8a ArchSpecs (#106433)"
+        },
+        "platforms": [
+            "android",
+            "chromiumos"
+        ],
+        "rel_patch_path": "cherry/0a00d32c5f88fce89006dcde6e235bc77d7b495e.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 547992
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
         },
         "platforms": [
