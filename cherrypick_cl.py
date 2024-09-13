@@ -48,8 +48,7 @@ def parse_args():
         '--start-version', default='llvm',
         help="""svn revision to start applying patches. 'llvm' can also be used.""")
     parser.add_argument('--bug', help='bug to reference in CLs created (if any)')
-    parser.add_argument('--reason', required=True,
-                        help='issue/reason to mention in CL subject line')
+    parser.add_argument('--reason', help='issue/reason to mention in CL subject line')
     parser.add_argument('--verbose', help='Enable logging')
     parser.add_argument('--no-verify-merge', action='store_true',
                         help='check if patches can be applied cleanly')
@@ -378,6 +377,14 @@ def main() -> bool:
     patch_list.save_to_file()
     if not patch_list.check_patches():
         return False
+
+    if args.pr or args.sha:
+        assert(args.reason), (
+            'Reason `--reason` must be specified with a PR or with a SHA.'
+        )
+    else:
+        # Only sort the patches and return.
+        return True
 
     if not args.no_verify_merge:
         print('Verifying merge...')
