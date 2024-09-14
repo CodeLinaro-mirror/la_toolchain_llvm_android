@@ -1,0 +1,40 @@
+From d32fe95d8286ffdcdc962534becabffdf1e56816 Mon Sep 17 00:00:00 2001
+From: Maksim Panchenko <maks@fb.com>
+Date: Fri, 13 Sep 2024 20:41:37 -0700
+Subject: [PATCH] [BOLT][AArch64] Do not relax ADR referencing the same
+ fragment (#108673)
+
+ADR can reference a secondary entry point in the same function. If
+that's the case, we can skip relaxing the instruction when it is in the
+same fragment as its target.
+
+Fixes #108290
+---
+ bolt/lib/Passes/ADRRelaxationPass.cpp | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/bolt/lib/Passes/ADRRelaxationPass.cpp b/bolt/lib/Passes/ADRRelaxationPass.cpp
+index 24fddbc764cb..256034a841c7 100644
+--- a/bolt/lib/Passes/ADRRelaxationPass.cpp
++++ b/bolt/lib/Passes/ADRRelaxationPass.cpp
+@@ -59,10 +59,15 @@ void ADRRelaxationPass::runOnFunction(BinaryFunction &BF) {
+       // Don't relax adr if it points to the same function and it is not split
+       // and BF initial size is < 1MB.
+       const unsigned OneMB = 0x100000;
+-      if (!BF.isSplit() && BF.getSize() < OneMB) {
++      if (BF.getSize() < OneMB) {
+         BinaryFunction *TargetBF = BC.getFunctionForSymbol(Symbol);
+-        if (TargetBF && TargetBF == &BF)
++        if (TargetBF == &BF && !BF.isSplit())
+           continue;
++        // No relaxation needed if ADR references a basic block in the same
++        // fragment.
++        if (BinaryBasicBlock *TargetBB = BF.getBasicBlockForLabel(Symbol))
++          if (BB.getFragmentNum() == TargetBB->getFragmentNum())
++            continue;
+       }
+ 
+       MCPhysReg Reg;
+-- 
+2.46.0.662.g92d0881bb0-goog
+
