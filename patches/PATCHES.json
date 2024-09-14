@@ -1601,6 +1601,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [BOLT][AArch64] Do not relax ADR referencing the same fragment (#108673)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d32fe95d8286ffdcdc962534becabffdf1e56816.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 549692
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
