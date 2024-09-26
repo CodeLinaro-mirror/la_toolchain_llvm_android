@@ -25,17 +25,8 @@ import shutil
 import subprocess
 from typing import cast, Dict, List, Optional, Set, Sequence
 
-import android_version
-from builder_registry import BuilderRegistry
-import configs
-import constants
-import hosts
-import paths
-import timer
-import toolchains
-import utils
-import win_sdk
-
+from llvm_android import android_version, configs, constants, hosts, paths, timer, toolchains, utils, win_sdk
+from llvm_android.builder_registry import BuilderRegistry
 
 def logger():
     """Returns the module level logger."""

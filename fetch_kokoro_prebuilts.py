@@ -21,7 +21,9 @@ import subprocess
 import sys
 import tempfile
 from typing import List, Optional
-from utils import check_tools, extract_tarball
+
+import context
+from llvm_android.utils import check_tools, extract_tarball
 
 prefix = "gs://android-llvm-kokoro-ci-artifacts/prod/android-llvm/linux-tot/continuous/"
 

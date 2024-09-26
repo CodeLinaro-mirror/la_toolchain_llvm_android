@@ -22,12 +22,8 @@ import shutil
 import subprocess
 import sys
 
-import android_version
-import builders
-import configs
-import hosts
-import paths
-import utils
+import context
+from llvm_android import android_version, builders, configs, hosts, paths, utils
 
 def logger():
     """Returns the module level logger."""

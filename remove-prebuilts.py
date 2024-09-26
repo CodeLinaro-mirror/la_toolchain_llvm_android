@@ -24,8 +24,8 @@ import shutil
 import subprocess
 from typing import Optional
 
-import paths
-import utils
+import context
+from llvm_android import paths, utils
 
 def get_args():
     parser = argparse.ArgumentParser(description=__doc__)

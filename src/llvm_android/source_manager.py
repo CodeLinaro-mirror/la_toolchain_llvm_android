@@ -27,11 +27,8 @@ import string
 import subprocess
 import sys
 
-import android_version
-from toolchain_errors import ToolchainErrorCode, ToolchainError
-import hosts
-import paths
-import utils
+from llvm_android.toolchain_errors import ToolchainErrorCode, ToolchainError
+from llvm_android import android_version, hosts, paths, utils
 
 
 def logger():

@@ -19,7 +19,8 @@ import argparse
 import sys
 from typing import List, Optional
 from fetch_kokoro_prebuilts import check_valid_build, check_valid_path, fetch_prebuilts, get_build_number
-from utils import check_tools
+import context
+from llvm_android.utils import check_tools
 
 
 def parse_args(sys_argv: Optional[List[str]]):

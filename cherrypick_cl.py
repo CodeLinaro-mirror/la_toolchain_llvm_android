@@ -31,11 +31,11 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 
-from android_version import get_svn_revision_number
+import context
+from llvm_android.android_version import get_svn_revision_number
 from merge_from_upstream import fetch_upstream, sha_to_revision
-import paths
-import source_manager
-from utils import check_call, check_output
+from llvm_android import paths, source_manager
+from llvm_android.utils import check_call, check_output
 
 
 def parse_args():

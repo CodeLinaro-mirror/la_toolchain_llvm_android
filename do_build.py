@@ -27,19 +27,11 @@ import textwrap
 from typing import List, Optional, Set
 import re
 
-import android_version
-from base_builders import Builder, LLVMBuilder
-import builders
-from builder_registry import BuilderRegistry
-import configs
-import hosts
-import paths
-import source_manager
-import toolchain_errors
-import timer
-import toolchains
-import utils
-import win_sdk
+import context
+
+from llvm_android.base_builders import Builder, LLVMBuilder
+from llvm_android.builder_registry import BuilderRegistry
+from llvm_android import (android_version, builders, configs, hosts, paths, source_manager, toolchain_errors, timer, toolchains, utils, win_sdk)
 
 def logger():
     """Returns the module level logger."""

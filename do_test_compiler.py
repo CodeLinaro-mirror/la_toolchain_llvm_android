@@ -25,10 +25,8 @@ import shutil
 import subprocess
 from typing import Dict, List, Optional
 
-import hosts
-import paths
-import utils
-import version
+import context
+from llvm_android import hosts, paths, utils, version
 
 STDERR_REDIRECT_KEY = 'ANDROID_LLVM_STDERR_REDIRECT'
 PREBUILT_COMPILER_PATH_KEY = 'ANDROID_LLVM_PREBUILT_COMPILER_PATH'

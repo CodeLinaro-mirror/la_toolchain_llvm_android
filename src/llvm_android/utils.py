@@ -26,9 +26,7 @@ import subprocess
 import sys
 from typing import Dict, List
 
-import constants
-import paths
-
+from llvm_android import constants, paths
 
 ORIG_ENV = dict(os.environ)
 
