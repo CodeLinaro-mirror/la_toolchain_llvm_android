@@ -20,10 +20,7 @@ from typing import Dict, List, Optional
 import functools
 import json
 
-import hosts
-import paths
-import toolchains
-import win_sdk
+from llvm_android import (hosts, paths, toolchains, win_sdk)
 
 class Config:
     """Base configuration."""

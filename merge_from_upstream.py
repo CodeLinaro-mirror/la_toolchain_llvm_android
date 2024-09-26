@@ -22,8 +22,8 @@ from functools import lru_cache
 import subprocess
 import sys
 
-import paths
-import utils
+import context
+from llvm_android import paths, utils
 
 sys.path.append(str(paths.TOOLCHAIN_UTILS_DIR / 'llvm_tools'))
 #pylint: disable=wrong-import-position,wrong-import-order

@@ -18,21 +18,14 @@
 from pathlib import Path
 from typing import cast, Dict, Iterator, List, Optional, Set
 import contextlib
+import multiprocessing
 import os
 import re
 import shutil
-import textwrap
-import timer
-
-import base_builders
-import configs
-import constants
-import hosts
-import mapfile
-import multiprocessing
-import paths
 import tempfile
-import utils
+import textwrap
+
+from llvm_android import (base_builders, configs, constants, hosts, mapfile, paths, timer, utils)
 
 class SanitizerMapFileBuilder(base_builders.Builder):
     name: str = 'sanitizer-mapfile'

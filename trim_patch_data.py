@@ -19,13 +19,10 @@ import os
 from pathlib import Path
 import string
 import subprocess
-
-import android_version
-import hosts
-import paths
-import utils
-import source_manager
 import sys
+
+import context
+from llvm_android import android_version, hosts, paths, utils, source_manager
 
 _LLVM_ANDROID_PATH = paths.SCRIPTS_DIR
 _PATCH_DIR = _LLVM_ANDROID_PATH / 'patches'

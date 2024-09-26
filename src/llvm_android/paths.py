@@ -21,11 +21,9 @@ from pathlib import Path
 import string
 from typing import Optional
 
-import android_version
-import constants
-import hosts
+from llvm_android import (android_version, constants, hosts)
 
-SCRIPTS_DIR: Path = Path(__file__).resolve().parent
+SCRIPTS_DIR: Path = Path(__file__).resolve().parents[2]
 ANDROID_DIR: Path = SCRIPTS_DIR.parents[1]
 OUT_DIR: Path = Path(os.environ.get('OUT_DIR', ANDROID_DIR / 'out')).resolve()
 DIST_DIR = Path(os.environ.get('DIST_DIR', OUT_DIR)).resolve()

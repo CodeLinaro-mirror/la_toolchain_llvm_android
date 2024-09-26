@@ -25,8 +25,8 @@ import shutil
 import subprocess
 from typing import Optional
 
-import paths
-import utils
+import context
+from llvm_android import paths, utils
 
 
 class ArgParser(argparse.ArgumentParser):

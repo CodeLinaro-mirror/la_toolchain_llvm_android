@@ -28,9 +28,9 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-import utils
 
-import paths
+import context
+from llvm_android import utils, paths
 
 PGO_PROFILE_PATTERN = 'pgo-*.tar.xz'
 BOLT_PROFILE_PATTERN = 'bolt-*.tar.xz'
