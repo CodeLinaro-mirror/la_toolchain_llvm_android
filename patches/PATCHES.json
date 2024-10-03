@@ -1615,6 +1615,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++abi] Avoid using deprecated throw specifications in >= C++11 (#109296)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 551432
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
