@@ -675,6 +675,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Clang] Fix IsOverload for function templates (#77323)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/69066ab31959968ebcbca71f3872bdedef8fb8cd.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 523435
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ELF] Support R_RISCV_SET_ULEB128/R_RISCV_SUB_ULEB128 in SHF_ALLOC sections (#77261)"
         },
         "platforms": [

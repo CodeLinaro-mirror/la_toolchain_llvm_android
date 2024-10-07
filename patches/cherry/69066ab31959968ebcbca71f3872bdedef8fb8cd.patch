@@ -1,0 +1,130 @@
+From 69066ab31959968ebcbca71f3872bdedef8fb8cd Mon Sep 17 00:00:00 2001
+From: cor3ntin <corentinjabot@gmail.com>
+Date: Mon, 8 Jan 2024 16:58:48 +0100
+Subject: [PATCH] [Clang] Fix IsOverload for function templates (#77323)
+
+Functions which correspond but have different template parameter lists
+are not redeclarations.
+
+Fixes a regression introduced by af4751
+
+(The patch just moves the template parameters check above if the
+signature check)
+
+Fixes #76358
+---
+ clang/lib/Sema/SemaOverload.cpp         | 74 ++++++++++++-------------
+ clang/test/CXX/over/over.load/p2-0x.cpp |  5 ++
+ 2 files changed, 42 insertions(+), 37 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaOverload.cpp b/clang/lib/Sema/SemaOverload.cpp
+index 07da5cb150b4..e6c267bb79e6 100644
+--- a/clang/lib/Sema/SemaOverload.cpp
++++ b/clang/lib/Sema/SemaOverload.cpp
+@@ -1259,6 +1259,43 @@ static bool IsOverloadOrOverrideImpl(Sema &SemaRef, FunctionDecl *New,
+   if ((OldTemplate == nullptr) != (NewTemplate == nullptr))
+     return true;
+ 
++  if (NewTemplate) {
++    // C++ [temp.over.link]p4:
++    //   The signature of a function template consists of its function
++    //   signature, its return type and its template parameter list. The names
++    //   of the template parameters are significant only for establishing the
++    //   relationship between the template parameters and the rest of the
++    //   signature.
++    //
++    // We check the return type and template parameter lists for function
++    // templates first; the remaining checks follow.
++    bool SameTemplateParameterList = SemaRef.TemplateParameterListsAreEqual(
++        NewTemplate, NewTemplate->getTemplateParameters(), OldTemplate,
++        OldTemplate->getTemplateParameters(), false, Sema::TPL_TemplateMatch);
++    bool SameReturnType = SemaRef.Context.hasSameType(
++        Old->getDeclaredReturnType(), New->getDeclaredReturnType());
++    // FIXME(GH58571): Match template parameter list even for non-constrained
++    // template heads. This currently ensures that the code prior to C++20 is
++    // not newly broken.
++    bool ConstraintsInTemplateHead =
++        NewTemplate->getTemplateParameters()->hasAssociatedConstraints() ||
++        OldTemplate->getTemplateParameters()->hasAssociatedConstraints();
++    // C++ [namespace.udecl]p11:
++    //   The set of declarations named by a using-declarator that inhabits a
++    //   class C does not include member functions and member function
++    //   templates of a base class that "correspond" to (and thus would
++    //   conflict with) a declaration of a function or function template in
++    //   C.
++    // Comparing return types is not required for the "correspond" check to
++    // decide whether a member introduced by a shadow declaration is hidden.
++    if (UseMemberUsingDeclRules && ConstraintsInTemplateHead &&
++        !SameTemplateParameterList)
++      return true;
++    if (!UseMemberUsingDeclRules &&
++        (!SameTemplateParameterList || !SameReturnType))
++      return true;
++  }
++
+   // Is the function New an overload of the function Old?
+   QualType OldQType = SemaRef.Context.getCanonicalType(Old->getType());
+   QualType NewQType = SemaRef.Context.getCanonicalType(New->getType());
+@@ -1410,43 +1447,6 @@ static bool IsOverloadOrOverrideImpl(Sema &SemaRef, FunctionDecl *New,
+     }
+   }
+ 
+-  if (NewTemplate) {
+-    // C++ [temp.over.link]p4:
+-    //   The signature of a function template consists of its function
+-    //   signature, its return type and its template parameter list. The names
+-    //   of the template parameters are significant only for establishing the
+-    //   relationship between the template parameters and the rest of the
+-    //   signature.
+-    //
+-    // We check the return type and template parameter lists for function
+-    // templates first; the remaining checks follow.
+-    bool SameTemplateParameterList = SemaRef.TemplateParameterListsAreEqual(
+-        NewTemplate, NewTemplate->getTemplateParameters(), OldTemplate,
+-        OldTemplate->getTemplateParameters(), false, Sema::TPL_TemplateMatch);
+-    bool SameReturnType = SemaRef.Context.hasSameType(
+-        Old->getDeclaredReturnType(), New->getDeclaredReturnType());
+-    // FIXME(GH58571): Match template parameter list even for non-constrained
+-    // template heads. This currently ensures that the code prior to C++20 is
+-    // not newly broken.
+-    bool ConstraintsInTemplateHead =
+-        NewTemplate->getTemplateParameters()->hasAssociatedConstraints() ||
+-        OldTemplate->getTemplateParameters()->hasAssociatedConstraints();
+-    // C++ [namespace.udecl]p11:
+-    //   The set of declarations named by a using-declarator that inhabits a
+-    //   class C does not include member functions and member function
+-    //   templates of a base class that "correspond" to (and thus would
+-    //   conflict with) a declaration of a function or function template in
+-    //   C.
+-    // Comparing return types is not required for the "correspond" check to
+-    // decide whether a member introduced by a shadow declaration is hidden.
+-    if (UseMemberUsingDeclRules && ConstraintsInTemplateHead &&
+-        !SameTemplateParameterList)
+-      return true;
+-    if (!UseMemberUsingDeclRules &&
+-        (!SameTemplateParameterList || !SameReturnType))
+-      return true;
+-  }
+-
+   if (!UseOverrideRules) {
+     Expr *NewRC = New->getTrailingRequiresClause(),
+          *OldRC = Old->getTrailingRequiresClause();
+diff --git a/clang/test/CXX/over/over.load/p2-0x.cpp b/clang/test/CXX/over/over.load/p2-0x.cpp
+index 183f3cb322af..8fd9a1ce1e87 100644
+--- a/clang/test/CXX/over/over.load/p2-0x.cpp
++++ b/clang/test/CXX/over/over.load/p2-0x.cpp
+@@ -24,6 +24,11 @@ class Y {
+   void k() &&; // expected-error{{cannot overload a member function with ref-qualifier '&&' with a member function without a ref-qualifier}}
+ };
+ 
++struct GH76358 {
++    template<int> void f() && {}
++    template<typename T> void f() const {}
++};
++
+ 
+ #if __cplusplus >= 202002L
+ namespace GH58962 {
+-- 
+2.47.0.rc0.187.ge670bccf7e-goog
+
