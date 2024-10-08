@@ -1,0 +1,151 @@
+From 596a9c1f9b3179b3c77cbde1e96619292ce2a10a Mon Sep 17 00:00:00 2001
+From: Krystian Stasiowski <sdkrystian@gmail.com>
+Date: Mon, 13 May 2024 12:24:46 -0400
+Subject: [PATCH] [Clang][Sema] Fix bug where operator-> typo corrects in the
+ current instantiation (#91972)
+
+#90152 introduced a bug that occurs when typo-correction attempts to fix a reference to a
+non-existent member of the current instantiation (even though
+`operator->` may return a different type than the object type). This
+patch fixes it by simply considering the object expression to be of type
+`ASTContext::DependentTy` when the arrow operator is used with a
+dependent non-pointer non-function operand (after any implicit
+conversions).
+---
+ clang/lib/Sema/SemaExprMember.cpp             | 49 ++++++++++---------
+ .../temp.res/temp.dep/temp.dep.type/p4.cpp    | 27 ++++++++++
+ 2 files changed, 52 insertions(+), 24 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaExprMember.cpp b/clang/lib/Sema/SemaExprMember.cpp
+index 9fa69da4f968..244488a0b562 100644
+--- a/clang/lib/Sema/SemaExprMember.cpp
++++ b/clang/lib/Sema/SemaExprMember.cpp
+@@ -995,8 +995,6 @@ Sema::BuildMemberReferenceExpr(Expr *BaseExpr, QualType BaseExprType,
+   // arrow operator was used with a dependent non-pointer object expression,
+   // build a CXXDependentScopeMemberExpr.
+   if (R.wasNotFoundInCurrentInstantiation() ||
+-      (IsArrow && !BaseExprType->isPointerType() &&
+-       BaseExprType->isDependentType()) ||
+       (R.getLookupName().getCXXOverloadedOperator() == OO_Equal &&
+        (SS.isSet() ? SS.getScopeRep()->isDependent()
+                    : BaseExprType->isDependentType())))
+@@ -1322,28 +1320,28 @@ static ExprResult LookupMemberExpr(Sema &S, LookupResult &R,
+     else if (const ObjCObjectPointerType *Ptr =
+                  BaseType->getAs<ObjCObjectPointerType>())
+       BaseType = Ptr->getPointeeType();
+-    else if (!BaseType->isDependentType()) {
+-      if (BaseType->isRecordType()) {
+-        // Recover from arrow accesses to records, e.g.:
+-        //   struct MyRecord foo;
+-        //   foo->bar
+-        // This is actually well-formed in C++ if MyRecord has an
+-        // overloaded operator->, but that should have been dealt with
+-        // by now--or a diagnostic message already issued if a problem
+-        // was encountered while looking for the overloaded operator->.
+-        if (!S.getLangOpts().CPlusPlus) {
+-          S.Diag(OpLoc, diag::err_typecheck_member_reference_suggestion)
+-              << BaseType << int(IsArrow) << BaseExpr.get()->getSourceRange()
+-              << FixItHint::CreateReplacement(OpLoc, ".");
+-        }
+-        IsArrow = false;
+-      } else if (BaseType->isFunctionType()) {
+-        goto fail;
+-      } else {
+-        S.Diag(MemberLoc, diag::err_typecheck_member_reference_arrow)
+-            << BaseType << BaseExpr.get()->getSourceRange();
+-        return ExprError();
++    else if (BaseType->isFunctionType())
++      goto fail;
++    else if (BaseType->isDependentType())
++      BaseType = S.Context.DependentTy;
++    else if (BaseType->isRecordType()) {
++      // Recover from arrow accesses to records, e.g.:
++      //   struct MyRecord foo;
++      //   foo->bar
++      // This is actually well-formed in C++ if MyRecord has an
++      // overloaded operator->, but that should have been dealt with
++      // by now--or a diagnostic message already issued if a problem
++      // was encountered while looking for the overloaded operator->.
++      if (!S.getLangOpts().CPlusPlus) {
++        S.Diag(OpLoc, diag::err_typecheck_member_reference_suggestion)
++            << BaseType << int(IsArrow) << BaseExpr.get()->getSourceRange()
++            << FixItHint::CreateReplacement(OpLoc, ".");
+       }
++      IsArrow = false;
++    } else {
++      S.Diag(MemberLoc, diag::err_typecheck_member_reference_arrow)
++          << BaseType << BaseExpr.get()->getSourceRange();
++      return ExprError();
+     }
+   }
+ 
+@@ -1363,7 +1361,7 @@ static ExprResult LookupMemberExpr(Sema &S, LookupResult &R,
+   }
+ 
+   // Handle field access to simple records.
+-  if (BaseType->getAsRecordDecl() || BaseType->isDependentType()) {
++  if (BaseType->getAsRecordDecl()) {
+     TypoExpr *TE = nullptr;
+     if (LookupMemberExprInRecord(S, R, BaseExpr.get(), BaseType, OpLoc, IsArrow,
+                                  SS, HasTemplateArgs, TemplateKWLoc, TE))
+@@ -1374,6 +1372,9 @@ static ExprResult LookupMemberExpr(Sema &S, LookupResult &R,
+     // failed, the lookup result will have been cleared--that combined with the
+     // valid-but-null ExprResult will trigger the appropriate diagnostics.
+     return ExprResult(TE);
++  } else if (BaseType->isDependentType()) {
++    R.setNotFoundInCurrentInstantiation();
++    return ExprEmpty();
+   }
+ 
+   // Handle ivar access to Objective-C objects.
+diff --git a/clang/test/CXX/temp/temp.res/temp.dep/temp.dep.type/p4.cpp b/clang/test/CXX/temp/temp.res/temp.dep/temp.dep.type/p4.cpp
+index 1adbc33a701c..3ca7c6c7eb8e 100644
+--- a/clang/test/CXX/temp/temp.res/temp.dep/temp.dep.type/p4.cpp
++++ b/clang/test/CXX/temp/temp.res/temp.dep/temp.dep.type/p4.cpp
+@@ -539,6 +539,17 @@ namespace N4 {
+       a->y;
+       a->f();
+       a->g();
++
++      a->T::x;
++      a->T::y;
++      a->T::f();
++      a->T::g();
++
++      // FIXME: 'U' should be a dependent name, and its lookup context should be 'a.operator->()'!
++      a->U::x; // expected-error {{use of undeclared identifier 'U'}}
++      a->U::y; // expected-error {{use of undeclared identifier 'U'}}
++      a->U::f(); // expected-error {{use of undeclared identifier 'U'}}
++      a->U::g(); // expected-error {{use of undeclared identifier 'U'}}
+     }
+ 
+     void instantiated(D a) {
+@@ -546,9 +557,25 @@ namespace N4 {
+       a->y; // expected-error {{no member named 'y' in 'N4::B'}}
+       a->f();
+       a->g(); // expected-error {{no member named 'g' in 'N4::B'}}
++
++      a->T::x;
++      a->T::y; // expected-error {{no member named 'y' in 'N4::B'}}
++      a->T::f();
++      a->T::g(); // expected-error {{no member named 'g' in 'N4::B'}}
+     }
+   };
+ 
+   template void D<B>::instantiated(D); // expected-note {{in instantiation of}}
+ 
++  template<typename T>
++  struct Typo {
++    T *operator->();
++
++    void not_instantiated(Typo a) {
++      a->Not_instantiated;
++      a->typo;
++      a->T::Not_instantiated;
++      a->T::typo;
++    }
++  };
+ } // namespace N4
+-- 
+2.46.0.rc1.232.g9752f9e123-goog
+
