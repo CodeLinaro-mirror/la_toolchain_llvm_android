@@ -1,0 +1,88 @@
+From cda5790e38af5da3ad455eddab36ef16bf3e8104 Mon Sep 17 00:00:00 2001
+From: Krzysztof Pszeniczny <kpszeniczny@google.com>
+Date: Sun, 26 May 2024 18:05:13 +0200
+Subject: [PATCH] [Inliner] Don't propagate memory attributes to byval params
+ (#93381)
+
+Memory restrictions for params to the inlined function do not apply to
+the copies logically made when that function further passes its own
+params as byval.
+
+In other words, imagine that `@foo()` calls `@bar(ptr readonly %p)`
+which in turn calls `@baz(ptr byval("...") %p)` (passing the same `%p`).
+This is fully legal - `baz` is allowed to modify its copy of the object
+referenced by `%p` because the argument is passed by value. However,
+when inlining `@bar` into `@foo`, we can't say that the callsite is now
+`@baz(ptr readonly byval("...") %p)`, as this would mean that `@baz` is
+not allowed to modify it's copy of the object pointed to by `%p`.
+LangRef says: "The copy is considered to belong to the caller not the
+callee (for example, readonly functions should not write to byval
+parameters)".
+
+This fixes a miscompile introduced by PR #89024 in a program in the
+Google codebase.
+---
+ llvm/lib/Transforms/Utils/InlineFunction.cpp   |  6 ++++++
+ .../Inline/access-attributes-prop.ll           | 18 ++++++++++++++++++
+ 2 files changed, 24 insertions(+)
+
+diff --git a/llvm/lib/Transforms/Utils/InlineFunction.cpp b/llvm/lib/Transforms/Utils/InlineFunction.cpp
+index 82daaedaa0e8..7b846f2d2d72 100644
+--- a/llvm/lib/Transforms/Utils/InlineFunction.cpp
++++ b/llvm/lib/Transforms/Utils/InlineFunction.cpp
+@@ -1389,6 +1389,12 @@ static void AddParamAndFnBasicAttributes(const CallBase &CB,
+         if (!Arg)
+           continue;
+ 
++        if (AL.hasParamAttr(I, Attribute::ByVal))
++          // It's unsound to propagate memory attributes to byval arguments.
++          // Even if CalledFunction doesn't e.g. write to the argument,
++          // the call to NewInnerCB may write to its by-value copy.
++          continue;
++
+         unsigned ArgNo = Arg->getArgNo();
+         // If so, propagate its access attributes.
+         AL = AL.addParamAttributes(Context, I, ValidParamAttrs[ArgNo]);
+diff --git a/llvm/test/Transforms/Inline/access-attributes-prop.ll b/llvm/test/Transforms/Inline/access-attributes-prop.ll
+index ffd31fbe8ae1..48665e9bbafd 100644
+--- a/llvm/test/Transforms/Inline/access-attributes-prop.ll
++++ b/llvm/test/Transforms/Inline/access-attributes-prop.ll
+@@ -6,6 +6,7 @@
+ declare void @bar1(ptr %p)
+ declare void @bar2(ptr %p, ptr %p2)
+ declare void @bar3(ptr writable %p)
++declare void @bar4(ptr byval([4 x i32]) %p)
+ define dso_local void @foo1_rdonly(ptr readonly %p) {
+ ; CHECK-LABEL: define {{[^@]+}}@foo1_rdonly
+ ; CHECK-SAME: (ptr readonly [[P:%.*]]) {
+@@ -186,6 +187,15 @@ define dso_local void @foo2_through_obj(ptr %p, ptr %p2) {
+   ret void
+ }
+ 
++define dso_local void @foo_byval_readonly(ptr readonly %p) {
++; CHECK-LABEL: define {{[^@]+}}@foo_byval_readonly
++; CHECK-SAME: (ptr readonly [[P:%.*]])
++; CHECK-NEXT:   call void @bar4(ptr byval([4 x i32]) [[P]])
++; CHECK-NEXT:   ret void
++  call void @bar4(ptr byval([4 x i32]) %p)
++  ret void
++}
++
+ define void @prop_param_func_decl(ptr %p) {
+ ; CHECK-LABEL: define {{[^@]+}}@prop_param_func_decl
+ ; CHECK-SAME: (ptr [[P:%.*]]) {
+@@ -539,3 +549,11 @@ define void @prop_no_conflict_writable2(ptr %p) {
+   ret void
+ }
+ 
++define void @prop_byval_readonly(ptr %p) {
++; CHECK-LABEL: define {{[^@]+}}@prop_byval_readonly
++; CHECK-SAME: (ptr [[P:%.*]]) {
++; CHECK-NEXT:   call void @bar4(ptr byval([4 x i32]) [[P]])
++; CHECK-NEXT:   ret void
++  call void @foo_byval_readonly(ptr %p)
++  ret void
++}
+-- 
+2.46.0.rc1.232.g9752f9e123-goog
+

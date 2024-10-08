@@ -1,0 +1,54 @@
+From 243ffbdf8b25285d04ee4393e86094312cb7c64f Mon Sep 17 00:00:00 2001
+From: eaeltsin <109593613+eaeltsin@users.noreply.github.com>
+Date: Mon, 27 May 2024 09:26:44 +0200
+Subject: [PATCH] [DSE] Check write location in IsRedundantStore (#93400)
+
+Fix https://github.com/llvm/llvm-project/issues/93298.
+---
+ llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp |  6 ++++--
+ llvm/test/Transforms/DeadStoreElimination/simple.ll | 13 +++++++++++++
+ 2 files changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp b/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
+index ed4212d29cef..172cce2cfa38 100644
+--- a/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
++++ b/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp
+@@ -2109,10 +2109,12 @@ struct DSEState {
+         if (auto *MemSetI = dyn_cast<MemSetInst>(UpperInst)) {
+           if (auto *SI = dyn_cast<StoreInst>(DefInst)) {
+             // MemSetInst must have a write location.
+-            MemoryLocation UpperLoc = *getLocForWrite(UpperInst);
++            auto UpperLoc = getLocForWrite(UpperInst);
++            if (!UpperLoc)
++              return false;
+             int64_t InstWriteOffset = 0;
+             int64_t DepWriteOffset = 0;
+-            auto OR = isOverwrite(UpperInst, DefInst, UpperLoc, *MaybeDefLoc,
++            auto OR = isOverwrite(UpperInst, DefInst, *UpperLoc, *MaybeDefLoc,
+                                   InstWriteOffset, DepWriteOffset);
+             Value *StoredByte = isBytewiseValue(SI->getValueOperand(), DL);
+             return StoredByte && StoredByte == MemSetI->getOperand(1) &&
+diff --git a/llvm/test/Transforms/DeadStoreElimination/simple.ll b/llvm/test/Transforms/DeadStoreElimination/simple.ll
+index e5d3dd09fa14..ef2c4ef564b2 100644
+--- a/llvm/test/Transforms/DeadStoreElimination/simple.ll
++++ b/llvm/test/Transforms/DeadStoreElimination/simple.ll
+@@ -790,3 +790,16 @@ define i32 @test48(ptr %P, ptr noalias %Q, ptr %R) {
+   %l = load i32, ptr %R
+   ret i32 %l
+ }
++
++define void @test49() {
++; CHECK-LABEL: @test49(
++; CHECK-NEXT:  bb:
++; CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr readonly null, i8 0, i64 0, i1 false)
++; CHECK-NEXT:    store ptr null, ptr null, align 8
++; CHECK-NEXT:    ret void
++;
++bb:
++  call void @llvm.memset.p0.i64(ptr readonly null, i8 0, i64 0, i1 false)
++  store ptr null, ptr null, align 8
++  ret void
++}
+-- 
+2.46.0.rc1.232.g9752f9e123-goog
+

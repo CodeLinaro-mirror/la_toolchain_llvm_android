@@ -1389,6 +1389,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Clang][Sema] Fix bug where operator-> typo corrects in the current instantiation (#91972)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/596a9c1f9b3179b3c77cbde1e96619292ce2a10a.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 536433
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"Repply#2 \"[RemoveDIs] Load into new debug info format by default in LLVM (#89799)\"\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/23f8fac745bdde70ed4f9c585d19c4913734f1b8.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 536488
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [hwasan] Remove memory attrs from instrumented functions. (#92974)"
         },
         "platforms": [
@@ -1398,6 +1426,62 @@
         "version_range": {
             "from": 525365,
             "until": 537320
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [SCCP] Add tests for #93096 (NFC)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5e06050efdaa36bc63987b0e15c30b3cf358e70c.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 537497
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [SCCP] Don't allow undef ranges when performing operations (#93163)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/27392a35ef052aa515f38359de89aced11a4363d.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 537524
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Inliner] Don't propagate memory attributes to byval params (#93381)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/cda5790e38af5da3ad455eddab36ef16bf3e8104.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 537737
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [DSE] Check write location in IsRedundantStore (#93400)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/243ffbdf8b25285d04ee4393e86094312cb7c64f.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 537771
         }
     },
     {
