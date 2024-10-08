@@ -366,7 +366,7 @@ def verify_file_exists(lib_dir: Path, name: str):
 
 def package_toolchain(toolchain_builder: LLVMBuilder,
                       necessary_bin_files: Optional[Set[str]]=None,
-                      strip=True, with_runtimes=True, create_tar=True, llvm_next=False, dev_package=False):
+                      strip=True, with_runtimes=True, create_tar=True, llvm_next=False, builders_package=False):
     build_dir = toolchain_builder.install_dir
     host_config = toolchain_builder.config_list[0]
     host = host_config.target_os
@@ -487,7 +487,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     for binary in bin_dir.iterdir():
         if binary.is_file():
             if binary.name not in necessary_bin_files:
-                if not dev_package:
+                if not builders_package:
                     binary.unlink()
             elif binary.is_symlink():
                 continue
@@ -506,7 +506,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         if not (bin_dir / necessary_bin_file).is_file():
             raise RuntimeError(f'Did not find {necessary_bin_file} in {bin_dir}')
 
-    if host.is_linux and dev_package:
+    if host.is_linux and builders_package:
         # Copy FileCheck into the install directory.  This is needed to build the
         # Rust toolchain.
         shutil.copy2(toolchain_builder.output_dir / 'bin' / 'FileCheck', bin_dir)
@@ -548,7 +548,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                                                                      is_darwin_lib=True)
 
     # Remove unnecessary static libraries.
-    if not dev_package:
+    if not builders_package:
         remove_static_libraries(lib_dir, necessary_lib_files)
 
     if host.is_linux:
@@ -588,7 +588,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
 
     # Copy in the libzstd.a library.  This is needed to compile the Rust
     # toolchain.
-    if dev_package and toolchain_builder.libzstd is not None:
+    if builders_package and toolchain_builder.libzstd is not None:
         for lib in toolchain_builder.libzstd.link_libraries:
             shutil.copy2(lib, lib_dir)
 
@@ -711,6 +711,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         tag = host.os_tag
         if isinstance(toolchain_builder.config_list[0], configs.LinuxMuslConfig):
             tag = host.os_tag_musl
+        if builders_package:
+            tag += "-builders"
         tarball_name = package_name + '-' + tag + '.tar.xz'
         package_path = paths.DIST_DIR / tarball_name
         logger().info(f'Packaging {package_path}')
@@ -932,7 +934,7 @@ def parse_args():
         help='Path to a Windows SDK. If set, it will be used instead of MinGW.')
 
     parser.add_argument(
-        "--dev-package",
+        "--builders-package",
         action="store_true",
         help="Skip pruning non-allowlisted binaries and install additional files in the final prebuilt archive")
 
@@ -1194,7 +1196,16 @@ def main():
             with_runtimes=do_runtimes,
             create_tar=args.create_tar,
             llvm_next=args.build_llvm_next,
-            dev_package=args.dev_package)
+            builders_package=False)
+
+        if args.builders_package:
+            package_toolchain(
+                stage2,
+                strip=do_strip_host_package,
+                with_runtimes=do_runtimes,
+                create_tar=args.create_tar,
+                llvm_next=args.build_llvm_next,
+                builders_package=True)
 
     if do_package and need_windows:
         package_toolchain(
@@ -1203,7 +1214,16 @@ def main():
             strip=do_strip,
             with_runtimes=do_runtimes,
             create_tar=args.create_tar,
-            dev_package=args.dev_package)
+            builders_package=False)
+
+        if args.builders_package:
+            package_toolchain(
+                win_builder,
+                necessary_bin_files=win_lldb_bins,
+                strip=do_strip,
+                with_runtimes=do_runtimes,
+                create_tar=args.create_tar,
+                builders_package=True)
 
     if build_errors:
         logger().info(toolchain_errors.combine_toolchain_errors(build_errors))
