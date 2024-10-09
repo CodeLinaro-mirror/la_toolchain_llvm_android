@@ -1389,6 +1389,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[lldb] Attempt to fix signal-in-leaf-function-aarch64 on darwin\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0a6103eaeb7f22c009f9add87c84780b6f7f293a.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 536377
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Clang][Sema] Fix bug where operator-> typo corrects in the current instantiation (#91972)"
         },
         "platforms": [
