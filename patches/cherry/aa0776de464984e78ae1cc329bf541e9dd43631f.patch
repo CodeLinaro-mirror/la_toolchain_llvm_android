@@ -1,0 +1,207 @@
+From aa0776de464984e78ae1cc329bf541e9dd43631f Mon Sep 17 00:00:00 2001
+From: Reid Kleckner <rnk@google.com>
+Date: Fri, 10 May 2024 21:20:15 +0000
+Subject: [PATCH] Revert "[Pipelines] Do not run CoroSplit and CoroCleanup in
+ LTO pre-link pipeline (#90310)" and related patches
+
+This change is incorrect when thinlto and asan are enabled, and this can
+be observed by adding `-fsanitize=address` to the provided
+coro-elide-thinlto.cpp test. It results in the error "Coroutines cannot
+handle non static allocas yet", and ASan introduces a dynamic alloca.
+
+In other words, we must preserve the invariant that CoroSplit runs
+before ASan. If we move CoroSplit to the post post-link compile stage,
+ASan has to be moved to the post-link compile stage first.  It would
+also be correct to make CoroSplit handle dynamic allocas so the pass
+ordering doesn't matter, but sanitizer instrumentation really ought to
+be last, after coroutine splitting.
+
+This reverts commit bafc5f42c0132171287d7cba7f5c14459be1f7b7.
+This reverts commit b1b1bfa7bea0ce489b5ea9134e17a43c695df5ec.
+This reverts commit 0232b77e145577ab78e3ed1fdbb7eacc5a7381ab.
+This reverts commit fb2d3056618e3d03ba9a695627c7b002458e59f0.
+This reverts commit 1cb33713910501c6352d0eb2a15b7a15e6e18695.
+This reverts commit cd68d7b3c0ebf6da5e235cfabd5e6381737eb7fe.
+---
+ .../CodeGenCoroutines/coro-elide-thinlto.cpp  | 78 -------------------
+ llvm/lib/Passes/PassBuilderPipelines.cpp      | 11 +--
+ .../Other/new-pm-thinlto-prelink-defaults.ll  |  2 +
+ .../new-pm-thinlto-prelink-pgo-defaults.ll    |  2 +
+ ...w-pm-thinlto-prelink-samplepgo-defaults.ll |  2 +
+ 5 files changed, 10 insertions(+), 85 deletions(-)
+ delete mode 100644 clang/test/CodeGenCoroutines/coro-elide-thinlto.cpp
+
+diff --git a/clang/test/CodeGenCoroutines/coro-elide-thinlto.cpp b/clang/test/CodeGenCoroutines/coro-elide-thinlto.cpp
+deleted file mode 100644
+index 5b2d01465784..000000000000
+--- a/clang/test/CodeGenCoroutines/coro-elide-thinlto.cpp
++++ /dev/null
+@@ -1,78 +0,0 @@
+-// REQUIRES: x86_64-linux
+-// This tests that the coroutine elide optimization could happen succesfully with ThinLTO.
+-// This test is adapted from coro-elide.cpp and splits functions into two files.
+-//
+-// RUN: split-file %s %t
+-// RUN: %clang --target=x86_64-linux -std=c++20 -O2 -flto=thin -I %S -c %t/coro-elide-callee.cpp -o %t/coro-elide-callee.o
+-// RUN: %clang --target=x86_64-linux -std=c++20 -O2 -flto=thin -I %S -c %t/coro-elide-caller.cpp -o %t/coro-elide-caller.o
+-// RUN: llvm-lto -thinlto %t/coro-elide-callee.o %t/coro-elide-caller.o -o %t/summary
+-// RUN: %clang_cc1 -triple x86_64-unknown-linux -O2 -x ir %t/coro-elide-caller.o -fthinlto-index=%t/summary.thinlto.bc -emit-llvm -o - | FileCheck %s
+-
+-//--- coro-elide-task.h
+-#pragma once
+-#include "Inputs/coroutine.h"
+-
+-struct Task {
+-  struct promise_type {
+-    struct FinalAwaiter {
+-      bool await_ready() const noexcept { return false; }
+-      template <typename PromiseType>
+-      std::coroutine_handle<> await_suspend(std::coroutine_handle<PromiseType> h) noexcept {
+-        if (!h)
+-          return std::noop_coroutine();
+-        return h.promise().continuation;
+-      }
+-      void await_resume() noexcept {}
+-    };
+-    Task get_return_object() noexcept {
+-      return std::coroutine_handle<promise_type>::from_promise(*this);
+-    }
+-    std::suspend_always initial_suspend() noexcept { return {}; }
+-    FinalAwaiter final_suspend() noexcept { return {}; }
+-    void unhandled_exception() noexcept {}
+-    void return_value(int x) noexcept {
+-      _value = x;
+-    }
+-    std::coroutine_handle<> continuation;
+-    int _value;
+-  };
+-
+-  Task(std::coroutine_handle<promise_type> handle) : handle(handle) {}
+-  ~Task() {
+-    if (handle)
+-      handle.destroy();
+-  }
+-
+-  struct Awaiter {
+-    bool await_ready() const noexcept { return false; }
+-    void await_suspend(std::coroutine_handle<void> continuation) noexcept {}
+-    int await_resume() noexcept {
+-      return 43;
+-    }
+-  };
+-
+-  auto operator co_await() {
+-    return Awaiter{};
+-  }
+-
+-private:
+-  std::coroutine_handle<promise_type> handle;
+-};
+-
+-//--- coro-elide-callee.cpp
+-#include "coro-elide-task.h"
+-Task task0() {
+-  co_return 43;
+-}
+-
+-//--- coro-elide-caller.cpp
+-#include "coro-elide-task.h"
+-
+-Task task0();
+-
+-Task task1() {
+-  co_return co_await task0();
+-}
+-
+-// CHECK-LABEL: define{{.*}} void @_Z5task1v.resume
+-// CHECK-NOT: {{.*}}_Znwm
+diff --git a/llvm/lib/Passes/PassBuilderPipelines.cpp b/llvm/lib/Passes/PassBuilderPipelines.cpp
+index 1d7f0510450c..72f273972f2f 100644
+--- a/llvm/lib/Passes/PassBuilderPipelines.cpp
++++ b/llvm/lib/Passes/PassBuilderPipelines.cpp
+@@ -968,8 +968,7 @@ PassBuilder::buildInlinerPipeline(OptimizationLevel Level,
+   MainCGPipeline.addPass(createCGSCCToFunctionPassAdaptor(
+       RequireAnalysisPass<ShouldNotRunFunctionPassesAnalysis, Function>()));
+ 
+-  if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink)
+-    MainCGPipeline.addPass(CoroSplitPass(Level != OptimizationLevel::O0));
++  MainCGPipeline.addPass(CoroSplitPass(Level != OptimizationLevel::O0));
+ 
+   // Make sure we don't affect potential future NoRerun CGSCC adaptors.
+   MIWP.addLateModulePass(createModuleToFunctionPassAdaptor(
+@@ -1011,9 +1010,8 @@ PassBuilder::buildModuleInlinerPipeline(OptimizationLevel Level,
+       buildFunctionSimplificationPipeline(Level, Phase),
+       PTO.EagerlyInvalidateAnalyses));
+ 
+-  if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink)
+-    MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
+-        CoroSplitPass(Level != OptimizationLevel::O0)));
++  MPM.addPass(createModuleToPostOrderCGSCCPassAdaptor(
++      CoroSplitPass(Level != OptimizationLevel::O0)));
+ 
+   return MPM;
+ }
+@@ -1190,8 +1188,7 @@ PassBuilder::buildModuleSimplificationPipeline(OptimizationLevel Level,
+   // and argument promotion.
+   MPM.addPass(DeadArgumentEliminationPass());
+ 
+-  if (Phase != ThinOrFullLTOPhase::ThinLTOPreLink)
+-    MPM.addPass(CoroCleanupPass());
++  MPM.addPass(CoroCleanupPass());
+ 
+   // Optimize globals now that functions are fully simplified.
+   MPM.addPass(GlobalOptPass());
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+index e2fd74306f80..6486639e07b4 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-defaults.ll
+@@ -183,10 +183,12 @@
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis
++; CHECK-O-NEXT: Running pass: CoroSplitPass
+ ; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
+ ; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
++; CHECK-O-NEXT: Running pass: CoroCleanupPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+ ; CHECK-O-NEXT: Running pass: GlobalDCEPass
+ ; CHECK-EXT: Running pass: {{.*}}::Bye
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+index 13a63bbe4d9c..09f9f0f48bad 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-pgo-defaults.ll
+@@ -182,10 +182,12 @@
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis
++; CHECK-O-NEXT: Running pass: CoroSplitPass
+ ; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
+ ; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
++; CHECK-O-NEXT: Running pass: CoroCleanupPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+ ; CHECK-O-NEXT: Running analysis: TargetLibraryAnalysis on bar
+ ; CHECK-O-NEXT: Running pass: GlobalDCEPass
+diff --git a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+index 3130da86fa99..47bdbfd2d357 100644
+--- a/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
++++ b/llvm/test/Other/new-pm-thinlto-prelink-samplepgo-defaults.ll
+@@ -147,10 +147,12 @@
+ ; CHECK-O-NEXT: Running pass: PostOrderFunctionAttrsPass
+ ; CHECK-O-NEXT: Running pass: RequireAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Running analysis: ShouldNotRunFunctionPassesAnalysis
++; CHECK-O-NEXT: Running pass: CoroSplitPass
+ ; CHECK-O-NEXT: Running pass: InvalidateAnalysisPass<{{.*}}ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: ShouldNotRunFunctionPassesAnalysis
+ ; CHECK-O-NEXT: Invalidating analysis: InlineAdvisorAnalysis
+ ; CHECK-O-NEXT: Running pass: DeadArgumentEliminationPass
++; CHECK-O-NEXT: Running pass: CoroCleanupPass
+ ; CHECK-O-NEXT: Running pass: GlobalOptPass
+ ; CHECK-O-NEXT: Running pass: GlobalDCEPass
+ ; CHECK-O-NEXT: Running pass: AnnotationRemarksPass on foo
+-- 
+2.46.0.rc1.232.g9752f9e123-goog
+

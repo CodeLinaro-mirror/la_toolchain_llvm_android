@@ -1389,6 +1389,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[Pipelines] Do not run CoroSplit and CoroCleanup in LTO pre-link pipeline (#90310)\" and related patches"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/aa0776de464984e78ae1cc329bf541e9dd43631f.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 536291
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[lldb] Attempt to fix signal-in-leaf-function-aarch64 on darwin\""
         },
         "platforms": [
