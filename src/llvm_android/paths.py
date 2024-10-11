@@ -96,7 +96,7 @@ def pgo_profdata_tarname() -> str:
     return f'pgo-r{svn_revision}.tar.xz'
 
 
-def pgo_profdata_tar() -> Optional[Path]:
+def pgo_profdata_path() -> Optional[Path]:
     profile_env = os.getenv('LLVM_PGO_PROFILE')
     if profile_env is not None:
         profile = Path(glob.glob(profile_env)[0])

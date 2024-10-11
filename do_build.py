@@ -43,26 +43,43 @@ def set_default_toolchain(toolchain: toolchains.Toolchain) -> None:
     Builder.toolchain = toolchain
 
 
-def extract_pgo_profile() -> Path:
-    pgo_profdata_tar = paths.pgo_profdata_tar()
-    if not pgo_profdata_tar:
-        raise RuntimeError(f'{pgo_profdata_tar} does not exist')
-    utils.extract_tarball(paths.OUT_DIR, pgo_profdata_tar)
-    profdata_file = paths.OUT_DIR / paths.pgo_profdata_filename()
-    if not profdata_file.exists():
-        raise RuntimeError(f'{profdata_file} does not exist')
-    return profdata_file
+def extract_pgo_profile(args: argparse.Namespace) -> Path:
+    if args.pgo:
+        if isinstance(args.pgo, Path):
+            pgo_profdata_path = args.pgo
+        else:
+            pgo_profdata_path = paths.pgo_profdata_path()
+
+        if not pgo_profdata_path or not pgo_profdata_path.exists():
+            raise RuntimeError(f'{pgo_profdata_path} does not exist')
+
+        if pgo_profdata_path.suffix == ".profdata":
+            return pgo_profdata_path
+
+        else:
+            utils.extract_tarball(paths.OUT_DIR, pgo_profdata_path)
+            profdata_file = paths.OUT_DIR / paths.pgo_profdata_filename()
+            if not profdata_file.exists():
+                raise RuntimeError(f'{profdata_file} does not exist')
+            return profdata_file
+
+    else:
+        return None
 
 
-def extract_bolt_profile() -> Path:
-    bolt_fdata_tar = paths.bolt_fdata_tar()
-    if not bolt_fdata_tar:
-        raise RuntimeError(f'{bolt_fdata_tar} does not exist')
-    utils.extract_tarball(paths.OUT_DIR, bolt_fdata_tar)
-    clang_bolt_fdata_file = paths.OUT_DIR / 'clang.fdata'
-    if not clang_bolt_fdata_file.exists():
-        raise RuntimeError(f'{clang_bolt_fdata_file} does not exist')
-    return clang_bolt_fdata_file
+def extract_bolt_profile(args: argparse.Namespace) -> Path:
+    if args.bolt:
+        bolt_fdata_tar = paths.bolt_fdata_tar()
+        if not bolt_fdata_tar:
+            raise RuntimeError(f'{bolt_fdata_tar} does not exist')
+        utils.extract_tarball(paths.OUT_DIR, bolt_fdata_tar)
+        clang_bolt_fdata_file = paths.OUT_DIR / 'clang.fdata'
+        if not clang_bolt_fdata_file.exists():
+            raise RuntimeError(f'{clang_bolt_fdata_file} does not exist')
+        return clang_bolt_fdata_file
+
+    else:
+        return None
 
 
 def build_llvm_for_windows(enable_assertions: bool,
@@ -781,7 +798,8 @@ def parse_args():
     pgo_group = parser.add_mutually_exclusive_group()
     pgo_group.add_argument(
         '--pgo',
-        action='store_true',
+        nargs="?",
+        const=True,
         default=False,
         help='Enable PGO (only affects stage2)')
     pgo_group.add_argument(
@@ -1084,15 +1102,8 @@ def main():
     else:
         swig_builder = None
 
-    if args.pgo:
-        profdata = extract_pgo_profile()
-    else:
-        profdata = None
-
-    if args.bolt:
-        clang_bolt_fdata = extract_bolt_profile()
-    else:
-        clang_bolt_fdata = None
+    profdata = extract_pgo_profile(args)
+    clang_bolt_fdata = extract_bolt_profile(args)
 
     if need_host:
         stage2 = builders.Stage2Builder(host_configs)
