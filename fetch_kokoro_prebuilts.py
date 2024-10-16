@@ -48,6 +48,7 @@ def parse_args(sys_argv: Optional[List[str]]):
         help=(
             "the build id in"
             " https://pantheon.corp.google.com/storage/browser/android-llvm-kokoro-ci-artifacts"
+            ", or \"latest\" for the most recent build."
         ),
     )
 
@@ -101,6 +102,17 @@ def check_valid_path(path: str):
         raise Exception(err_msg)
 
 
+def stubby_call(request: str):
+    cmd = [
+        "stubby",
+        "call",
+        "blade:kokoro-api",
+        "KokoroApi.GetBuildStatus",
+        request,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
 def get_build_number(sha: str):
     """Find the build number that contains the SHA.
 
@@ -115,6 +127,8 @@ def get_build_number(sha: str):
     Returns:
         The build number that contains the SHA.
     """
+    build_number = None
+
     request = f"""
         full_job_name: "android-llvm/linux-tot/continuous"
         multi_scm_revision: {{
@@ -125,18 +139,7 @@ def get_build_number(sha: str):
           }}
         }}
     """
-
-    build_number = None
-    # Send the request.
-    cmd = [
-        "stubby",
-        "call",
-        "blade:kokoro-api",
-        "KokoroApi.GetBuildStatus",
-        request,
-    ]
-
-    response = subprocess.run(cmd, capture_output=True, text=True)
+    response = stubby_call(request)
     if response.returncode == 0:
         # The sha is from the latest change in any build.
         data = response.stdout
@@ -146,22 +149,19 @@ def get_build_number(sha: str):
                 return build_number
 
     found = False
-    id_line = f'id: "{sha}"'
     request = """
         full_job_name: "android-llvm/linux-tot/continuous"
         multi_scm_revision: {
-        git_on_borg_scm_revision: {
-            name: "toolchain/llvm-project",
-            branch: "main"
-        }
+          git_on_borg_scm_revision: {
+              name: "toolchain/llvm-project",
+              branch: "main"
+          }
         }
     """
 
     while not found:
-        try:
-            cmd[-1] = request
-            response = subprocess.check_output(cmd)
-        except subprocess.CalledProcessError as e:
+        response = stubby_call(request)
+        if response.returncode != 0:
             print(
                 f"No build number for {sha} matched!",
                 file=sys.stderr,
@@ -169,10 +169,10 @@ def get_build_number(sha: str):
             sys.exit(1)
 
         # Parse the response.
-        data = response.decode("utf-8")
+        data = response.stdout
         for line in data.splitlines():
             line = line.strip()
-            if line == id_line:
+            if line == f'id: "{sha}"':
                 found = True
             if line.startswith("build_number:"):
                 build_number = line.split()[-1]
@@ -196,6 +196,24 @@ def get_build_number(sha: str):
     return build_number
 
 
+def get_latest_build_id():
+    request = """
+        full_job_name: "android-llvm/linux-tot/continuous"
+        multi_scm_revision: {
+          git_on_borg_scm_revision: {
+              name: "toolchain/llvm-project",
+              branch: "main"
+          }
+        }
+    """
+    response = stubby_call(request)
+    data = response.stdout
+    for line in data.splitlines():
+        if line.startswith("build_number:"):
+            return line.split()[-1]
+    return "-1"
+
+
 def main(sys_argv: List[str]):
     args_output = parse_args(sys_argv)
 
@@ -206,6 +224,8 @@ def main(sys_argv: List[str]):
 
     if args_output.sha:
         build_id = get_build_number(args_output.sha)
+    elif args_output.build_id == "latest":
+        build_id = get_latest_build_id()
     else:
         build_id = args_output.build_id
 
