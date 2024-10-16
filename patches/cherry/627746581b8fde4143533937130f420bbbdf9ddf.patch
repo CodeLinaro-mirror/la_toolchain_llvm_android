@@ -1,0 +1,1332 @@
+From b311f456819111e3d227ccf7f7cde250f0bdf378 Mon Sep 17 00:00:00 2001
+From: yabinc <yabinc@google.com>
+Date: Tue, 15 Oct 2024 00:32:24 +0100
+Subject: [PATCH] Reapply "[clang][CodeGen] Zero init unspecified fields in
+ initializers in C" (#109898) (#110051)
+
+This reverts commit d50eaac12f0cdfe27e942290942b06889ab12a8c. Also fixes
+a bug calculating offsets for bit fields in the original patch.
+
+Change-Id: Id80d63940c317a413b2726448832a222b1835d8c
+---
+ clang/docs/LanguageExtensions.rst             |  25 +-
+ clang/lib/CodeGen/CGExprAgg.cpp               |  73 ++++-
+ clang/lib/CodeGen/CGExprConstant.cpp          | 107 ++++++-
+ clang/lib/CodeGen/CodeGenModule.h             |  53 ++++
+ ...07-22-bitfield-init-after-zero-len-array.c |   2 +-
+ clang/test/CodeGen/2008-08-07-AlignPadding1.c |   4 +-
+ clang/test/CodeGen/64bit-swiftcall.c          |  12 +-
+ clang/test/CodeGen/arm-swiftcall.c            |   4 +-
+ clang/test/CodeGen/const-init.c               |   4 +-
+ clang/test/CodeGen/decl.c                     |   4 +-
+ clang/test/CodeGen/designated-initializers.c  |  12 +-
+ clang/test/CodeGen/flexible-array-init.c      |  24 +-
+ clang/test/CodeGen/global-init.c              |   2 +-
+ clang/test/CodeGen/init.c                     |  19 --
+ .../linux-kernel-struct-union-initializer.c   | 275 ++++++++++++++++++
+ .../linux-kernel-struct-union-initializer2.c  | 181 ++++++++++++
+ clang/test/CodeGen/mingw-long-double.c        |   9 +-
+ clang/test/CodeGen/mms-bitfields.c            |   4 +-
+ clang/test/CodeGen/union-init2.c              |   4 +-
+ clang/test/CodeGen/windows-swiftcall.c        |  12 +-
+ .../CodeGenObjC/designated-initializers.m     |   2 +-
+ 21 files changed, 746 insertions(+), 86 deletions(-)
+ create mode 100644 clang/test/CodeGen/linux-kernel-struct-union-initializer.c
+ create mode 100644 clang/test/CodeGen/linux-kernel-struct-union-initializer2.c
+
+diff --git a/clang/docs/LanguageExtensions.rst b/clang/docs/LanguageExtensions.rst
+index a09c409f8f91..9f38e9215185 100644
+--- a/clang/docs/LanguageExtensions.rst
++++ b/clang/docs/LanguageExtensions.rst
+@@ -5602,4 +5602,27 @@ Compiling different TUs depending on these flags (including use of
+ ``std::hardware_constructive_interference`` or
+ ``std::hardware_destructive_interference``)  with different compilers, macro
+ definitions, or architecture flags will lead to ODR violations and should be
+-avoided.
+\ No newline at end of file
++avoided.
++
++Union and aggregate initialization in C
++=======================================
++
++In C23 (N2900), when an object is initialized from initializer ``= {}``, all
++elements of arrays, all members of structs, and the first members of unions are
++empty-initialized recursively. In addition, all padding bits are initialized to
++zero.
++
++Clang guarantees the following behaviors:
++
++* ``1:`` Clang supports initializer ``= {}`` mentioned above in all C
++  standards.
++
++* ``2:`` When unions are initialized from initializer ``= {}``, bytes outside
++  of the first members of unions are also initialized to zero.
++
++* ``3:`` When unions, structures and arrays are initialized from initializer
++  ``= { initializer-list }``, all members not explicitly initialized in
++  the initializer list are empty-initialized recursively. In addition, all
++  padding bits are initialized to zero.
++
++Currently, the above extension only applies to C source code, not C++.
+diff --git a/clang/lib/CodeGen/CGExprAgg.cpp b/clang/lib/CodeGen/CGExprAgg.cpp
+index 6172eb9cdc1b..8f6f4fd88128 100644
+--- a/clang/lib/CodeGen/CGExprAgg.cpp
++++ b/clang/lib/CodeGen/CGExprAgg.cpp
+@@ -12,6 +12,7 @@
+ 
+ #include "CGCXXABI.h"
+ #include "CGObjCRuntime.h"
++#include "CGRecordLayout.h"
+ #include "CodeGenFunction.h"
+ #include "CodeGenModule.h"
+ #include "ConstantEmitter.h"
+@@ -64,6 +65,9 @@ class AggExprEmitter : public StmtVisitor<AggExprEmitter> {
+   void withReturnValueSlot(const Expr *E,
+                            llvm::function_ref<RValue(ReturnValueSlot)> Fn);
+ 
++  void DoZeroInitPadding(uint64_t &PaddingStart, uint64_t PaddingEnd,
++                         const FieldDecl *NextField);
++
+ public:
+   AggExprEmitter(CodeGenFunction &cgf, AggValueSlot Dest, bool IsResultUnused)
+     : CGF(cgf), Builder(CGF.Builder), Dest(Dest),
+@@ -1724,6 +1728,9 @@ void AggExprEmitter::VisitCXXParenListOrInitListExpr(
+   // Prepare a 'this' for CXXDefaultInitExprs.
+   CodeGenFunction::FieldConstructionScope FCS(CGF, Dest.getAddress());
+ 
++  const bool ZeroInitPadding =
++      CGF.CGM.shouldZeroInitPadding() && !Dest.isZeroed();
++
+   if (record->isUnion()) {
+     // Only initialize one field of a union. The field itself is
+     // specified by the initializer list.
+@@ -1748,16 +1755,27 @@ void AggExprEmitter::VisitCXXParenListOrInitListExpr(
+     if (NumInitElements) {
+       // Store the initializer into the field
+       EmitInitializationToLValue(InitExprs[0], FieldLoc);
++      if (ZeroInitPadding) {
++        uint64_t TotalSize = CGF.getContext().toBits(
++            Dest.getPreferredSize(CGF.getContext(), DestLV.getType()));
++        uint64_t FieldSize = CGF.getContext().getTypeSize(FieldLoc.getType());
++        DoZeroInitPadding(FieldSize, TotalSize, nullptr);
++      }
+     } else {
+       // Default-initialize to null.
+-      EmitNullInitializationToLValue(FieldLoc);
++      if (ZeroInitPadding)
++        EmitNullInitializationToLValue(DestLV);
++      else
++        EmitNullInitializationToLValue(FieldLoc);
+     }
+-
+     return;
+   }
+ 
+   // Here we iterate over the fields; this makes it simpler to both
+   // default-initialize fields and skip over unnamed fields.
++  const ASTRecordLayout &Layout = CGF.getContext().getASTRecordLayout(record);
++  uint64_t PaddingStart = 0;
++
+   for (const auto *field : record->fields()) {
+     // We're done once we hit the flexible array member.
+     if (field->getType()->isIncompleteArrayType())
+@@ -1774,6 +1792,9 @@ void AggExprEmitter::VisitCXXParenListOrInitListExpr(
+         CGF.getTypes().isZeroInitializable(ExprToVisit->getType()))
+       break;
+ 
++    if (ZeroInitPadding)
++      DoZeroInitPadding(PaddingStart,
++                        Layout.getFieldOffset(field->getFieldIndex()), field);
+ 
+     LValue LV = CGF.EmitLValueForFieldInitialization(DestLV, field);
+     // We never generate write-barries for initialized fields.
+@@ -1810,6 +1831,54 @@ void AggExprEmitter::VisitCXXParenListOrInitListExpr(
+         if (GEP->use_empty())
+           GEP->eraseFromParent();
+   }
++  if (ZeroInitPadding) {
++    uint64_t TotalSize = CGF.getContext().toBits(
++        Dest.getPreferredSize(CGF.getContext(), DestLV.getType()));
++    DoZeroInitPadding(PaddingStart, TotalSize, nullptr);
++  }
++}
++
++void AggExprEmitter::DoZeroInitPadding(uint64_t &PaddingStart,
++                                       uint64_t PaddingEnd,
++                                       const FieldDecl *NextField) {
++
++  auto InitBytes = [&](uint64_t StartBit, uint64_t EndBit) {
++    CharUnits Start = CGF.getContext().toCharUnitsFromBits(StartBit);
++    CharUnits End = CGF.getContext().toCharUnitsFromBits(EndBit);
++    Address Addr = Dest.getAddress().withElementType(CGF.CharTy);
++    if (!Start.isZero())
++      Addr = Builder.CreateConstGEP(Addr, Start.getQuantity());
++    llvm::Constant *SizeVal = Builder.getInt64((End - Start).getQuantity());
++    CGF.Builder.CreateMemSet(Addr, Builder.getInt8(0), SizeVal, false);
++  };
++
++  if (NextField != nullptr && NextField->isBitField()) {
++    // For bitfield, zero init StorageSize before storing the bits. So we don't
++    // need to handle big/little endian.
++    const CGRecordLayout &RL =
++        CGF.getTypes().getCGRecordLayout(NextField->getParent());
++    const CGBitFieldInfo &Info = RL.getBitFieldInfo(NextField);
++    uint64_t StorageStart = CGF.getContext().toBits(Info.StorageOffset);
++    if (StorageStart + Info.StorageSize > PaddingStart) {
++      if (StorageStart > PaddingStart)
++        InitBytes(PaddingStart, StorageStart);
++      Address Addr = Dest.getAddress();
++      if (!Info.StorageOffset.isZero())
++        Addr = Builder.CreateConstGEP(Addr.withElementType(CGF.CharTy),
++                                      Info.StorageOffset.getQuantity());
++      Addr = Addr.withElementType(
++          llvm::Type::getIntNTy(CGF.getLLVMContext(), Info.StorageSize));
++      Builder.CreateStore(Builder.getIntN(Info.StorageSize, 0), Addr);
++      PaddingStart = StorageStart + Info.StorageSize;
++    }
++    return;
++  }
++
++  if (PaddingStart < PaddingEnd)
++    InitBytes(PaddingStart, PaddingEnd);
++  if (NextField != nullptr)
++    PaddingStart =
++        PaddingEnd + CGF.getContext().getTypeSize(NextField->getType());
+ }
+ 
+ void AggExprEmitter::VisitArrayInitLoopExpr(const ArrayInitLoopExpr *E,
+diff --git a/clang/lib/CodeGen/CGExprConstant.cpp b/clang/lib/CodeGen/CGExprConstant.cpp
+index 94962091116a..3ff23f6ce03c 100644
+--- a/clang/lib/CodeGen/CGExprConstant.cpp
++++ b/clang/lib/CodeGen/CGExprConstant.cpp
+@@ -41,6 +41,16 @@ using namespace CodeGen;
+ namespace {
+ class ConstExprEmitter;
+ 
++llvm::Constant *getPadding(const CodeGenModule &CGM, CharUnits PadSize) {
++  llvm::Type *Ty = CGM.CharTy;
++  if (PadSize > CharUnits::One())
++    Ty = llvm::ArrayType::get(Ty, PadSize.getQuantity());
++  if (CGM.shouldZeroInitPadding()) {
++    return llvm::Constant::getNullValue(Ty);
++  }
++  return llvm::UndefValue::get(Ty);
++}
++
+ struct ConstantAggregateBuilderUtils {
+   CodeGenModule &CGM;
+ 
+@@ -60,10 +70,7 @@ struct ConstantAggregateBuilderUtils {
+   }
+ 
+   llvm::Constant *getPadding(CharUnits PadSize) const {
+-    llvm::Type *Ty = CGM.CharTy;
+-    if (PadSize > CharUnits::One())
+-      Ty = llvm::ArrayType::get(Ty, PadSize.getQuantity());
+-    return llvm::UndefValue::get(Ty);
++    return ::getPadding(CGM, PadSize);
+   }
+ 
+   llvm::Constant *getZeroes(CharUnits ZeroSize) const {
+@@ -590,6 +597,11 @@ private:
+   bool Build(const InitListExpr *ILE, bool AllowOverwrite);
+   bool Build(const APValue &Val, const RecordDecl *RD, bool IsPrimaryBase,
+              const CXXRecordDecl *VTableClass, CharUnits BaseOffset);
++  bool DoZeroInitPadding(const ASTRecordLayout &Layout, unsigned FieldNo,
++                         const FieldDecl &Field, bool AllowOverwrite,
++                         CharUnits &SizeSoFar, bool &ZeroFieldSize);
++  bool DoZeroInitPadding(const ASTRecordLayout &Layout, bool AllowOverwrite,
++                         CharUnits SizeSoFar);
+   llvm::Constant *Finalize(QualType Ty);
+ };
+ 
+@@ -698,6 +710,10 @@ bool ConstStructBuilder::Build(const InitListExpr *ILE, bool AllowOverwrite) {
+     if (CXXRD->getNumBases())
+       return false;
+ 
++  const bool ZeroInitPadding = CGM.shouldZeroInitPadding();
++  bool ZeroFieldSize = false;
++  CharUnits SizeSoFar = CharUnits::Zero();
++
+   for (FieldDecl *Field : RD->fields()) {
+     ++FieldNo;
+ 
+@@ -715,8 +731,13 @@ bool ConstStructBuilder::Build(const InitListExpr *ILE, bool AllowOverwrite) {
+     const Expr *Init = nullptr;
+     if (ElementNo < ILE->getNumInits())
+       Init = ILE->getInit(ElementNo++);
+-    if (Init && isa<NoInitExpr>(Init))
++    if (Init && isa<NoInitExpr>(Init)) {
++      if (ZeroInitPadding &&
++          !DoZeroInitPadding(Layout, FieldNo, *Field, AllowOverwrite, SizeSoFar,
++                             ZeroFieldSize))
++        return false;
+       continue;
++    }
+ 
+     // Zero-sized fields are not emitted, but their initializers may still
+     // prevent emission of this struct as a constant.
+@@ -726,6 +747,11 @@ bool ConstStructBuilder::Build(const InitListExpr *ILE, bool AllowOverwrite) {
+       continue;
+     }
+ 
++    if (ZeroInitPadding &&
++        !DoZeroInitPadding(Layout, FieldNo, *Field, AllowOverwrite, SizeSoFar,
++                           ZeroFieldSize))
++      return false;
++
+     // When emitting a DesignatedInitUpdateExpr, a nested InitListExpr
+     // represents additional overwriting of our current constant value, and not
+     // a new constant to emit independently.
+@@ -751,6 +777,10 @@ bool ConstStructBuilder::Build(const InitListExpr *ILE, bool AllowOverwrite) {
+     if (!EltInit)
+       return false;
+ 
++    if (ZeroInitPadding && ZeroFieldSize)
++      SizeSoFar += CharUnits::fromQuantity(
++          CGM.getDataLayout().getTypeAllocSize(EltInit->getType()));
++
+     if (!Field->isBitField()) {
+       // Handle non-bitfield members.
+       if (!AppendField(Field, Layout.getFieldOffset(FieldNo), EltInit,
+@@ -774,6 +804,9 @@ bool ConstStructBuilder::Build(const InitListExpr *ILE, bool AllowOverwrite) {
+     }
+   }
+ 
++  if (ZeroInitPadding && !DoZeroInitPadding(Layout, AllowOverwrite, SizeSoFar))
++    return false;
++
+   return true;
+ }
+ 
+@@ -832,6 +865,9 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
+ 
+   unsigned FieldNo = 0;
+   uint64_t OffsetBits = CGM.getContext().toBits(Offset);
++  const bool ZeroInitPadding = CGM.shouldZeroInitPadding();
++  bool ZeroFieldSize = false;
++  CharUnits SizeSoFar = CharUnits::Zero();
+ 
+   bool AllowOverwrite = false;
+   for (RecordDecl::field_iterator Field = RD->field_begin(),
+@@ -852,6 +888,15 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
+     if (!EltInit)
+       return false;
+ 
++    if (ZeroInitPadding) {
++      if (!DoZeroInitPadding(Layout, FieldNo, **Field, AllowOverwrite,
++                             SizeSoFar, ZeroFieldSize))
++        return false;
++      if (ZeroFieldSize)
++        SizeSoFar += CharUnits::fromQuantity(
++            CGM.getDataLayout().getTypeAllocSize(EltInit->getType()));
++    }
++
+     if (!Field->isBitField()) {
+       // Handle non-bitfield members.
+       if (!AppendField(*Field, Layout.getFieldOffset(FieldNo) + OffsetBits,
+@@ -868,7 +913,49 @@ bool ConstStructBuilder::Build(const APValue &Val, const RecordDecl *RD,
+         return false;
+     }
+   }
++  if (ZeroInitPadding && !DoZeroInitPadding(Layout, AllowOverwrite, SizeSoFar))
++    return false;
++
++  return true;
++}
++
++bool ConstStructBuilder::DoZeroInitPadding(
++    const ASTRecordLayout &Layout, unsigned FieldNo, const FieldDecl &Field,
++    bool AllowOverwrite, CharUnits &SizeSoFar, bool &ZeroFieldSize) {
++  uint64_t StartBitOffset = Layout.getFieldOffset(FieldNo);
++  CharUnits StartOffset = CGM.getContext().toCharUnitsFromBits(StartBitOffset);
++  if (SizeSoFar < StartOffset)
++    if (!AppendBytes(SizeSoFar, getPadding(CGM, StartOffset - SizeSoFar),
++                     AllowOverwrite))
++      return false;
++
++  if (!Field.isBitField()) {
++    CharUnits FieldSize = CGM.getContext().getTypeSizeInChars(Field.getType());
++    SizeSoFar = StartOffset + FieldSize;
++    ZeroFieldSize = FieldSize.isZero();
++  } else {
++    const CGRecordLayout &RL =
++        CGM.getTypes().getCGRecordLayout(Field.getParent());
++    const CGBitFieldInfo &Info = RL.getBitFieldInfo(&Field);
++    uint64_t EndBitOffset = StartBitOffset + Info.Size;
++    SizeSoFar = CGM.getContext().toCharUnitsFromBits(EndBitOffset);
++    if (EndBitOffset % CGM.getContext().getCharWidth() != 0) {
++      SizeSoFar++;
++    }
++    ZeroFieldSize = Info.Size == 0;
++  }
++  return true;
++}
+ 
++bool ConstStructBuilder::DoZeroInitPadding(const ASTRecordLayout &Layout,
++                                           bool AllowOverwrite,
++                                           CharUnits SizeSoFar) {
++  CharUnits TotalSize = Layout.getSize();
++  if (SizeSoFar < TotalSize)
++    if (!AppendBytes(SizeSoFar, getPadding(CGM, TotalSize - SizeSoFar),
++                     AllowOverwrite))
++      return false;
++  SizeSoFar = TotalSize;
+   return true;
+ }
+ 
+@@ -1091,12 +1178,10 @@ public:
+ 
+       assert(CurSize <= TotalSize && "Union size mismatch!");
+       if (unsigned NumPadBytes = TotalSize - CurSize) {
+-        llvm::Type *Ty = CGM.CharTy;
+-        if (NumPadBytes > 1)
+-          Ty = llvm::ArrayType::get(Ty, NumPadBytes);
+-
+-        Elts.push_back(llvm::UndefValue::get(Ty));
+-        Types.push_back(Ty);
++        llvm::Constant *Padding =
++            getPadding(CGM, CharUnits::fromQuantity(NumPadBytes));
++        Elts.push_back(Padding);
++        Types.push_back(Padding->getType());
+       }
+ 
+       llvm::StructType *STy = llvm::StructType::get(VMContext, Types, false);
+diff --git a/clang/lib/CodeGen/CodeGenModule.h b/clang/lib/CodeGen/CodeGenModule.h
+index be43a18fc608..b6e7697abbc9 100644
+--- a/clang/lib/CodeGen/CodeGenModule.h
++++ b/clang/lib/CodeGen/CodeGenModule.h
+@@ -1586,7 +1586,60 @@ public:
+   void AddGlobalDtor(llvm::Function *Dtor, int Priority = 65535,
+                      bool IsDtorAttrFunc = false);
+ 
++  bool shouldZeroInitPadding() const {
++    // In C23 (N3096) $6.7.10:
++    // """
++    // If any object is initialized with an empty iniitializer, then it is
++    // subject to default initialization:
++    //  - if it is an aggregate, every member is initialized (recursively)
++    //  according to these rules, and any padding is initialized to zero bits;
++    //  - if it is a union, the first named member is initialized (recursively)
++    //  according to these rules, and any padding is initialized to zero bits.
++    //
++    // If the aggregate or union contains elements or members that are
++    // aggregates or unions, these rules apply recursively to the subaggregates
++    // or contained unions.
++    //
++    // If there are fewer initializers in a brace-enclosed list than there are
++    // elements or members of an aggregate, or fewer characters in a string
++    // literal used to initialize an array of known size than there are elements
++    // in the array, the remainder of the aggregate is subject to default
++    // initialization.
++    // """
++    //
++    // From my understanding, the standard is ambiguous in the following two
++    // areas:
++    // 1. For a union type with empty initializer, if the first named member is
++    // not the largest member, then the bytes comes after the first named member
++    // but before padding are left unspecified. An example is:
++    //    union U { int a; long long b;};
++    //    union U u = {};  // The first 4 bytes are 0, but 4-8 bytes are left
++    //    unspecified.
++    //
++    // 2. It only mentions padding for empty initializer, but doesn't mention
++    // padding for a non empty initialization list. And if the aggregation or
++    // union contains elements or members that are aggregates or unions, and
++    // some are non empty initializers, while others are empty initiailizers,
++    // the padding initialization is unclear. An example is:
++    //    struct S1 { int a; long long b; };
++    //    struct S2 { char c; struct S1 s1; };
++    //    // The values for paddings between s2.c and s2.s1.a, between s2.s1.a
++    //    and s2.s1.b are unclear.
++    //    struct S2 s2 = { 'c' };
++    //
++    // Here we choose to zero initiailize left bytes of a union type. Because
++    // projects like the Linux kernel are relying on this behavior. If we don't
++    // explicitly zero initialize them, the undef values can be optimized to
++    // return gabage data. We also choose to zero initialize paddings for
++    // aggregates and unions, no matter they are initialized by empty
++    // initializers or non empty initializers. This can provide a consistent
++    // behavior. So projects like the Linux kernel can rely on it.
++    return !getLangOpts().CPlusPlus;
++  }
++
+ private:
++  bool shouldDropDLLAttribute(const Decl *D, const llvm::GlobalValue *GV) const;
++
+   llvm::Constant *GetOrCreateLLVMFunction(
+       StringRef MangledName, llvm::Type *Ty, GlobalDecl D, bool ForVTable,
+       bool DontDefer = false, bool IsThunk = false,
+diff --git a/clang/test/CodeGen/2008-07-22-bitfield-init-after-zero-len-array.c b/clang/test/CodeGen/2008-07-22-bitfield-init-after-zero-len-array.c
+index b72d689659e6..b639734ef5d4 100644
+--- a/clang/test/CodeGen/2008-07-22-bitfield-init-after-zero-len-array.c
++++ b/clang/test/CodeGen/2008-07-22-bitfield-init-after-zero-len-array.c
+@@ -8,4 +8,4 @@ struct et7 {
+   52, 
+ };
+ 
+-// CHECK: @yv7 ={{.*}} global %struct.et7 { [0 x float] zeroinitializer, i8 52 }
++// CHECK: @yv7 ={{.*}} global { [0 x float], i8, [3 x i8] } { [0 x float] zeroinitializer, i8 52, [3 x i8] zeroinitializer }
+diff --git a/clang/test/CodeGen/2008-08-07-AlignPadding1.c b/clang/test/CodeGen/2008-08-07-AlignPadding1.c
+index 17e88ce02659..d69cbc22cc1d 100644
+--- a/clang/test/CodeGen/2008-08-07-AlignPadding1.c
++++ b/clang/test/CodeGen/2008-08-07-AlignPadding1.c
+@@ -20,9 +20,9 @@ struct gc_generation {
+ 
+ #define GEN_HEAD(n) (&generations[n].head)
+ 
+-// The idea is that there are 6 undefs in this structure initializer to cover
++// The idea is that there are 6 zeroinitializers in this structure initializer to cover
+ // the padding between elements.
+-// CHECK: @generations ={{.*}} global [3 x %struct.gc_generation] [%struct.gc_generation { %union._gc_head { %struct.anon { ptr @generations, ptr @generations, i64 0 }, [8 x i8] undef }, i32 700, i32 0, [8 x i8] undef }, %struct.gc_generation { %union._gc_head { %struct.anon { ptr getelementptr (i8, ptr @generations, i64 48), ptr getelementptr (i8, ptr @generations, i64 48), i64 0 }, [8 x i8] undef }, i32 10, i32 0, [8 x i8] undef }, %struct.gc_generation { %union._gc_head { %struct.anon { ptr getelementptr (i8, ptr @generations, i64 96), ptr getelementptr (i8, ptr @generations, i64 96), i64 0 }, [8 x i8] undef }, i32 10, i32 0, [8 x i8] undef }]
++// CHECK: @generations ={{.*}} global [3 x %struct.gc_generation] [%struct.gc_generation { %union._gc_head { %struct.anon { ptr @generations, ptr @generations, i64 0 }, [8 x i8] zeroinitializer }, i32 700, i32 0, [8 x i8] zeroinitializer }, %struct.gc_generation { %union._gc_head { %struct.anon { ptr getelementptr (i8, ptr @generations, i64 48), ptr getelementptr (i8, ptr @generations, i64 48), i64 0 }, [8 x i8] zeroinitializer }, i32 10, i32 0, [8 x i8] zeroinitializer }, %struct.gc_generation { %union._gc_head { %struct.anon { ptr getelementptr (i8, ptr @generations, i64 96), ptr getelementptr (i8, ptr @generations, i64 96), i64 0 }, [8 x i8] zeroinitializer }, i32 10, i32 0, [8 x i8] zeroinitializer }]
+ /* linked lists of container objects */
+ struct gc_generation generations[3] = {
+         /* PyGC_Head,                           threshold,      count */
+diff --git a/clang/test/CodeGen/64bit-swiftcall.c b/clang/test/CodeGen/64bit-swiftcall.c
+index b1c42e3b0a65..4b0143e37afb 100644
+--- a/clang/test/CodeGen/64bit-swiftcall.c
++++ b/clang/test/CodeGen/64bit-swiftcall.c
+@@ -14,8 +14,6 @@
+ 
+ // CHECK-DAG: %struct.atomic_padded = type { { %struct.packed, [7 x i8] } }
+ // CHECK-DAG: %struct.packed = type <{ i64, i8 }>
+-//
+-// CHECK: [[STRUCT2_RESULT:@.*]] = private {{.*}} constant [[STRUCT2_TYPE:%.*]] { i32 0, i8 0, i8 undef, i8 0, i32 0, i32 0 }
+ 
+ /*****************************************************************************/
+ /****************************** PARAMETER ABIS *******************************/
+@@ -162,8 +160,8 @@ typedef struct {
+ } struct_2;
+ TEST(struct_2);
+ // CHECK-LABEL: define{{.*}} swiftcc { i64, i64 } @return_struct_2() {{.*}}{
+-// CHECK:   [[RET:%.*]] = alloca [[STRUCT2_TYPE]], align 4
+-// CHECK:   call void @llvm.memcpy{{.*}}({{.*}}[[RET]], {{.*}}[[STRUCT2_RESULT]]
++// CHECK:   [[RET:%.*]] = alloca [[STRUCT2:%.*]], align 4
++// CHECK:   call void @llvm.memset
+ // CHECK:   [[GEP0:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[RET]], i32 0, i32 0
+ // CHECK:   [[T0:%.*]] = load i64, ptr [[GEP0]], align 4
+ // CHECK:   [[GEP1:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[RET]], i32 0, i32 1
+@@ -173,7 +171,7 @@ TEST(struct_2);
+ // CHECK:   ret { i64, i64 } [[R1]]
+ // CHECK: }
+ // CHECK-LABEL: define{{.*}} swiftcc void @take_struct_2(i64 %0, i64 %1) {{.*}}{
+-// CHECK:   [[V:%.*]] = alloca [[STRUCT:%.*]], align 4
++// CHECK:   [[V:%.*]] = alloca [[STRUCT2]], align 4
+ // CHECK:   [[GEP0:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[V]], i32 0, i32 0
+ // CHECK:   store i64 %0, ptr [[GEP0]], align 4
+ // CHECK:   [[GEP1:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[V]], i32 0, i32 1
+@@ -181,7 +179,7 @@ TEST(struct_2);
+ // CHECK:   ret void
+ // CHECK: }
+ // CHECK-LABEL: define{{.*}} void @test_struct_2() {{.*}} {
+-// CHECK:   [[TMP:%.*]] = alloca [[STRUCT2_TYPE]], align 4
++// CHECK:   [[TMP:%.*]] = alloca [[STRUCT2]], align 4
+ // CHECK:   [[CALL:%.*]] = call swiftcc { i64, i64 } @return_struct_2()
+ // CHECK:   [[GEP:%.*]] = getelementptr inbounds {{.*}} [[TMP]], i32 0, i32 0
+ // CHECK:   [[T0:%.*]] = extractvalue { i64, i64 } [[CALL]], 0
+@@ -254,7 +252,7 @@ typedef union {
+ TEST(union_het_fp)
+ // CHECK-LABEL: define{{.*}} swiftcc i64 @return_union_het_fp()
+ // CHECK:  [[RET:%.*]] = alloca [[UNION:%.*]], align 8
+-// CHECK:  call void @llvm.memcpy{{.*}}(ptr align 8 [[RET]]
++// CHECK:  call void @llvm.memset{{.*}}(ptr align 8 [[RET]]
+ // CHECK:  [[GEP:%.*]] = getelementptr inbounds { i64 }, ptr [[RET]], i32 0, i32 0
+ // CHECK:  [[R0:%.*]] = load i64, ptr [[GEP]], align 8
+ // CHECK:  ret i64 [[R0]]
+diff --git a/clang/test/CodeGen/arm-swiftcall.c b/clang/test/CodeGen/arm-swiftcall.c
+index 9fa607a968cc..78ceed592601 100644
+--- a/clang/test/CodeGen/arm-swiftcall.c
++++ b/clang/test/CodeGen/arm-swiftcall.c
+@@ -172,7 +172,7 @@ typedef struct {
+ TEST(struct_2);
+ // CHECK-LABEL: define{{.*}} @return_struct_2()
+ // CHECK:   [[RET:%.*]] = alloca [[REC:%.*]], align 4
+-// CHECK:   @llvm.memcpy
++// CHECK:   @llvm.memset
+ // CHECK:   [[T0:%.*]] = getelementptr inbounds [[AGG:{ i32, i32, float, float }]], ptr [[RET]], i32 0, i32 0
+ // CHECK:   [[FIRST:%.*]] = load i32, ptr [[T0]], align 4
+ // CHECK:   [[T0:%.*]] = getelementptr inbounds [[AGG]], ptr [[RET]], i32 0, i32 1
+@@ -274,7 +274,7 @@ typedef union {
+ TEST(union_het_fp)
+ // CHECK-LABEL: define{{.*}} @return_union_het_fp()
+ // CHECK:   [[RET:%.*]] = alloca [[REC:%.*]], align {{(4|8)}}
+-// CHECK:   @llvm.memcpy
++// CHECK:   @llvm.memset
+ // CHECK:   [[T0:%.*]] = getelementptr inbounds [[AGG:{ i32, i32 }]], ptr [[RET]], i32 0, i32 0
+ // CHECK:   [[FIRST:%.*]] = load i32, ptr [[T0]], align {{(4|8)}}
+ // CHECK:   [[T0:%.*]] = getelementptr inbounds [[AGG]], ptr [[RET]], i32 0, i32 1
+diff --git a/clang/test/CodeGen/const-init.c b/clang/test/CodeGen/const-init.c
+index ad3e9551199a..fc973cb983a8 100644
+--- a/clang/test/CodeGen/const-init.c
++++ b/clang/test/CodeGen/const-init.c
+@@ -170,7 +170,7 @@ void g30(void) {
+     int : 1;
+     int x;
+   } a = {};
+-  // CHECK: @g30.a = internal global %struct.anon.1 <{ i8 undef, i32 0 }>, align 1
++  // CHECK: @g30.a = internal global %struct.anon.1 zeroinitializer, align 1
+ #pragma pack()
+ }
+ 
+@@ -182,7 +182,7 @@ void g31(void) {
+     short z;
+   } a = {23122, -12312731, -312};
+ #pragma pack()
+-  // CHECK: @g31.a = internal global %struct.anon.2 { i16 23122, i32 -12312731, i16 -312 }, align 4
++  // CHECK: @g31.a = internal global { i16, [2 x i8], i32, i16, [2 x i8] } { i16 23122, [2 x i8] zeroinitializer, i32 -12312731, i16 -312, [2 x i8] zeroinitializer }, align 4
+ }
+ 
+ // Clang should evaluate this in constant context, so floating point mode should
+diff --git a/clang/test/CodeGen/decl.c b/clang/test/CodeGen/decl.c
+index a63846b3223d..97446781fdbd 100644
+--- a/clang/test/CodeGen/decl.c
++++ b/clang/test/CodeGen/decl.c
+@@ -2,10 +2,10 @@
+ 
+ // CHECK: @test1.x = internal constant [12 x i32] [i32 1
+ // CHECK: @__const.test2.x = private unnamed_addr constant [13 x i32] [i32 1,
+-// CHECK: @test5w = {{(dso_local )?}}global { i32, [4 x i8] } { i32 2, [4 x i8] undef }
++// CHECK: @test5w = {{(dso_local )?}}global { i32, [4 x i8] } { i32 2, [4 x i8] zeroinitializer }
+ // CHECK: @test5y = {{(dso_local )?}}global { double } { double 7.300000e+0{{[0]*}}1 }
+ 
+-// CHECK: @__const.test6.x = private unnamed_addr constant %struct.SelectDest { i8 1, i8 2, i32 3, i32 0 }
++// CHECK: @__const.test6.x = private unnamed_addr constant { i8, i8, [2 x i8], i32, i32 } { i8 1, i8 2, [2 x i8] zeroinitializer, i32 3, i32 0 }
+ 
+ // CHECK: @test7 = {{(dso_local )?}}global [2 x %struct.test7s] [%struct.test7s { i32 1, i32 2 }, %struct.test7s { i32 4, i32 0 }]
+ 
+diff --git a/clang/test/CodeGen/designated-initializers.c b/clang/test/CodeGen/designated-initializers.c
+index 620b1b90d257..ac7860db43be 100644
+--- a/clang/test/CodeGen/designated-initializers.c
++++ b/clang/test/CodeGen/designated-initializers.c
+@@ -8,7 +8,7 @@ struct foo {
+ // CHECK: @u ={{.*}} global %union.anon zeroinitializer
+ union { int i; float f; } u = { };
+ 
+-// CHECK: @u2 ={{.*}} global { i32, [4 x i8] } { i32 0, [4 x i8] undef }
++// CHECK: @u2 ={{.*}} global { i32, [4 x i8] } zeroinitializer
+ union { int i; double f; } u2 = { };
+ 
+ // CHECK: @u3 ={{.*}} global  %union.anon.1 zeroinitializer
+@@ -62,22 +62,22 @@ struct overwrite_string_struct2 {
+   char L[6];
+   int M;
+ } overwrite_string2[] = { { { "foo" }, 1 }, [0].L[2] = 'x'};
+-// CHECK: [6 x i8] c"fox\00\00\00", i32 1
++// CHECK: [6 x i8] c"fox\00\00\00", [2 x i8] zeroinitializer, i32 1
+ struct overwrite_string_struct3 {
+   char L[3];
+   int M;
+ } overwrite_string3[] = { { { "foo" }, 1 }, [0].L[2] = 'x'};
+-// CHECK: [3 x i8] c"fox", i32 1
++// CHECK: [3 x i8] c"fox", i8 0, i32 1
+ struct overwrite_string_struct4 {
+   char L[3];
+   int M;
+ } overwrite_string4[] = { { { "foobar" }, 1 }, [0].L[2] = 'x'};
+-// CHECK: [3 x i8] c"fox", i32 1
++// CHECK: [3 x i8] c"fox", i8 0, i32 1
+ struct overwrite_string_struct5 {
+   char L[6];
+   int M;
+ } overwrite_string5[] = { { { "foo" }, 1 }, [0].L[4] = 'y'};
+-// CHECK: [6 x i8] c"foo\00y\00", i32 1
++// CHECK: [6 x i8] c"foo\00y\00", [2 x i8] zeroinitializer, i32 1
+ 
+ 
+ // CHECK: @u1 = {{.*}} { i32 65535 }
+@@ -138,7 +138,7 @@ union_16644_t union_16644_instance_4[2] =
+   [1].b[1] = 4
+ };
+ 
+-// CHECK: @lab ={{.*}} global { [4 x i8], i32 } { [4 x i8] undef, i32 123 }
++// CHECK: @lab ={{.*}} global { [4 x i8], i32 } { [4 x i8] zeroinitializer, i32 123 }
+ struct leading_anon_bitfield { int : 32; int n; } lab = { .n = 123 };
+ 
+ struct Base {
+diff --git a/clang/test/CodeGen/flexible-array-init.c b/clang/test/CodeGen/flexible-array-init.c
+index 15a30c15ac96..17b520fe8309 100644
+--- a/clang/test/CodeGen/flexible-array-init.c
++++ b/clang/test/CodeGen/flexible-array-init.c
+@@ -14,11 +14,11 @@ struct { int y[]; } b1 = { { 14, 16 } };
+ 
+ // sizeof(c) == 8, so this global should be at least 8 bytes.
+ struct { int x; char c; char y[]; } c = { 1, 2, { 13, 15 } };
+-// CHECK: @c ={{.*}} global { i32, i8, [2 x i8] } { i32 1, i8 2, [2 x i8] c"\0D\0F" }
++// CHECK: @c ={{.*}} global { i32, i8, [2 x i8], i8 } { i32 1, i8 2, [2 x i8] c"\0D\0F", i8 0 }
+ 
+ // sizeof(d) == 8, so this global should be at least 8 bytes.
+ struct __attribute((packed, aligned(4))) { char a; int x; char z[]; } d = { 1, 2, { 13, 15 } };
+-// CHECK: @d ={{.*}} <{ i8, i32, [2 x i8], i8 }> <{ i8 1, i32 2, [2 x i8] c"\0D\0F", i8 undef }>,
++// CHECK: @d ={{.*}} <{ i8, i32, [2 x i8], i8 }> <{ i8 1, i32 2, [2 x i8] c"\0D\0F", i8 0 }>,
+ 
+ // This global needs 9 bytes to hold all the flexible array members.
+ struct __attribute((packed, aligned(4))) { char a; int x; char z[]; } e = { 1, 2, { 13, 15, 17, 19 } };
+@@ -55,21 +55,21 @@ struct { int a; union { int b; short x[]; }; int c; int d; } hf = {1, 2, {}, 3};
+ 
+ // First member is the potential flexible array, initialization requires braces.
+ struct { int a; union { short x; int b; }; int c; int d; } i = {1, 2, {}, 3};
+-// CHECK: @i = global { i32, { i16, [2 x i8] }, i32, i32 } { i32 1, { i16, [2 x i8] } { i16 2, [2 x i8] undef }, i32 0, i32 3 }
++// CHECK: @i = global { i32, { i16, [2 x i8] }, i32, i32 } { i32 1, { i16, [2 x i8] } { i16 2, [2 x i8] zeroinitializer }, i32 0, i32 3 }
+ struct { int a; union { short x[0]; int b; }; int c; int d; } i0 = {1, {}, 2, 3};
+-// CHECK: @i0 = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 1, { [0 x i16], [4 x i8] } { [0 x i16] zeroinitializer, [4 x i8] undef }, i32 2, i32 3 }
++// CHECK: @i0 = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 1, { [0 x i16], [4 x i8] } zeroinitializer, i32 2, i32 3 }
+ struct { int a; union { short x[1]; int b; }; int c; int d; } i1 = {1, {2}, {}, 3};
+-// CHECK: @i1 = global { i32, { [1 x i16], [2 x i8] }, i32, i32 } { i32 1, { [1 x i16], [2 x i8] } { [1 x i16] [i16 2], [2 x i8] undef }, i32 0, i32 3 }
++// CHECK: @i1 = global { i32, { [1 x i16], [2 x i8] }, i32, i32 } { i32 1, { [1 x i16], [2 x i8] } { [1 x i16] [i16 2], [2 x i8] zeroinitializer }, i32 0, i32 3 }
+ struct { int a; union { short x[]; int b; }; int c; int d; } i_f = {4, {}, {}, 6};
+-// CHECK: @i_f = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 4, { [0 x i16], [4 x i8] } { [0 x i16] zeroinitializer, [4 x i8] undef }, i32 0, i32 6 }
++// CHECK: @i_f = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 4, { [0 x i16], [4 x i8] } zeroinitializer, i32 0, i32 6 }
+ 
+ // Named initializers; order doesn't matter.
+ struct { int a; union { int b; short x; }; int c; int d; } hn = {.a = 1, .x = 2, .c = 3};
+-// CHECK: @hn = global { i32, { i16, [2 x i8] }, i32, i32 } { i32 1, { i16, [2 x i8] } { i16 2, [2 x i8] undef }, i32 3, i32 0 }
++// CHECK: @hn = global { i32, { i16, [2 x i8] }, i32, i32 } { i32 1, { i16, [2 x i8] } { i16 2, [2 x i8] zeroinitializer }, i32 3, i32 0 }
+ struct { int a; union { int b; short x[0]; }; int c; int d; } hn0 = {.a = 1, .x = {2}, .c = 3};
+-// CHECK: @hn0 = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 1, { [0 x i16], [4 x i8] } { [0 x i16] zeroinitializer, [4 x i8] undef }, i32 3, i32 0 }
++// CHECK: @hn0 = global { i32, { [0 x i16], [4 x i8] }, i32, i32 } { i32 1, { [0 x i16], [4 x i8] } zeroinitializer, i32 3, i32 0 }
+ struct { int a; union { int b; short x[1]; }; int c; int d; } hn1 = {.a = 1, .x = {2}, .c = 3};
+-// CHECK: @hn1 = global { i32, { [1 x i16], [2 x i8] }, i32, i32 } { i32 1, { [1 x i16], [2 x i8] } { [1 x i16] [i16 2], [2 x i8] undef }, i32 3, i32 0 }
++// CHECK: @hn1 = global { i32, { [1 x i16], [2 x i8] }, i32, i32 } { i32 1, { [1 x i16], [2 x i8] } { [1 x i16] [i16 2], [2 x i8] zeroinitializer }, i32 3, i32 0 }
+ 
+ struct { char a[]; } empty_struct = {};
+ // CHECK: @empty_struct ={{.*}} global %struct.anon{{.*}} zeroinitializer, align 1
+@@ -96,10 +96,10 @@ union { char a[]; } only_in_union0 = {0};
+ // CHECK: @only_in_union0 = global { [1 x i8] } zeroinitializer, align 1
+ 
+ union { char a[]; int b; } first_in_union = {};
+-// CHECK: @first_in_union = global { [0 x i8], [4 x i8] } { [0 x i8] zeroinitializer, [4 x i8] undef }, align 4
++// CHECK: @first_in_union = global { [0 x i8], [4 x i8] } zeroinitializer, align 4
+ 
+ union { char a[]; int b; } first_in_union0 = {0};
+-// CHECK: @first_in_union0 = global { [1 x i8], [3 x i8] } { [1 x i8] zeroinitializer, [3 x i8] undef }, align 4
++// CHECK: @first_in_union0 = global { [1 x i8], [3 x i8] } zeroinitializer, align 4
+ 
+ union { char a[]; int b; } first_in_union123 = { {1, 2, 3} };
+-// CHECK: @first_in_union123 = global { [3 x i8], i8 } { [3 x i8] c"\01\02\03", i8 undef }, align 4
++// CHECK: @first_in_union123 = global { [3 x i8], i8 } { [3 x i8] c"\01\02\03", i8 0 }, align 4
+diff --git a/clang/test/CodeGen/global-init.c b/clang/test/CodeGen/global-init.c
+index 7f1d675b97c0..b156466dbaaf 100644
+--- a/clang/test/CodeGen/global-init.c
++++ b/clang/test/CodeGen/global-init.c
+@@ -33,7 +33,7 @@ struct ManyFields {
+   int f;
+ };
+ 
+-// CHECK: global %struct.ManyFields { i32 1, i32 2, i32 0, i8 0, i32 0, i32 0 }
++// CHECK: global { i32, i32, i32, i8, [3 x i8], i32, i32 } { i32 1, i32 2, i32 0, i8 0, [3 x i8] zeroinitializer, i32 0, i32 0 }
+ struct ManyFields FewInits = {1, 2};
+ 
+ 
+diff --git a/clang/test/CodeGen/init.c b/clang/test/CodeGen/init.c
+index cbf615bb9ddf..27f427dff8f7 100644
+--- a/clang/test/CodeGen/init.c
++++ b/clang/test/CodeGen/init.c
+@@ -187,25 +187,6 @@ void nonzeroMemsetf64(void) {
+   // CHECK: call void @llvm.memset.p0.i32(ptr {{.*}}, i8 68, i32 56, i1 false)
+ }
+ 
+-void nonzeroPaddedUnionMemset(void) {
+-  union U { char c; int i; };
+-  union U arr[9] = { 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, };
+-  // CHECK-LABEL: @nonzeroPaddedUnionMemset(
+-  // CHECK-NOT: store
+-  // CHECK-NOT: memcpy
+-  // CHECK: call void @llvm.memset.p0.i32(ptr {{.*}}, i8 -16, i32 36, i1 false)
+-}
+-
+-void nonzeroNestedMemset(void) {
+-  union U { char c; int i; };
+-  struct S { union U u; short i; };
+-  struct S arr[5] = { { {0xF0}, 0xF0F0 }, { {0xF0}, 0xF0F0 }, { {0xF0}, 0xF0F0 }, { {0xF0}, 0xF0F0 }, { {0xF0}, 0xF0F0 }, };
+-  // CHECK-LABEL: @nonzeroNestedMemset(
+-  // CHECK-NOT: store
+-  // CHECK-NOT: memcpy
+-  // CHECK: call void @llvm.memset.p0.i32(ptr {{.*}}, i8 -16, i32 40, i1 false)
+-}
+-
+ // PR9257
+ struct test11S {
+   int A[10];
+diff --git a/clang/test/CodeGen/linux-kernel-struct-union-initializer.c b/clang/test/CodeGen/linux-kernel-struct-union-initializer.c
+new file mode 100644
+index 000000000000..8c0eb3702cf0
+--- /dev/null
++++ b/clang/test/CodeGen/linux-kernel-struct-union-initializer.c
+@@ -0,0 +1,275 @@
++// NOTE: Assertions have been autogenerated by utils/update_cc_test_checks.py UTC_ARGS: --check-globals all --version 5
++// RUN: %clang_cc1 -triple x86_64-unknown-unknown -std=gnu11 -verify -emit-llvm %s -o - | FileCheck %s
++// expected-no-diagnostics
++
++union U1 {
++  int x;
++  char y[16];
++};
++
++struct S1 {
++  int x;
++  union U1 y;
++};
++
++union U2 {
++  int x;
++  char y[16];
++} __attribute__((__aligned__(32)));
++
++struct S2 {
++  int x;
++  long long y;
++  char z[8];
++} __attribute__((__aligned__(32)));
++
++struct S3 {
++  char x;
++  unsigned char y : 4;
++  unsigned char z : 7;
++} __attribute__((packed));
++
++union U1 global_u1 = {};
++
++union U1 global_u2 = {3};
++
++union U1 global_u2_from_cast = (union U1)3;
++
++struct S1 global_s1 = {};
++
++struct S1 global_s2 = {
++    .x = 3,
++};
++
++struct S1 global_s3 = {.x = 3, .y = {.x = 6}};
++
++const union U1 global_const_u1 = {4};
++struct S1 global_s3_from_const_u1 = {.y = global_const_u1};
++
++union U2 global_u3 = {};
++
++struct S2 global_s4 = {};
++
++struct S2 global_s5 = {.x = 1};
++
++struct S3 global_s6 = {101,  15, 123};
++
++// Test empty initializer for union.
++//.
++// CHECK: @global_u1 = global %union.U1 zeroinitializer, align 4
++// CHECK: @global_u2 = global %union.U1 { i32 3, [12 x i8] zeroinitializer }, align 4
++// CHECK: @global_u2_from_cast = global { i32, [12 x i8] } { i32 3, [12 x i8] zeroinitializer }, align 4
++// CHECK: @global_s1 = global %struct.S1 zeroinitializer, align 4
++// CHECK: @global_s2 = global %struct.S1 { i32 3, %union.U1 zeroinitializer }, align 4
++// CHECK: @global_s3 = global %struct.S1 { i32 3, %union.U1 { i32 6, [12 x i8] zeroinitializer } }, align 4
++// CHECK: @global_const_u1 = constant %union.U1 { i32 4, [12 x i8] zeroinitializer }, align 4
++// CHECK: @global_s3_from_const_u1 = global %struct.S1 { i32 0, %union.U1 { i32 4, [12 x i8] zeroinitializer } }, align 4
++// CHECK: @global_u3 = global %union.U2 zeroinitializer, align 32
++// CHECK: @global_s4 = global { i32, [4 x i8], i64, [8 x i8], [8 x i8] } zeroinitializer, align 32
++// CHECK: @global_s5 = global { i32, [4 x i8], i64, [8 x i8], [8 x i8] } { i32 1, [4 x i8] zeroinitializer, i64 0, [8 x i8] zeroinitializer, [8 x i8] zeroinitializer }, align 32
++// CHECK: @global_s6 = global { i8, i8, i8 } { i8 101, i8 -65, i8 7 }, align 1
++// CHECK: @test2.a = internal global %union.U1 zeroinitializer, align 4
++// CHECK: @__const.test3.a = private unnamed_addr constant %union.U1 { i32 3, [12 x i8] zeroinitializer }, align 4
++// CHECK: @test4.a = internal global %union.U1 { i32 3, [12 x i8] zeroinitializer }, align 4
++// CHECK: @test6.s = internal global %struct.S1 zeroinitializer, align 4
++// CHECK: @__const.test7.s = private unnamed_addr constant %struct.S1 { i32 3, %union.U1 zeroinitializer }, align 4
++// CHECK: @test8.s = internal global %struct.S1 { i32 3, %union.U1 zeroinitializer }, align 4
++// CHECK: @__const.test9.s = private unnamed_addr constant %struct.S1 { i32 3, %union.U1 { i32 6, [12 x i8] zeroinitializer } }, align 4
++// CHECK: @test10.s = internal global %struct.S1 { i32 3, %union.U1 { i32 6, [12 x i8] zeroinitializer } }, align 4
++// CHECK: @test12.a = internal global %union.U2 zeroinitializer, align 32
++// CHECK: @test14.s = internal global { i32, [4 x i8], i64, [8 x i8], [8 x i8] } zeroinitializer, align 32
++// CHECK: @__const.test15.s = private unnamed_addr constant { i32, [4 x i8], i64, [8 x i8], [8 x i8] } { i32 1, [4 x i8] zeroinitializer, i64 0, [8 x i8] zeroinitializer, [8 x i8] zeroinitializer }, align 32
++// CHECK: @test16.s = internal global { i32, [4 x i8], i64, [8 x i8], [8 x i8] } { i32 1, [4 x i8] zeroinitializer, i64 0, [8 x i8] zeroinitializer, [8 x i8] zeroinitializer }, align 32
++//.
++// CHECK-LABEL: define dso_local void @test1(
++// CHECK-SAME: ) #[[ATTR0:[0-9]+]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[A:%.*]] = alloca [[UNION_U1:%.*]], align 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[A]], i8 0, i64 16, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test1() {
++  union U1 a = {};
++}
++
++// Test empty initializer for union. Use static variable.
++// CHECK-LABEL: define dso_local void @test2(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test2() {
++  static union U1 a = {};
++}
++
++// Test only initializing a small field for union.
++// CHECK-LABEL: define dso_local void @test3(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[A:%.*]] = alloca [[UNION_U1:%.*]], align 4
++// CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 4 [[A]], ptr align 4 @__const.test3.a, i64 16, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test3() {
++  union U1 a = {3};
++}
++
++// Test only initializing a small field for union. Use static variable.
++// CHECK-LABEL: define dso_local void @test4(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test4() {
++  static union U1 a = {3};
++}
++
++// Test union in struct. Use empty initializer for the struct.
++// CHECK-LABEL: define dso_local void @test5(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S1:%.*]], align 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[S]], i8 0, i64 20, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test5() {
++  struct S1 s = {};
++}
++
++// Test union in struct. Use empty initializer for the struct. Use static variable.
++// CHECK-LABEL: define dso_local void @test6(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test6() {
++  static struct S1 s = {};
++}
++
++// Test union in struct. Initialize other fields of the struct.
++// CHECK-LABEL: define dso_local void @test7(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S1:%.*]], align 4
++// CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 4 [[S]], ptr align 4 @__const.test7.s, i64 20, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test7() {
++  struct S1 s = {
++      .x = 3,
++  };
++}
++
++// Test union in struct. Initialize other fields of the struct. Use static variable.
++// CHECK-LABEL: define dso_local void @test8(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test8() {
++  static struct S1 s = {
++      .x = 3,
++  };
++}
++
++// Test union in struct. Initialize a small field for union.
++// CHECK-LABEL: define dso_local void @test9(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S1:%.*]], align 4
++// CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 4 [[S]], ptr align 4 @__const.test9.s, i64 20, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test9() {
++  struct S1 s = {.x = 3,
++                .y = {
++                    .x = 6,
++                }};
++}
++
++// Test union in struct. Initialize a small field for union. Use static variable.
++// CHECK-LABEL: define dso_local void @test10(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test10() {
++  static struct S1 s = {.x = 3,
++                       .y = {
++                           .x = 6,
++                       }};
++}
++
++// Test empty initializer for union with padding.
++// CHECK-LABEL: define dso_local void @test11(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[A:%.*]] = alloca [[UNION_U2:%.*]], align 32
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 32 [[A]], i8 0, i64 32, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test11() {
++  union U2 a = {};
++}
++
++// Test empty initializer for union with padding. Use static variable.
++// CHECK-LABEL: define dso_local void @test12(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test12() {
++  static union U2 a = {};
++}
++
++// Test empty initializer for struct with padding.
++// CHECK-LABEL: define dso_local void @test13(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S2:%.*]], align 32
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 32 [[S]], i8 0, i64 32, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test13() {
++  struct S2 s = {};
++}
++
++// Test empty initializer for struct with padding. Use static variable.
++// CHECK-LABEL: define dso_local void @test14(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test14() {
++  static struct S2 s = {};
++}
++
++// Test partial initialization for struct with padding.
++// CHECK-LABEL: define dso_local void @test15(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S2:%.*]], align 32
++// CHECK-NEXT:    call void @llvm.memcpy.p0.p0.i64(ptr align 32 [[S]], ptr align 32 @__const.test15.s, i64 32, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test15() {
++  struct S2 s = {.x = 1};
++}
++
++// Test partial initialization for struct with padding. Use static variable.
++// CHECK-LABEL: define dso_local void @test16(
++// CHECK-SAME: ) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    ret void
++//
++void test16() {
++  static struct S2 s = {.x = 1};
++}
++//.
++// CHECK: attributes #[[ATTR0]] = { noinline nounwind optnone "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
++// CHECK: attributes #[[ATTR1:[0-9]+]] = { nocallback nofree nounwind willreturn memory(argmem: write) }
++// CHECK: attributes #[[ATTR2:[0-9]+]] = { nocallback nofree nounwind willreturn memory(argmem: readwrite) }
++//.
++// CHECK: [[META0:![0-9]+]] = !{i32 1, !"wchar_size", i32 4}
++// CHECK: [[META1:![0-9]+]] = !{!"{{.*}}clang version {{.*}}"}
++//.
+diff --git a/clang/test/CodeGen/linux-kernel-struct-union-initializer2.c b/clang/test/CodeGen/linux-kernel-struct-union-initializer2.c
+new file mode 100644
+index 000000000000..aff0286ab613
+--- /dev/null
++++ b/clang/test/CodeGen/linux-kernel-struct-union-initializer2.c
+@@ -0,0 +1,181 @@
++// NOTE: Assertions have been autogenerated by utils/update_cc_test_checks.py UTC_ARGS: --check-globals all --version 5
++// RUN: %clang_cc1 -triple x86_64-unknown-unknown -std=gnu11 -verify -emit-llvm %s -o - | FileCheck %s
++// expected-no-diagnostics
++
++union U1 {
++  int x;
++  char y[5];
++};
++
++struct S1 {
++  int x;
++  long long y;
++};
++
++struct S2 {
++  unsigned char b1 : 3; // 1st 3 bits (in 1st byte) are b1
++  unsigned char    : 2; // next 2 bits (in 1st byte) are blocked out as unused
++  unsigned char b2 : 6; // 6 bits for b2 - doesn't fit into the 1st byte => starts a 2nd
++  unsigned char b3 : 2; // 2 bits for b3 - next (and final) bits in the 2nd byte
++  int i;
++};
++
++struct S3 {
++  int x;
++} __attribute__((__aligned__(8)));
++
++struct S4 {
++  int a;
++  union U1 b;
++};
++
++struct S5 {
++  char x;
++  unsigned char y : 4;
++  unsigned char z : 7;
++} __attribute__((packed));
++
++// Test non-const initializer for union with padding.
++// CHECK-LABEL: define dso_local void @test1(
++// CHECK-SAME: i32 noundef [[X:%.*]]) #[[ATTR0:[0-9]+]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[X_ADDR:%.*]] = alloca i32, align 4
++// CHECK-NEXT:    [[A:%.*]] = alloca [[UNION_U1:%.*]], align 4
++// CHECK-NEXT:    store i32 [[X]], ptr [[X_ADDR]], align 4
++// CHECK-NEXT:    [[TMP0:%.*]] = load i32, ptr [[X_ADDR]], align 4
++// CHECK-NEXT:    store i32 [[TMP0]], ptr [[A]], align 4
++// CHECK-NEXT:    [[TMP1:%.*]] = getelementptr i8, ptr [[A]], i64 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[TMP1]], i8 0, i64 4, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test1(int x) {
++  union U1 a = {x};
++}
++
++// Test non-const initializer for struct with padding.
++// CHECK-LABEL: define dso_local void @test2(
++// CHECK-SAME: i64 noundef [[Y:%.*]]) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[Y_ADDR:%.*]] = alloca i64, align 8
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S1:%.*]], align 8
++// CHECK-NEXT:    store i64 [[Y]], ptr [[Y_ADDR]], align 8
++// CHECK-NEXT:    [[X:%.*]] = getelementptr inbounds [[STRUCT_S1]], ptr [[S]], i32 0, i32 0
++// CHECK-NEXT:    store i32 0, ptr [[X]], align 8
++// CHECK-NEXT:    [[TMP0:%.*]] = getelementptr i8, ptr [[S]], i64 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[TMP0]], i8 0, i64 4, i1 false)
++// CHECK-NEXT:    [[Y1:%.*]] = getelementptr inbounds [[STRUCT_S1]], ptr [[S]], i32 0, i32 1
++// CHECK-NEXT:    [[TMP1:%.*]] = load i64, ptr [[Y_ADDR]], align 8
++// CHECK-NEXT:    store i64 [[TMP1]], ptr [[Y1]], align 8
++// CHECK-NEXT:    ret void
++//
++void test2(long long y) {
++  struct S1 s = {.y = y};
++}
++
++// Test non-const initializer for struct with padding and bit fields.
++// CHECK-LABEL: define dso_local void @test3(
++// CHECK-SAME: i8 noundef zeroext [[B:%.*]]) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[B_ADDR:%.*]] = alloca i8, align 1
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S2:%.*]], align 4
++// CHECK-NEXT:    store i8 [[B]], ptr [[B_ADDR]], align 1
++// CHECK-NEXT:    store i16 0, ptr [[S]], align 4
++// CHECK-NEXT:    [[TMP0:%.*]] = load i8, ptr [[B_ADDR]], align 1
++// CHECK-NEXT:    [[TMP1:%.*]] = zext i8 [[TMP0]] to i16
++// CHECK-NEXT:    [[BF_LOAD:%.*]] = load i16, ptr [[S]], align 4
++// CHECK-NEXT:    [[BF_VALUE:%.*]] = and i16 [[TMP1]], 7
++// CHECK-NEXT:    [[BF_CLEAR:%.*]] = and i16 [[BF_LOAD]], -8
++// CHECK-NEXT:    [[BF_SET:%.*]] = or i16 [[BF_CLEAR]], [[BF_VALUE]]
++// CHECK-NEXT:    store i16 [[BF_SET]], ptr [[S]], align 4
++// CHECK-NEXT:    [[BF_LOAD1:%.*]] = load i16, ptr [[S]], align 4
++// CHECK-NEXT:    [[BF_CLEAR2:%.*]] = and i16 [[BF_LOAD1]], -16129
++// CHECK-NEXT:    [[BF_SET3:%.*]] = or i16 [[BF_CLEAR2]], 0
++// CHECK-NEXT:    store i16 [[BF_SET3]], ptr [[S]], align 4
++// CHECK-NEXT:    [[BF_LOAD4:%.*]] = load i16, ptr [[S]], align 4
++// CHECK-NEXT:    [[BF_CLEAR5:%.*]] = and i16 [[BF_LOAD4]], 16383
++// CHECK-NEXT:    [[BF_SET6:%.*]] = or i16 [[BF_CLEAR5]], 0
++// CHECK-NEXT:    store i16 [[BF_SET6]], ptr [[S]], align 4
++// CHECK-NEXT:    [[TMP2:%.*]] = getelementptr i8, ptr [[S]], i64 2
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 2 [[TMP2]], i8 0, i64 2, i1 false)
++// CHECK-NEXT:    [[I:%.*]] = getelementptr inbounds [[STRUCT_S2]], ptr [[S]], i32 0, i32 1
++// CHECK-NEXT:    store i32 0, ptr [[I]], align 4
++// CHECK-NEXT:    ret void
++//
++void test3(unsigned char b) {
++  struct S2 s = {.b1 = b};
++}
++
++// Test non-const initializer for struct with padding at the end of the struct.
++// CHECK-LABEL: define dso_local void @test4(
++// CHECK-SAME: i32 noundef [[X:%.*]]) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[X_ADDR:%.*]] = alloca i32, align 4
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S3:%.*]], align 8
++// CHECK-NEXT:    store i32 [[X]], ptr [[X_ADDR]], align 4
++// CHECK-NEXT:    [[X1:%.*]] = getelementptr inbounds [[STRUCT_S3]], ptr [[S]], i32 0, i32 0
++// CHECK-NEXT:    [[TMP0:%.*]] = load i32, ptr [[X_ADDR]], align 4
++// CHECK-NEXT:    store i32 [[TMP0]], ptr [[X1]], align 8
++// CHECK-NEXT:    [[TMP1:%.*]] = getelementptr i8, ptr [[S]], i64 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[TMP1]], i8 0, i64 4, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test4(int x) {
++  struct S3 s = {x};
++}
++
++// Test non-const initializer for union in struct.
++// CHECK-LABEL: define dso_local void @test5(
++// CHECK-SAME: i32 noundef [[A:%.*]], i32 noundef [[B:%.*]]) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[A_ADDR:%.*]] = alloca i32, align 4
++// CHECK-NEXT:    [[B_ADDR:%.*]] = alloca i32, align 4
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S4:%.*]], align 4
++// CHECK-NEXT:    store i32 [[A]], ptr [[A_ADDR]], align 4
++// CHECK-NEXT:    store i32 [[B]], ptr [[B_ADDR]], align 4
++// CHECK-NEXT:    [[A1:%.*]] = getelementptr inbounds [[STRUCT_S4]], ptr [[S]], i32 0, i32 0
++// CHECK-NEXT:    [[TMP0:%.*]] = load i32, ptr [[A_ADDR]], align 4
++// CHECK-NEXT:    store i32 [[TMP0]], ptr [[A1]], align 4
++// CHECK-NEXT:    [[B2:%.*]] = getelementptr inbounds [[STRUCT_S4]], ptr [[S]], i32 0, i32 1
++// CHECK-NEXT:    [[TMP1:%.*]] = load i32, ptr [[B_ADDR]], align 4
++// CHECK-NEXT:    store i32 [[TMP1]], ptr [[B2]], align 4
++// CHECK-NEXT:    [[TMP2:%.*]] = getelementptr i8, ptr [[B2]], i64 4
++// CHECK-NEXT:    call void @llvm.memset.p0.i64(ptr align 4 [[TMP2]], i8 0, i64 4, i1 false)
++// CHECK-NEXT:    ret void
++//
++void test5(int a, int b) {
++  struct S4 s = {a, {b}};
++}
++
++// CHECK-LABEL: define dso_local void @test6(
++// CHECK-SAME: i8 noundef signext [[X:%.*]]) #[[ATTR0]] {
++// CHECK-NEXT:  [[ENTRY:.*:]]
++// CHECK-NEXT:    [[X_ADDR:%.*]] = alloca i8, align 1
++// CHECK-NEXT:    [[S:%.*]] = alloca [[STRUCT_S5:%.*]], align 1
++// CHECK-NEXT:    store i8 [[X]], ptr [[X_ADDR]], align 1
++// CHECK-NEXT:    [[X1:%.*]] = getelementptr inbounds [[STRUCT_S5]], ptr [[S]], i32 0, i32 0
++// CHECK-NEXT:    [[TMP0:%.*]] = load i8, ptr [[X_ADDR]], align 1
++// CHECK-NEXT:    store i8 [[TMP0]], ptr [[X1]], align 1
++// CHECK-NEXT:    [[TMP1:%.*]] = getelementptr i8, ptr [[S]], i64 1
++// CHECK-NEXT:    store i16 0, ptr [[TMP1]], align 1
++// CHECK-NEXT:    [[Y:%.*]] = getelementptr inbounds [[STRUCT_S5]], ptr [[S]], i32 0, i32 1
++// CHECK-NEXT:    [[BF_LOAD:%.*]] = load i16, ptr [[Y]], align 1
++// CHECK-NEXT:    [[BF_CLEAR:%.*]] = and i16 [[BF_LOAD]], -16
++// CHECK-NEXT:    [[BF_SET:%.*]] = or i16 [[BF_CLEAR]], 0
++// CHECK-NEXT:    store i16 [[BF_SET]], ptr [[Y]], align 1
++// CHECK-NEXT:    [[Z:%.*]] = getelementptr inbounds [[STRUCT_S5]], ptr [[S]], i32 0, i32 1
++// CHECK-NEXT:    [[BF_LOAD2:%.*]] = load i16, ptr [[Z]], align 1
++// CHECK-NEXT:    [[BF_CLEAR3:%.*]] = and i16 [[BF_LOAD2]], -2033
++// CHECK-NEXT:    [[BF_SET4:%.*]] = or i16 [[BF_CLEAR3]], 0
++// CHECK-NEXT:    store i16 [[BF_SET4]], ptr [[Z]], align 1
++// CHECK-NEXT:    ret void
++//
++void test6(char x) {
++  struct S5 s = {.x = x};
++}
++//.
++// CHECK: attributes #[[ATTR0]] = { noinline nounwind optnone "min-legal-vector-width"="0" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "target-features"="+cx8,+mmx,+sse,+sse2,+x87" }
++// CHECK: attributes #[[ATTR1:[0-9]+]] = { nocallback nofree nounwind willreturn memory(argmem: write) }
++//.
++// CHECK: [[META0:![0-9]+]] = !{i32 1, !"wchar_size", i32 4}
++// CHECK: [[META1:![0-9]+]] = !{!"{{.*}}clang version {{.*}}"}
++//.
+diff --git a/clang/test/CodeGen/mingw-long-double.c b/clang/test/CodeGen/mingw-long-double.c
+index 4be97526f963..0fc8f0150968 100644
+--- a/clang/test/CodeGen/mingw-long-double.c
++++ b/clang/test/CodeGen/mingw-long-double.c
+@@ -11,12 +11,9 @@ struct {
+   char c;
+   long double ldb;
+ } agggregate_LD = {};
+-// GNU32: %struct.anon = type { i8, x86_fp80 }
+-// GNU32: @agggregate_LD = dso_local global %struct.anon zeroinitializer, align 4
+-// GNU64: %struct.anon = type { i8, x86_fp80 }
+-// GNU64: @agggregate_LD = dso_local global %struct.anon zeroinitializer, align 16
+-// MSC64: %struct.anon = type { i8, double }
+-// MSC64: @agggregate_LD = dso_local global %struct.anon zeroinitializer, align 8
++// GNU32: @agggregate_LD = dso_local global { i8, [3 x i8], x86_fp80 } zeroinitializer, align 4
++// GNU64: @agggregate_LD = dso_local global { i8, [15 x i8], x86_fp80 } zeroinitializer, align 16
++// MSC64: @agggregate_LD = dso_local global { i8, [7 x i8], double } zeroinitializer, align 8
+ 
+ long double dataLD = 1.0L;
+ // GNU32: @dataLD = dso_local global x86_fp80 0xK3FFF8000000000000000, align 4
+diff --git a/clang/test/CodeGen/mms-bitfields.c b/clang/test/CodeGen/mms-bitfields.c
+index 49c5c1c3e7d4..2ccce326c713 100644
+--- a/clang/test/CodeGen/mms-bitfields.c
++++ b/clang/test/CodeGen/mms-bitfields.c
+@@ -61,5 +61,5 @@ union HEADER {
+ struct Inner variable = { 1,0,1, 21 };
+ union HEADER hdr = {{1,2,3,4}};
+ 
+-// CHECK: @variable ={{.*}} global { i8, [3 x i8], i8, i8, i8, i8 } { i8 5, [3 x i8] undef, i8 21, i8 0, i8 0, i8 0 }, align 1
+-// CHECK: @hdr ={{.*}} global { { i8, i8, [2 x i8], i8, i8, i8, i8, i8, [3 x i8] } } { { i8, i8, [2 x i8], i8, i8, i8, i8, i8, [3 x i8] } { i8 8, i8 0, [2 x i8] undef, i8 2, i8 0, i8 0, i8 3, i8 4, [3 x i8] undef } }, align 1
++// CHECK: @variable ={{.*}} global { i8, [3 x i8], i8, i8, i8, i8 } { i8 5, [3 x i8] zeroinitializer, i8 21, i8 0, i8 0, i8 0 }, align 1
++// CHECK: @hdr ={{.*}} global { { i8, i8, [2 x i8], i8, i8, i8, i8, i8, [3 x i8] } } { { i8, i8, [2 x i8], i8, i8, i8, i8, i8, [3 x i8] } { i8 8, i8 0, [2 x i8] zeroinitializer, i8 2, i8 0, i8 0, i8 3, i8 4, [3 x i8] zeroinitializer } }, align 1
+diff --git a/clang/test/CodeGen/union-init2.c b/clang/test/CodeGen/union-init2.c
+index 2c167683c4e5..64fea80a80d4 100644
+--- a/clang/test/CodeGen/union-init2.c
++++ b/clang/test/CodeGen/union-init2.c
+@@ -1,11 +1,11 @@
+ // RUN: %clang_cc1 -emit-llvm %s -o - -triple i686-pc-linux-gnu | FileCheck %s
+ 
+ // Make sure we generate something sane instead of a ptrtoint
+-// CHECK: @r, [4 x i8] undef
++// CHECK: @r, [4 x i8] zeroinitializer
+ union x {long long b;union x* a;} r = {.a = &r};
+ 
+ 
+-// CHECK: global { [3 x i8], [5 x i8] } { [3 x i8] zeroinitializer, [5 x i8] undef }
++// CHECK: global { [3 x i8], [5 x i8] } zeroinitializer
+ union z {
+   char a[3];
+   long long b;
+diff --git a/clang/test/CodeGen/windows-swiftcall.c b/clang/test/CodeGen/windows-swiftcall.c
+index 6c138a341835..cec8698a155c 100644
+--- a/clang/test/CodeGen/windows-swiftcall.c
++++ b/clang/test/CodeGen/windows-swiftcall.c
+@@ -5,8 +5,6 @@
+ #define ERROR __attribute__((swift_error_result))
+ #define CONTEXT __attribute__((swift_context))
+ 
+-// CHECK: [[STRUCT2_RESULT:@.*]] = private {{.*}} constant [[STRUCT2_TYPE:%.*]] { i32 0, i8 0, i8 undef, i8 0, i32 0, i32 0 }
+-
+ /*****************************************************************************/
+ /****************************** PARAMETER ABIS *******************************/
+ /*****************************************************************************/
+@@ -142,8 +140,8 @@ typedef struct {
+ } struct_2;
+ TEST(struct_2);
+ // CHECK-LABEL: define dso_local swiftcc { i64, i64 } @return_struct_2() {{.*}}{
+-// CHECK:   [[RET:%.*]] = alloca [[STRUCT2_TYPE]], align 4
+-// CHECK:   call void @llvm.memcpy{{.*}}({{.*}}[[RET]], {{.*}}[[STRUCT2_RESULT]]
++// CHECK:   [[RET:%.*]] = alloca [[STRUCT2:%.*]], align 4
++// CHECK:   call void @llvm.memset
+ // CHECK:   [[GEP0:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[RET]], i32 0, i32 0
+ // CHECK:   [[T0:%.*]] = load i64, ptr [[GEP0]], align 4
+ // CHECK:   [[GEP1:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[RET]], i32 0, i32 1
+@@ -153,7 +151,7 @@ TEST(struct_2);
+ // CHECK:   ret { i64, i64 } [[R1]]
+ // CHECK: }
+ // CHECK-LABEL: define dso_local swiftcc void @take_struct_2(i64 %0, i64 %1) {{.*}}{
+-// CHECK:   [[V:%.*]] = alloca [[STRUCT:%.*]], align 4
++// CHECK:   [[V:%.*]] = alloca [[STRUCT2]], align 4
+ // CHECK:   [[GEP0:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[V]], i32 0, i32 0
+ // CHECK:   store i64 %0, ptr [[GEP0]], align 4
+ // CHECK:   [[GEP1:%.*]] = getelementptr inbounds { i64, i64 }, ptr [[V]], i32 0, i32 1
+@@ -161,7 +159,7 @@ TEST(struct_2);
+ // CHECK:   ret void
+ // CHECK: }
+ // CHECK-LABEL: define dso_local void @test_struct_2() {{.*}} {
+-// CHECK:   [[TMP:%.*]] = alloca [[STRUCT2_TYPE]], align 4
++// CHECK:   [[TMP:%.*]] = alloca [[STRUCT2]], align 4
+ // CHECK:   [[CALL:%.*]] = call swiftcc { i64, i64 } @return_struct_2()
+ // CHECK:   [[GEP:%.*]] = getelementptr inbounds {{.*}} [[TMP]], i32 0, i32 0
+ // CHECK:   [[T0:%.*]] = extractvalue { i64, i64 } [[CALL]], 0
+@@ -234,7 +232,7 @@ typedef union {
+ TEST(union_het_fp)
+ // CHECK-LABEL: define dso_local swiftcc i64 @return_union_het_fp()
+ // CHECK:  [[RET:%.*]] = alloca [[UNION:%.*]], align 8
+-// CHECK:  call void @llvm.memcpy{{.*}}(ptr align {{[0-9]+}} [[RET]]
++// CHECK:  call void @llvm.memset{{.*}}(ptr align {{[0-9]+}} [[RET]]
+ // CHECK:  [[GEP:%.*]] = getelementptr inbounds { i64 }, ptr [[RET]], i32 0, i32 0
+ // CHECK:  [[R0:%.*]] = load i64, ptr [[GEP]], align 8
+ // CHECK:  ret i64 [[R0]]
+diff --git a/clang/test/CodeGenObjC/designated-initializers.m b/clang/test/CodeGenObjC/designated-initializers.m
+index a67f82e1afbe..ce58f6c36733 100644
+--- a/clang/test/CodeGenObjC/designated-initializers.m
++++ b/clang/test/CodeGenObjC/designated-initializers.m
+@@ -4,4 +4,4 @@ struct overwrite_string_struct {
+   char L[3];
+   int M;
+ } overwrite_string[] = { { { @encode(void**) }, 1 }, [0].L[1] = 'x'};
+-// CHECK: [3 x i8] c"^xv", i32 1
++// CHECK: [3 x i8] c"^xv", i8 0, i32 1
+-- 
+2.47.0.rc1.288.g06298d1525-goog
+

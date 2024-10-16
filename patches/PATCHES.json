@@ -1741,6 +1741,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Reapply \"[clang][CodeGen] Zero init unspecified fields in initializers in C\" (#109898) (#110051)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/627746581b8fde4143533937130f420bbbdf9ddf.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 552949
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
