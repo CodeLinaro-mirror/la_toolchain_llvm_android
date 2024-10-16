@@ -52,10 +52,10 @@ def parse_args(sys_argv: Optional[List[str]]):
     )
 
     parser.add_argument(
-        "target",
+        "path",
         type=str,
         nargs=1,
-        help="Target Clang path (e.g. ANDROID_TOP/prebuilts/clang/linux-x86/)",
+        help="Path to save the extracted Clang (e.g. ANDROID_TOP/prebuilts/clang/linux-x86/)",
     )
     return parser.parse_args(sys_argv)
 
@@ -66,7 +66,7 @@ def get_url(build_id: str):
     return url
 
 
-def fetch_prebuilts(build_id: str, target: str):
+def fetch_prebuilts(build_id: str, path: str):
     gsutil_url = get_url(build_id)
     with tempfile.TemporaryDirectory() as td:
         cmd = ["gsutil", "cp", gsutil_url, td]
@@ -82,7 +82,7 @@ def fetch_prebuilts(build_id: str, target: str):
 
             # extract the toolchain
             tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
-            extract_tarball(target, tar)
+            extract_tarball(path, tar)
             return True
     return False
 
@@ -95,9 +95,9 @@ def check_valid_build(build_id: str):
         raise Exception(err_msg)
 
 
-def check_valid_path(target: str):
-    if not os.path.exists(target):
-        err_msg = target + " doesn't exist. Please pass a valid path."
+def check_valid_path(path: str):
+    if not os.path.exists(path):
+        err_msg = path + " doesn't exist. Please pass a valid path."
         raise Exception(err_msg)
 
 
@@ -201,8 +201,8 @@ def main(sys_argv: List[str]):
 
     check_tools(args_output.sha)
 
-    target = args_output.target[0]
-    check_valid_path(target)
+    path = args_output.path[0]
+    check_valid_path(path)
 
     if args_output.sha:
         build_id = get_build_number(args_output.sha)
@@ -211,7 +211,7 @@ def main(sys_argv: List[str]):
 
     check_valid_build(build_id)
 
-    fetch_prebuilts(build_id, target)
+    fetch_prebuilts(build_id, path)
 
     return 0
 
