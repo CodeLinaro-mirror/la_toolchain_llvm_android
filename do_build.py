@@ -1066,6 +1066,10 @@ def main():
         stage1.build_lldb = build_lldb
         stage1.enable_mlgo = mlgo
         stage1.build_extra_tools = args.run_tests_stage1
+        # In a debug or instrumented build, stage1 toolchain builds the stage2
+        # runtimes.  We need cross runtimes in stage1 so CMake can find musl libc++
+        # for stage2 musl runtimes.
+        stage1.build_cross_runtimes = hosts.build_host().is_linux and (args.debug or instrumented)
         stage1.libzstd = libzstd_builder
         stage1.build()
         if hosts.build_host().is_linux:
