@@ -162,7 +162,7 @@ class Builder:  # pylint: disable=too-few-public-methods
     toolchain: toolchains.Toolchain = toolchains.get_prebuilt_toolchain()
 
     """The toolchain to install artifacts from this LLVMRuntimeBuilder."""
-    output_toolchain: toolchains.Toolchain
+    output_toolchain: Optional[toolchains.Toolchain] = None
 
     def __init__(self,
                  config_list: Optional[Sequence[configs.Config]] = None,
@@ -578,6 +578,19 @@ class LLVMRuntimeBuilder(LLVMBaseBuilder):  # pylint: disable=abstract-method
             # use.
             defines['ANDROID_PLATFORM_LEVEL'] = self._config.api_level
         return defines
+
+    @property
+    def ldflags(self) -> List[str]:
+        ldflags = super().ldflags
+        # Explicitly point to resource-dir of output_toolchain (if set, this is
+        # usually stage2-install) when building runtimes.  Stage1 toolchain is
+        # used to build stage2 runtimes in debug and instrumented builds but
+        # some necessary runtimes are installed in stage2.
+        if self.output_toolchain:
+            ldflags.extend((
+                '-resource-dir', f'{self.output_toolchain.clang_lib_dir}'
+            ))
+        return ldflags
 
 
 class LLVMBuilder(LLVMBaseBuilder):
