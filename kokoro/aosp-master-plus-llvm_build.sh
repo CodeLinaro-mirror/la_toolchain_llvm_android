@@ -39,5 +39,6 @@ OUT_DIR=out \
 prebuilts/python/linux-x86/bin/python3 \
   toolchain/llvm_android/test_compiler.py --build-only \
   --target ${AOSP_BUILD_TARGET}-trunk_staging-userdebug \
+  --module sync \
   --clang-package-path ${KOKORO_GFILE_DIR} .
 
