@@ -4,10 +4,6 @@ set -e
 TOP=$(cd $(dirname $0)/../../.. && pwd)
 
 function cleanup {
-  if [ -f out/dist/logs/error.log ]; then
-    cat out/dist/logs/error.log
-  fi
-
   # Kokoro will rsync back everything created by the build. Since we don't care
   # about any artifacts on this build, nuke EVERYTHING at the end of the build.
   rm -rf "${TOP}"/*
