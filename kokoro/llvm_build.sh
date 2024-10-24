@@ -30,7 +30,7 @@ if [ $LLVM_BUILD_TYPE == "linux-TOT" ]; then
   --mlgo \
   --build-name "${KOKORO_BUILD_NUMBER}" \
   --no-build=windows,lldb
-elif [ $LLVM_BUILD_TYPE == "linux-master" ]; then
+elif [ $LLVM_BUILD_TYPE == "linux-main" ]; then
   OUT_DIR="${OUT}" DIST_DIR="${DIST}" $TOP/prebuilts/python/linux-x86/bin/python3 \
   $python_src/build.py --create-tar \
   --mlgo \
