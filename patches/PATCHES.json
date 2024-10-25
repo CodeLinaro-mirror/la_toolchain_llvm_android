@@ -1755,6 +1755,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MTE] Do not allow local aliases to MTE globals (#106280)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/23b18fa01e6de7cb86a0cd294d58e5f8635d4afe.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 553677
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
