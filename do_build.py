@@ -485,6 +485,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
             'scan-view' + ext,
         }
         necessary_bin_files -= windows_exclude_bin_files
+        necessary_bin_files.add('libclang.dll')
 
     # scripts that should not be stripped
     script_bins = {
