@@ -524,10 +524,10 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         if not (bin_dir / necessary_bin_file).is_file():
             raise RuntimeError(f'Did not find {necessary_bin_file} in {bin_dir}')
 
-    if host.is_linux and builders_package:
+    if builders_package:
         # Copy FileCheck into the install directory.  This is needed to build the
         # Rust toolchain.
-        shutil.copy2(toolchain_builder.output_dir / 'bin' / 'FileCheck', bin_dir)
+        shutil.copy2(toolchain_builder.output_dir / 'bin' / ('FileCheck' + ext), bin_dir)
 
     necessary_lib_files = set()
     if with_runtimes:
