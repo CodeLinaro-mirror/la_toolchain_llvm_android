@@ -1,0 +1,50 @@
+From 73e07e924470ebab76a634e41fadf425a859e0ea Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Thu, 30 May 2024 11:12:54 -0700
+Subject: [PATCH] [ELF] Add RW then text test
+
+Currently, lld assigns RF_NOT_SPECIAL so that orphan .interp and
+SHT_NOTE are always before other sections. GNU ld doesn't do so. The
+next change will remove RF_NOT_SPECIAL.
+---
+ lld/test/ELF/linkerscript/orphan.s | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/lld/test/ELF/linkerscript/orphan.s b/lld/test/ELF/linkerscript/orphan.s
+index a929d529a83d..cff6a3eb3a0b 100644
+--- a/lld/test/ELF/linkerscript/orphan.s
++++ b/lld/test/ELF/linkerscript/orphan.s
+@@ -53,6 +53,18 @@
+ # ONLY-RW-NEXT:    .rw3      PROGBITS 0000000000001{{...}} 0
+ # ONLY-RW-NEXT:    .bss      NOBITS   0000000000001{{...}} 0
+ 
++# RUN: ld.lld a.o -T rw-text.lds -o rw-text
++# RUN: llvm-readelf -S rw-text | FileCheck %s --check-prefix=RW-TEXT
++# RW-TEXT:      .interp   PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-NEXT: .note.my  NOTE     00000000000002{{..}} 0
++# RW-TEXT-NEXT: .jcr      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-NEXT: .rw1      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-NEXT: .rw2      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-NEXT: .rw3      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-NEXT: .bss      NOBITS   00000000000002{{..}} 0
++# RW-TEXT-NEXT: .text     PROGBITS 0000000000001{{...}} 0
++# RW-TEXT-NEXT: .mytext   PROGBITS 0000000000001{{...}} 0
++
+ #--- a.s
+ .section .rw1, "aw"; .byte 0
+ .section .rw2, "aw"; .byte 0
+@@ -92,3 +104,11 @@ SECTIONS {
+   .rw1 : { *(.rw1) }
+   . = ALIGN(CONSTANT(MAXPAGESIZE));
+ }
++
++#--- rw-text.lds
++SECTIONS {
++  . = SIZEOF_HEADERS;
++  .rw1 : { *(.rw1) }
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
++  .text : { *(.text) }
++}
+-- 
+2.47.0.163.g1226f6d8fa-goog
+

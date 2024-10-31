@@ -1,0 +1,47 @@
+From ce5b371606422ed21cda0e24cdc89cb41cdc5600 Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Thu, 30 May 2024 10:12:41 -0700
+Subject: [PATCH] [BOLT,test] Make linker scripts less sensitive to lld's
+ orphan placement (#93763)
+
+Then two tests rely on .interp being the first section.
+llvm-bolt would crash if lld places .interp after .got
+(f639b57f7993cadb82ee9c36f04703ae4430ed85).
+
+For best portability, when a linker scripts specifies a SECTIONS
+command, the first section for each PT_LOAD segment should be specified
+with a MAXPAGESIZE alignment. Otherwise, linkers have freedom to decide
+how to place orphan sections, which might break intention.
+---
+ bolt/test/AArch64/Inputs/array_end.lld_script | 3 +++
+ bolt/test/Inputs/lsda.ldscript                | 3 +++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/bolt/test/AArch64/Inputs/array_end.lld_script b/bolt/test/AArch64/Inputs/array_end.lld_script
+index 182c13d370a3..bf77c0493a09 100644
+--- a/bolt/test/AArch64/Inputs/array_end.lld_script
++++ b/bolt/test/AArch64/Inputs/array_end.lld_script
+@@ -1,4 +1,7 @@
+ SECTIONS {
++  .interp : { *(.interp) }
++
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
+   .fini_array    :
+   {
+     PROVIDE_HIDDEN (__fini_array_start = .);
+diff --git a/bolt/test/Inputs/lsda.ldscript b/bolt/test/Inputs/lsda.ldscript
+index aa608ecd97e8..011e0c6ac8a0 100644
+--- a/bolt/test/Inputs/lsda.ldscript
++++ b/bolt/test/Inputs/lsda.ldscript
+@@ -1,5 +1,8 @@
+ SECTIONS {
++  .interp : { *(.interp) }
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
+   .text : { *(.text*) }
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
+   .gcc_except_table.main : { *(.gcc_except_table*) }
+   . = 0x20000;
+   .eh_frame : { *(.eh_frame) }
+-- 
+2.47.0.163.g1226f6d8fa-goog
+
