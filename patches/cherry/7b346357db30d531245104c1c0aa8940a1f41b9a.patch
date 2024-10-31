@@ -1,0 +1,216 @@
+From 7b346357db30d531245104c1c0aa8940a1f41b9a Mon Sep 17 00:00:00 2001
+From: Fangrui Song <i@maskray.me>
+Date: Tue, 4 Jun 2024 09:14:54 -0700
+Subject: [PATCH] [ELF] Orphan placement: prefer the last similar section when
+ its rank <= orphan's rank
+
+`findOrphanPos` finds the most similar output section (that has input
+sections). In the event of proximity ties, we select the first section.
+
+However, when an orphan section's rank is equal to or larger than the
+most similar sections's, it makes sense to prioritize the last similar
+section. This new behavior matches GNU ld better.
+
+```
+// orphan placement for .bss (SHF_ALLOC|SHF_WRITE, SHT_NOBITS)
+
+WA SHT_PROGBITS
+(old behavior) <= here
+A
+WA SHT_PROGBITS
+AX
+WA (.data)
+(new behavior) <= here
+```
+
+When the orphan section's rank is less, the current behavior
+prioritizing the first section still makes sense.
+```
+// orphan with a smaller rank, e.g. .rodata
+
+<= here
+WA
+AX
+WA
+```
+
+Close #92987
+
+Pull Request: https://github.com/llvm/llvm-project/pull/94099
+---
+ lld/ELF/Writer.cpp                            | 27 ++++++++-------
+ lld/test/ELF/linkerscript/orphan.s            | 22 +++++++++++++
+ lld/test/ELF/linkerscript/sections-nonalloc.s | 33 ++++++++++---------
+ lld/test/ELF/linkerscript/sections.s          |  8 ++---
+ 4 files changed, 59 insertions(+), 31 deletions(-)
+
+diff --git a/lld/ELF/Writer.cpp b/lld/ELF/Writer.cpp
+index 58ae20720a17..0295a656b070 100644
+--- a/lld/ELF/Writer.cpp
++++ b/lld/ELF/Writer.cpp
+@@ -935,19 +935,23 @@ findOrphanPos(SmallVectorImpl<SectionCommand *>::iterator b,
+       return i;
+   }
+ 
+-  // Find the first element that has as close a rank as possible.
+-  if (b == e)
+-    return e;
+-  int proximity = getRankProximity(sec, *b);
+-  auto i = b;
+-  for (auto j = b; ++j != e;) {
++  // Find the most similar output section as the anchor. Rank Proximity is a
++  // value in the range [-1, 32] where [0, 32] indicates potential anchors (0:
++  // least similar; 32: identical). -1 means not an anchor.
++  //
++  // In the event of proximity ties, we select the first or last section
++  // depending on whether the orphan's rank is smaller.
++  int maxP = 0;
++  auto i = e;
++  for (auto j = b; j != e; ++j) {
+     int p = getRankProximity(sec, *j);
+-    if (p > proximity) {
+-      proximity = p;
++    if (p > maxP ||
++        (p == maxP && cast<OutputDesc>(*j)->osec.sortRank <= sec->sortRank)) {
++      maxP = p;
+       i = j;
+     }
+   }
+-  if (!isa<OutputDesc>(*i))
++  if (i == e)
+     return e;
+ 
+   auto isOutputSecWithInputSections = [](SectionCommand *cmd) {
+@@ -955,7 +959,8 @@ findOrphanPos(SmallVectorImpl<SectionCommand *>::iterator b,
+     return osd && osd->osec.hasInputSections;
+   };
+ 
+-  // If i's rank is larger, the orphan section can be placed before i.
++  // Then, scan backward or forward through the script for a suitable insertion
++  // point. If i's rank is larger, the orphan section can be placed before i.
+   //
+   // However, don't do this if custom program headers are defined. Otherwise,
+   // adding the orphan to a previous segment can change its flags, for example,
+@@ -967,7 +972,7 @@ findOrphanPos(SmallVectorImpl<SectionCommand *>::iterator b,
+     for (auto j = ++i; j != e; ++j) {
+       if (!isOutputSecWithInputSections(*j))
+         continue;
+-      if (getRankProximity(sec, *j) != proximity)
++      if (getRankProximity(sec, *j) != maxP)
+         break;
+       i = j + 1;
+     }
+diff --git a/lld/test/ELF/linkerscript/orphan.s b/lld/test/ELF/linkerscript/orphan.s
+index 4f01b181d041..dc1b49042a98 100644
+--- a/lld/test/ELF/linkerscript/orphan.s
++++ b/lld/test/ELF/linkerscript/orphan.s
+@@ -65,6 +65,18 @@
+ # RW-TEXT-NEXT: .text     PROGBITS 0000000000001{{...}} 0
+ # RW-TEXT-NEXT: .mytext   PROGBITS 0000000000001{{...}} 0
+ 
++# RUN: ld.lld a.o -T rw-text-rw.lds -o rw-text-rw
++# RUN: llvm-readelf -S rw-text-rw | FileCheck %s --check-prefix=RW-TEXT-RW
++# RW-TEXT-RW:      .jcr      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-RW-NEXT: .rw1      PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-RW-NEXT: .interp   PROGBITS 00000000000002{{..}} 0
++# RW-TEXT-RW-NEXT: .note.my  NOTE     00000000000002{{..}} 0
++# RW-TEXT-RW-NEXT: .text     PROGBITS 0000000000001{{...}} 0
++# RW-TEXT-RW-NEXT: .mytext   PROGBITS 0000000000001{{...}} 0
++# RW-TEXT-RW-NEXT: .rw2      PROGBITS 0000000000002{{...}} 0
++# RW-TEXT-RW-NEXT: .rw3      PROGBITS 0000000000002{{...}} 0
++# RW-TEXT-RW-NEXT: .bss      NOBITS   0000000000002{{...}} 0
++
+ #--- a.s
+ .section .rw1, "aw"; .byte 0
+ .section .rw2, "aw"; .byte 0
+@@ -112,3 +124,13 @@ SECTIONS {
+   . = ALIGN(CONSTANT(MAXPAGESIZE));
+   .text : { *(.text) }
+ }
++
++#--- rw-text-rw.lds
++SECTIONS {
++  . = SIZEOF_HEADERS;
++  .rw1 : { *(.rw1) }
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
++  .text : { *(.text) }
++  . = ALIGN(CONSTANT(MAXPAGESIZE));
++  .rw2 : { *(.rw2) }
++}
+diff --git a/lld/test/ELF/linkerscript/sections-nonalloc.s b/lld/test/ELF/linkerscript/sections-nonalloc.s
+index a0669f701d8c..79765d32dfff 100644
+--- a/lld/test/ELF/linkerscript/sections-nonalloc.s
++++ b/lld/test/ELF/linkerscript/sections-nonalloc.s
+@@ -14,15 +14,16 @@
+ # CHECK-NEXT:  [ 0]           NULL     0000000000000000 000000 000000 00      0
+ # CHECK-NEXT:  [ 1] .bss      NOBITS   0000000000000000 001000 000001 00  WA  0
+ # CHECK-NEXT:  [ 2] data1     PROGBITS 0000000000000001 001001 000001 00  WA  0
+-# CHECK-NEXT:  [ 3] data3     PROGBITS 0000000000000002 001002 000001 00  WA  0
+-# CHECK-NEXT:  [ 4] other1    PROGBITS 0000000000000000 001008 000001 00      0
+-# CHECK-NEXT:  [ 5] other2    PROGBITS 0000000000000000 001010 000001 00      0
++# CHECK-NEXT:  [ 3] other1    PROGBITS 0000000000000000 001008 000001 00      0
++# CHECK-NEXT:  [ 4] other2    PROGBITS 0000000000000000 001010 000001 00      0
+ ## Orphan placement places other3, .symtab, .shstrtab and .strtab after other2.
+-# CHECK-NEXT:  [ 6] other3    PROGBITS 0000000000000000 001020 000001 00      0
+-# CHECK-NEXT:  [ 7] .symtab   SYMTAB   0000000000000000 001028 000030 18      9
+-# CHECK-NEXT:  [ 8] .shstrtab STRTAB   0000000000000000 001058 00004d 00      0
+-# CHECK-NEXT:  [ 9] .strtab   STRTAB   0000000000000000 0010a5 000008 00      0
+-# CHECK-NEXT:  [10] data2     PROGBITS 0000000000000003 001003 000001 00  WA  0
++# CHECK-NEXT:  [ 5] other3    PROGBITS 0000000000000000 001020 000001 00      0
++# CHECK-NEXT:  [ 6] .symtab   SYMTAB   0000000000000000 001028 000030 18      8
++# CHECK-NEXT:  [ 7] .shstrtab STRTAB   0000000000000000 001058 00004d 00      0
++# CHECK-NEXT:  [ 8] .strtab   STRTAB   0000000000000000 0010a5 000008 00      0
++# CHECK-NEXT:  [ 9] data2     PROGBITS 0000000000000002 001002 000001 00  WA  0
++## max{sortRank(data1),sortRank(data2)} <= sortRank(data3). data3 is placed after the latter.
++# CHECK-NEXT:  [10] data3     PROGBITS 0000000000000003 001003 000001 00  WA  0
+ # CHECK-NEXT:  [11] .text     PROGBITS 0000000000000004 001004 000001 00  AX  0
+ 
+ # CHECK:       Type       Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+@@ -38,14 +39,14 @@
+ # CHECK1-NEXT: [ 1] .text     PROGBITS 00000000000000b0 0000b0 000001 00  AX  0
+ # CHECK1-NEXT: [ 2] .bss      NOBITS   00000000000000b1 0000b1 000001 00  WA  0
+ # CHECK1-NEXT: [ 3] data1     PROGBITS 00000000000000b2 0000b2 000001 00  WA  0
+-# CHECK1-NEXT: [ 4] data3     PROGBITS 00000000000000b3 0000b3 000001 00  WA  0
+-# CHECK1-NEXT: [ 5] other1    PROGBITS 0000000000000000 0000b8 000001 00      0
+-# CHECK1-NEXT: [ 6] other2    PROGBITS 0000000000000000 0000c0 000001 00      0
+-# CHECK1-NEXT: [ 7] other3    PROGBITS 0000000000000000 0000d0 000001 00      0
+-# CHECK1-NEXT: [ 8] .symtab   SYMTAB   0000000000000000 0000d8 000030 18     10
+-# CHECK1-NEXT: [ 9] .shstrtab STRTAB   0000000000000000 000108 00004d 00      0
+-# CHECK1-NEXT: [10] .strtab   STRTAB   0000000000000000 000155 000008 00      0
+-# CHECK1-NEXT: [11] data2     PROGBITS 00000000000000b4 0000b4 000001 00  WA  0
++# CHECK1-NEXT: [ 4] other1    PROGBITS 0000000000000000 0000b8 000001 00      0
++# CHECK1-NEXT: [ 5] other2    PROGBITS 0000000000000000 0000c0 000001 00      0
++# CHECK1-NEXT: [ 6] other3    PROGBITS 0000000000000000 0000d0 000001 00      0
++# CHECK1-NEXT: [ 7] .symtab   SYMTAB   0000000000000000 0000d8 000030 18      9
++# CHECK1-NEXT: [ 8] .shstrtab STRTAB   0000000000000000 000108 00004d 00      0
++# CHECK1-NEXT: [ 9] .strtab   STRTAB   0000000000000000 000155 000008 00      0
++# CHECK1-NEXT: [10] data2     PROGBITS 00000000000000b3 0000b3 000001 00  WA  0
++# CHECK1-NEXT: [11] data3     PROGBITS 00000000000000b4 0000b4 000001 00  WA  0
+ # CHECK1:      Type       Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+ # CHECK1-NEXT: LOAD       0x000000 0x0000000000000000 0x0000000000000000 0x0000b5 0x0000b5 RWE 0x1000
+ # CHECK1-NEXT: 0x60000000 0x0000b8 0x0000000000000000 0x0000000000000000 0x000009 0x000001     0x8
+diff --git a/lld/test/ELF/linkerscript/sections.s b/lld/test/ELF/linkerscript/sections.s
+index 539aa9c17058..5d6cc1f3bd0d 100644
+--- a/lld/test/ELF/linkerscript/sections.s
++++ b/lld/test/ELF/linkerscript/sections.s
+@@ -78,13 +78,13 @@
+ # SEP-BY-NONALLOC:      [Nr] Name      Type     Address          Off    Size   ES Flg
+ # SEP-BY-NONALLOC:      [ 1] .text     PROGBITS 0000000000000000 001000 00000e 00  AX
+ # SEP-BY-NONALLOC-NEXT: [ 2] .data     PROGBITS 000000000000000e 00100e 000020 00  WA
+-# SEP-BY-NONALLOC-NEXT: [ 3] .bss      NOBITS   000000000000002e 00102e 000002 00  WA
+-# SEP-BY-NONALLOC-NEXT: [ 4] .comment  PROGBITS 0000000000000000 001033 000008 01  MS
+-# SEP-BY-NONALLOC:      [ 8] other     PROGBITS 0000000000000030 001030 000003 00  WA
++# SEP-BY-NONALLOC-NEXT: [ 3] .comment  PROGBITS 0000000000000000 001031 000008 01  MS
++# SEP-BY-NONALLOC:      [ 7] other     PROGBITS 000000000000002e 00102e 000003 00  WA
++# SEP-BY-NONALLOC-NEXT: [ 8] .bss      NOBITS   0000000000000031 001031 000002 00  WA
+ 
+ # SEP-BY-NONALLOC:      Type      Offset   VirtAddr           PhysAddr           FileSiz  MemSiz   Flg Align
+ # SEP-BY-NONALLOC-NEXT: LOAD      0x001000 0x0000000000000000 0x0000000000000000 0x00000e 0x00000e R E 0x1000
+-# SEP-BY-NONALLOC-NEXT: LOAD      0x00100e 0x000000000000000e 0x000000000000000e 0x000025 0x000025 RW  0x1000
++# SEP-BY-NONALLOC-NEXT: LOAD      0x00100e 0x000000000000000e 0x000000000000000e 0x000023 0x000025 RW  0x1000
+ # SEP-BY-NONALLOC-NEXT: GNU_STACK 0x000000 0x0000000000000000 0x0000000000000000 0x000000 0x000000 RW  0
+ 
+ # Input section pattern contains additional semicolon.
+-- 
+2.47.0.163.g1226f6d8fa-goog
+

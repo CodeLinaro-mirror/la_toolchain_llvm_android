@@ -1515,6 +1515,104 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [BOLT,test] Make linker scripts less sensitive to lld's orphan placement (#93763)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ce5b371606422ed21cda0e24cdc89cb41cdc5600.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538210
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Improve orphan placement tests"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/270d95bfedc20c28f142ac63b4882dd06c869c90.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538214
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Add RW then text test"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/73e07e924470ebab76a634e41fadf425a859e0ea.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538216
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Make .interp/SHT_NOTE not special"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/747d670baef35f0615b32652e93c97a2ff8dba18.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538217
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] findOrphanPos: avoid redundant getRankProximity call. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4d4d6eb6e8b519fec7ca5b689762bb964a7ce186.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538364
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Simplify findOrphanPos. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0f3d646cefbe00b4a1037dc68e9d76e5470e805f.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538367
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Simplify findOrphanPos. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f85904868b282aa56c8bef90f169ca5ecd9957f8.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538369
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Clang][Sema] Tweak tryCaptureVariable for unevaluated lambdas (#93206)"
         },
         "platforms": [
@@ -1524,6 +1622,20 @@
         "version_range": {
             "from": 530567,
             "until": 538556
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ELF] Orphan placement: prefer the last similar section when its rank <= orphan's rank"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7b346357db30d531245104c1c0aa8940a1f41b9a.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 538620
         }
     },
     {
