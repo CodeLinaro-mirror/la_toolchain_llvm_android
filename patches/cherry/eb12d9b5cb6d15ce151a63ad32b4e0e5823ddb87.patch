@@ -1,0 +1,532 @@
+From eb12d9b5cb6d15ce151a63ad32b4e0e5823ddb87 Mon Sep 17 00:00:00 2001
+From: Louis Dionne <ldionne.2@gmail.com>
+Date: Tue, 25 Jun 2024 09:19:55 -0500
+Subject: [PATCH] [libc++] Remove the allocator<const T> extension (#96319)
+
+This effort has quite a history:
+- This was first attempted in 2022 via bed3240bf7d1, which broke
+std::shared_ptr<T const> and caused the change to be reverted in
+9138666f5464.
+- We then re-attempted landing the change in 276ca87382b8 after fixing
+std::shared_ptr, but reports were made that this broke code en masse
+within Google. This led to the patch being reverted again in
+a54d028895c9 with the goal to land this again with a migration path for
+vendors.
+
+This patch re-lands the removal while providing a migration path for
+vendors by providing the `_LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST` macro.
+This macro will be honored for the LLVM 19 release and will be removed
+after that, at which point allocator<const T> will be removed
+unconditionally.
+
+Fixes #73665
+---
+ libcxx/docs/ReleaseNotes/19.rst               |  9 ++++++
+ libcxx/include/__memory/allocator.h           | 28 ++++++++++---------
+ libcxx/include/__memory/shared_ptr.h          | 14 +++++-----
+ .../sequences/vector/const_T.compile.pass.cpp | 18 ------------
+ .../vector/const_value_type.pass.cpp          | 25 -----------------
+ .../diagnostics/memory.nodiscard.verify.cpp   | 12 --------
+ .../allocator_void.trivial.compile.pass.cpp   | 10 +------
+ .../memory/allocator_volatile.verify.cpp      |  6 ++--
+ .../default_initializable.compile.pass.cpp    |  6 ----
+ .../default.allocator/allocator.ctor.pass.cpp |  4 +--
+ .../default.allocator/allocator.dtor.pass.cpp |  6 ----
+ .../allocate.constexpr.size.verify.cpp        |  1 -
+ .../allocator.members/allocate.size.pass.cpp  |  1 -
+ ...cator_types.deprecated_in_cxx17.verify.cpp |  7 -----
+ ...cator_types.deprecated_in_cxx23.verify.cpp |  2 +-
+ .../allocator_types.pass.cpp                  |  3 --
+ ...llocator_types.removed_in_cxx20.verify.cpp |  2 +-
+ ...llocator_types.removed_in_cxx26.verify.cpp |  2 +-
+ .../construct_at.pass.cpp                     |  4 +--
+ 19 files changed, 42 insertions(+), 118 deletions(-)
+ delete mode 100644 libcxx/test/libcxx/containers/sequences/vector/const_T.compile.pass.cpp
+ delete mode 100644 libcxx/test/libcxx/containers/sequences/vector/const_value_type.pass.cpp
+
+diff --git a/libcxx/docs/ReleaseNotes/19.rst b/libcxx/docs/ReleaseNotes/19.rst
+index 71de10abb6ea..d30021b7eb23 100644
+--- a/libcxx/docs/ReleaseNotes/19.rst
++++ b/libcxx/docs/ReleaseNotes/19.rst
+@@ -121,6 +121,15 @@ Deprecations and Removals
+ - The ``_LIBCPP_DISABLE_ADDITIONAL_DIAGNOSTICS`` macro has been removed and is not honored anymore. Additional
+   warnings provided by libc++ as a matter of QoI will now be provided unconditionally.
+ 
++- libc++ no longer supports ``std::allocator<const T>`` and containers of ``const``-qualified element type, such
++  as ``std::vector<const T>`` and ``std::list<const T>``. This used to be supported as an undocumented extension.
++  If you were using ``std::vector<const T>``, replace it with ``std::vector<T>`` instead. The
++  ``_LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST`` macro can be defined to temporarily re-enable this extension as
++  folks transition their code. This macro will be honored for one released and ignored starting in LLVM 20.
++  To assist with the clean-up process, consider running your code through Clang Tidy, with
++  `std-allocator-const <https://clang.llvm.org/extra/clang-tidy/checks/portability/std-allocator-const.html>`
++  enabled.
++
+ 
+ Upcoming Deprecations and Removals
+ ----------------------------------
+diff --git a/libcxx/include/__memory/allocator.h b/libcxx/include/__memory/allocator.h
+index 215d3832f9ef..2d8624e771bc 100644
+--- a/libcxx/include/__memory/allocator.h
++++ b/libcxx/include/__memory/allocator.h
+@@ -14,6 +14,7 @@
+ #include <__memory/addressof.h>
+ #include <__memory/allocate_at_least.h>
+ #include <__memory/allocator_traits.h>
++#include <__type_traits/is_const.h>
+ #include <__type_traits/is_constant_evaluated.h>
+ #include <__type_traits/is_same.h>
+ #include <__type_traits/is_void.h>
+@@ -36,8 +37,6 @@ class allocator;
+ // Specializing allocator<void> is deprecated, but not using it.
+ template <>
+ class _LIBCPP_TEMPLATE_VIS allocator<void> {
+-#  if _LIBCPP_STD_VER <= 17
+-
+ public:
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef void* pointer;
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const void* const_pointer;
+@@ -47,13 +46,12 @@ public:
+   struct _LIBCPP_DEPRECATED_IN_CXX17 rebind {
+     typedef allocator<_Up> other;
+   };
+-#  endif
+ };
+ 
++// TODO(LLVM 20): Remove the escape hatch
++#  ifdef _LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
+ template <>
+ class _LIBCPP_TEMPLATE_VIS allocator<const void> {
+-#  if _LIBCPP_STD_VER <= 17
+-
+ public:
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const void* pointer;
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const void* const_pointer;
+@@ -63,9 +61,9 @@ public:
+   struct _LIBCPP_DEPRECATED_IN_CXX17 rebind {
+     typedef allocator<_Up> other;
+   };
+-#  endif
+ };
+-#endif
++#  endif // _LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
++#endif   // _LIBCPP_STD_VER <= 17
+ 
+ // This class provides a non-trivial default constructor to the class that derives from it
+ // if the condition is satisfied.
+@@ -94,6 +92,7 @@ struct __non_trivial_if<true, _Unique> {
+ 
+ template <class _Tp>
+ class _LIBCPP_TEMPLATE_VIS allocator : private __non_trivial_if<!is_void<_Tp>::value, allocator<_Tp> > {
++  static_assert(!is_const<_Tp>::value, "std::allocator does not support const types");
+   static_assert(!is_volatile<_Tp>::value, "std::allocator does not support volatile types");
+ 
+ public:
+@@ -170,6 +169,8 @@ public:
+ #endif
+ };
+ 
++// TODO(LLVM 20): Remove the escape hatch
++#ifdef _LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
+ template <class _Tp>
+ class _LIBCPP_TEMPLATE_VIS allocator<const _Tp>
+     : private __non_trivial_if<!is_void<_Tp>::value, allocator<const _Tp> > {
+@@ -180,9 +181,9 @@ public:
+   typedef ptrdiff_t difference_type;
+   typedef const _Tp value_type;
+   typedef true_type propagate_on_container_move_assignment;
+-#if _LIBCPP_STD_VER <= 23 || defined(_LIBCPP_ENABLE_CXX26_REMOVED_ALLOCATOR_MEMBERS)
++#  if _LIBCPP_STD_VER <= 23 || defined(_LIBCPP_ENABLE_CXX26_REMOVED_ALLOCATOR_MEMBERS)
+   _LIBCPP_DEPRECATED_IN_CXX23 typedef true_type is_always_equal;
+-#endif
++#  endif
+ 
+   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 allocator() _NOEXCEPT = default;
+ 
+@@ -199,11 +200,11 @@ public:
+     }
+   }
+ 
+-#if _LIBCPP_STD_VER >= 23
++#  if _LIBCPP_STD_VER >= 23
+   [[nodiscard]] _LIBCPP_HIDE_FROM_ABI constexpr allocation_result<const _Tp*> allocate_at_least(size_t __n) {
+     return {allocate(__n), __n};
+   }
+-#endif
++#  endif
+ 
+   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 void deallocate(const _Tp* __p, size_t __n) {
+     if (__libcpp_is_constant_evaluated()) {
+@@ -214,7 +215,7 @@ public:
+   }
+ 
+   // C++20 Removed members
+-#if _LIBCPP_STD_VER <= 17
++#  if _LIBCPP_STD_VER <= 17
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const _Tp* pointer;
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const _Tp* const_pointer;
+   _LIBCPP_DEPRECATED_IN_CXX17 typedef const _Tp& reference;
+@@ -243,8 +244,9 @@ public:
+   }
+ 
+   _LIBCPP_DEPRECATED_IN_CXX17 _LIBCPP_HIDE_FROM_ABI void destroy(pointer __p) { __p->~_Tp(); }
+-#endif
++#  endif
+ };
++#endif // _LIBCPP_ENABLE_REMOVED_ALLOCATOR_CONST
+ 
+ template <class _Tp, class _Up>
+ inline _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 bool
+diff --git a/libcxx/include/__memory/shared_ptr.h b/libcxx/include/__memory/shared_ptr.h
+index 358a851958db..2d00e3308c49 100644
+--- a/libcxx/include/__memory/shared_ptr.h
++++ b/libcxx/include/__memory/shared_ptr.h
+@@ -259,7 +259,7 @@ struct __shared_ptr_emplace : __shared_weak_count {
+             class _Allocator                                                                          = _Alloc,
+             __enable_if_t<!is_same<typename _Allocator::value_type, __for_overwrite_tag>::value, int> = 0>
+   _LIBCPP_HIDE_FROM_ABI explicit __shared_ptr_emplace(_Alloc __a, _Args&&... __args) : __storage_(std::move(__a)) {
+-    using _TpAlloc = typename __allocator_traits_rebind<_Alloc, _Tp>::type;
++    using _TpAlloc = typename __allocator_traits_rebind<_Alloc, __remove_cv_t<_Tp> >::type;
+     _TpAlloc __tmp(*__get_alloc());
+     allocator_traits<_TpAlloc>::construct(__tmp, __get_elem(), std::forward<_Args>(__args)...);
+   }
+@@ -278,7 +278,7 @@ private:
+   template <class _Allocator                                                                          = _Alloc,
+             __enable_if_t<!is_same<typename _Allocator::value_type, __for_overwrite_tag>::value, int> = 0>
+   _LIBCPP_HIDE_FROM_ABI void __on_zero_shared_impl() _NOEXCEPT {
+-    using _TpAlloc = typename __allocator_traits_rebind<_Allocator, _Tp>::type;
++    using _TpAlloc = typename __allocator_traits_rebind<_Allocator, __remove_cv_t<_Tp> >::type;
+     _TpAlloc __tmp(*__get_alloc());
+     allocator_traits<_TpAlloc>::destroy(__tmp, __get_elem());
+   }
+@@ -598,8 +598,8 @@ public:
+ #if _LIBCPP_STD_VER <= 14 || defined(_LIBCPP_ENABLE_CXX17_REMOVED_AUTO_PTR)
+   template <class _Yp, __enable_if_t<is_convertible<_Yp*, element_type*>::value, int> = 0>
+   _LIBCPP_HIDE_FROM_ABI shared_ptr(auto_ptr<_Yp>&& __r) : __ptr_(__r.get()) {
+-    typedef __shared_ptr_pointer<_Yp*, default_delete<_Yp>, allocator<_Yp> > _CntrlBlk;
+-    __cntrl_ = new _CntrlBlk(__r.get(), default_delete<_Yp>(), allocator<_Yp>());
++    typedef __shared_ptr_pointer<_Yp*, default_delete<_Yp>, allocator<__remove_cv_t<_Yp> > > _CntrlBlk;
++    __cntrl_ = new _CntrlBlk(__r.get(), default_delete<_Yp>(), allocator<__remove_cv_t<_Yp> >());
+     __enable_weak_this(__r.get(), __r.get());
+     __r.release();
+   }
+@@ -776,7 +776,7 @@ public:
+ private:
+   template <class _Yp, bool = is_function<_Yp>::value>
+   struct __shared_ptr_default_allocator {
+-    typedef allocator<_Yp> type;
++    typedef allocator<__remove_cv_t<_Yp> > type;
+   };
+ 
+   template <class _Yp>
+@@ -834,7 +834,7 @@ _LIBCPP_HIDE_FROM_ABI shared_ptr<_Tp> allocate_shared(const _Alloc& __a, _Args&&
+ 
+ template <class _Tp, class... _Args, __enable_if_t<!is_array<_Tp>::value, int> = 0>
+ _LIBCPP_HIDE_FROM_ABI shared_ptr<_Tp> make_shared(_Args&&... __args) {
+-  return std::allocate_shared<_Tp>(allocator<_Tp>(), std::forward<_Args>(__args)...);
++  return std::allocate_shared<_Tp>(allocator<__remove_cv_t<_Tp> >(), std::forward<_Args>(__args)...);
+ }
+ 
+ #if _LIBCPP_STD_VER >= 20
+@@ -848,7 +848,7 @@ _LIBCPP_HIDE_FROM_ABI shared_ptr<_Tp> allocate_shared_for_overwrite(const _Alloc
+ 
+ template <class _Tp, __enable_if_t<!is_array<_Tp>::value, int> = 0>
+ _LIBCPP_HIDE_FROM_ABI shared_ptr<_Tp> make_shared_for_overwrite() {
+-  return std::allocate_shared_for_overwrite<_Tp>(allocator<_Tp>());
++  return std::allocate_shared_for_overwrite<_Tp>(allocator<__remove_cv_t<_Tp>>());
+ }
+ 
+ #endif // _LIBCPP_STD_VER >= 20
+diff --git a/libcxx/test/libcxx/containers/sequences/vector/const_T.compile.pass.cpp b/libcxx/test/libcxx/containers/sequences/vector/const_T.compile.pass.cpp
+deleted file mode 100644
+index 62fff96ac5ab..000000000000
+--- a/libcxx/test/libcxx/containers/sequences/vector/const_T.compile.pass.cpp
++++ /dev/null
+@@ -1,18 +0,0 @@
+-//===----------------------------------------------------------------------===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-
+-// Make sure that `vector<const T>` works
+-
+-#include <vector>
+-
+-void test() {
+-  std::vector<const int> v;
+-  v.emplace_back(1);
+-  v.push_back(1);
+-  v.resize(3);
+-}
+diff --git a/libcxx/test/libcxx/containers/sequences/vector/const_value_type.pass.cpp b/libcxx/test/libcxx/containers/sequences/vector/const_value_type.pass.cpp
+deleted file mode 100644
+index 1ad505a76d3f..000000000000
+--- a/libcxx/test/libcxx/containers/sequences/vector/const_value_type.pass.cpp
++++ /dev/null
+@@ -1,25 +0,0 @@
+-//===----------------------------------------------------------------------===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-
+-// UNSUPPORTED: c++03
+-
+-// <vector>
+-
+-// vector<const int> v;  // an extension
+-
+-#include <vector>
+-#include <type_traits>
+-
+-#include "test_macros.h"
+-
+-int main(int, char**)
+-{
+-    std::vector<const int> v = {1, 2, 3};
+-
+-  return 0;
+-}
+diff --git a/libcxx/test/libcxx/diagnostics/memory.nodiscard.verify.cpp b/libcxx/test/libcxx/diagnostics/memory.nodiscard.verify.cpp
+index 210d269c9fa2..646569e3d573 100644
+--- a/libcxx/test/libcxx/diagnostics/memory.nodiscard.verify.cpp
++++ b/libcxx/test/libcxx/diagnostics/memory.nodiscard.verify.cpp
+@@ -39,15 +39,3 @@ void test_allocator() {
+   allocator.allocate_at_least(1); // expected-warning {{ignoring return value of function declared with 'nodiscard' attribute}}
+ #endif
+ }
+-
+-void test_const_allocator() {
+-  std::allocator<const int> allocator;
+-  allocator.allocate(1);          // expected-warning {{ignoring return value of function declared with 'nodiscard' attribute}}
+-
+-#if TEST_STD_VER <= 17
+-  allocator.allocate(1, nullptr); // expected-warning {{ignoring return value of function declared with 'nodiscard' attribute}}
+-#endif
+-#if TEST_STD_VER >= 23
+-  allocator.allocate_at_least(1); // expected-warning {{ignoring return value of function declared with 'nodiscard' attribute}}
+-#endif
+-}
+diff --git a/libcxx/test/libcxx/memory/allocator_void.trivial.compile.pass.cpp b/libcxx/test/libcxx/memory/allocator_void.trivial.compile.pass.cpp
+index f9d67c065de8..69a4b8943caa 100644
+--- a/libcxx/test/libcxx/memory/allocator_void.trivial.compile.pass.cpp
++++ b/libcxx/test/libcxx/memory/allocator_void.trivial.compile.pass.cpp
+@@ -17,18 +17,10 @@
+ #include <type_traits>
+ 
+ typedef std::allocator<void> A1;
+-typedef std::allocator<void const> A2;
+-struct A3 : std::allocator<void> { };
+-struct A4 : std::allocator<void const> { };
++struct A2 : std::allocator<void> { };
+ 
+ static_assert(std::is_trivially_default_constructible<A1>::value, "");
+ static_assert(std::is_trivial<A1>::value, "");
+ 
+ static_assert(std::is_trivially_default_constructible<A2>::value, "");
+ static_assert(std::is_trivial<A2>::value, "");
+-
+-static_assert(std::is_trivially_default_constructible<A3>::value, "");
+-static_assert(std::is_trivial<A3>::value, "");
+-
+-static_assert(std::is_trivially_default_constructible<A4>::value, "");
+-static_assert(std::is_trivial<A4>::value, "");
+diff --git a/libcxx/test/libcxx/memory/allocator_volatile.verify.cpp b/libcxx/test/libcxx/memory/allocator_volatile.verify.cpp
+index 6fa7fe1b1aed..53fdc08e7a02 100644
+--- a/libcxx/test/libcxx/memory/allocator_volatile.verify.cpp
++++ b/libcxx/test/libcxx/memory/allocator_volatile.verify.cpp
+@@ -6,9 +6,9 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
+-// http://wg21.link/LWG2447 gives implementors freedom to reject volatile types in `std::allocator`.
++// http://wg21.link/LWG2447 gives implementors freedom to reject const or volatile types in `std::allocator`.
+ 
+ #include <memory>
+ 
+-std::allocator<volatile int> A1; // expected-error@*:* {{std::allocator does not support volatile types}}
+-std::allocator<const volatile int> A2; // expected-error@*:* {{std::allocator does not support volatile types}}
++std::allocator<const int> A1; // expected-error@*:* {{std::allocator does not support const types}}
++std::allocator<volatile int> A2; // expected-error@*:* {{std::allocator does not support volatile types}}
+diff --git a/libcxx/test/std/concepts/concepts.lang/concept.default.init/default_initializable.compile.pass.cpp b/libcxx/test/std/concepts/concepts.lang/concept.default.init/default_initializable.compile.pass.cpp
+index ee1405f1f889..6a31fb90e4da 100644
+--- a/libcxx/test/std/concepts/concepts.lang/concept.default.init/default_initializable.compile.pass.cpp
++++ b/libcxx/test/std/concepts/concepts.lang/concept.default.init/default_initializable.compile.pass.cpp
+@@ -205,9 +205,6 @@ void test()
+     test_not_const<std::array<      volatile int, 1>>();
+     test_false    <std::array<const volatile int, 1>>();
+     test_true     <std::deque<               int>>();
+-#ifdef _LIBCPP_VERSION
+-    test_true     <std::deque<const          int>>();
+-#endif // _LIBCPP_VERSION
+     test_true     <std::forward_list<int>>();
+     test_true     <std::list<int>>();
+     test_true     <std::vector<int>>();
+@@ -226,9 +223,6 @@ void test()
+ 
+     // Container adaptors
+     test_true     <std::stack<               int>>();
+-#ifdef _LIBCPP_VERSION
+-    test_true     <std::stack<const          int>>();
+-#endif // _LIBCPP_VERSION
+     test_true     <std::queue<int>>();
+     test_true     <std::priority_queue<int>>();
+ 
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator.ctor.pass.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator.ctor.pass.cpp
+index 6e6ff1f2d134..a278bc41ef76 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator.ctor.pass.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator.ctor.pass.cpp
+@@ -37,12 +37,12 @@ TEST_CONSTEXPR_CXX20 bool test() {
+ 
+ int main(int, char**) {
+   test<char>();
+-  test<char const>();
++  test<int>();
+   test<void>();
+ 
+ #if TEST_STD_VER > 17
+   static_assert(test<char>());
+-  static_assert(test<char const>());
++  static_assert(test<int>());
+   static_assert(test<void>());
+ #endif
+   return 0;
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator.dtor.pass.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator.dtor.pass.cpp
+index a095ca102491..69c6595c9864 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator.dtor.pass.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator.dtor.pass.cpp
+@@ -26,15 +26,9 @@ int main(int, char**)
+ {
+     test<int>();
+     test<void>();
+-#ifdef _LIBCPP_VERSION // extension
+-    test<int const>();
+-#endif // _LIBCPP_VERSION
+ 
+     static_assert(test<int>());
+     static_assert(test<void>());
+-#ifdef _LIBCPP_VERSION // extension
+-    static_assert(test<int const>());
+-#endif // _LIBCPP_VERSION
+ 
+     return 0;
+ }
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.constexpr.size.verify.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.constexpr.size.verify.cpp
+index fbbb334fea0f..34a89e8be859 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.constexpr.size.verify.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.constexpr.size.verify.cpp
+@@ -34,5 +34,4 @@ constexpr bool test()
+ 
+ void f() {
+     static_assert(test<double>()); // expected-error {{static assertion expression is not an integral constant expression}}
+-    LIBCPP_STATIC_ASSERT(test<const double>()); // expected-error {{static assertion expression is not an integral constant expression}}
+ }
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.size.pass.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.size.pass.cpp
+index 1913a0e0dcc8..2b11bd7f48dd 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.size.pass.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator.members/allocate.size.pass.cpp
+@@ -45,7 +45,6 @@ void test()
+ int main(int, char**)
+ {
+     test<double>();
+-    LIBCPP_ONLY(test<const double>());
+ 
+   return 0;
+ }
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx17.verify.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx17.verify.cpp
+index 917492929ecc..96ae6427188c 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx17.verify.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx17.verify.cpp
+@@ -35,13 +35,6 @@ void f() {
+         typedef std::allocator<char>::const_reference ConstReference;   // expected-warning {{'const_reference' is deprecated}}
+         typedef std::allocator<char>::rebind<int>::other Rebind;        // expected-warning {{'rebind<int>' is deprecated}}
+     }
+-    {
+-        typedef std::allocator<char const>::pointer Pointer;                  // expected-warning {{'pointer' is deprecated}}
+-        typedef std::allocator<char const>::const_pointer ConstPointer;       // expected-warning {{'const_pointer' is deprecated}}
+-        typedef std::allocator<char const>::reference Reference;              // expected-warning {{'reference' is deprecated}}
+-        typedef std::allocator<char const>::const_reference ConstReference;   // expected-warning {{'const_reference' is deprecated}}
+-        typedef std::allocator<char const>::rebind<int>::other Rebind;        // expected-warning {{'rebind<int>' is deprecated}}
+-    }
+     {
+         typedef std::allocator<void>::pointer Pointer;                  // expected-warning {{'pointer' is deprecated}}
+         typedef std::allocator<void>::const_pointer ConstPointer;       // expected-warning {{'const_pointer' is deprecated}}
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx23.verify.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx23.verify.cpp
+index ad431f94732e..0a27cc712ed6 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx23.verify.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.deprecated_in_cxx23.verify.cpp
+@@ -25,7 +25,7 @@ void test() {
+     typedef std::allocator<char>::is_always_equal IAE; // expected-warning {{'is_always_equal' is deprecated}}
+   }
+   {
+-    typedef std::allocator<const char>::is_always_equal IAE; // expected-warning {{'is_always_equal' is deprecated}}
++    typedef std::allocator<int>::is_always_equal IAE; // expected-warning {{'is_always_equal' is deprecated}}
+   }
+   {
+     typedef std::allocator<void>::is_always_equal IAE; // expected-warning {{'is_always_equal' is deprecated}}
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.pass.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.pass.cpp
+index 7085a1d3fc60..581bdced36a0 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.pass.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.pass.cpp
+@@ -61,8 +61,5 @@ void test() {
+ 
+ int main(int, char**) {
+     test<char>();
+-#ifdef _LIBCPP_VERSION
+-    test<char const>(); // extension
+-#endif
+     return 0;
+ }
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx20.verify.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx20.verify.cpp
+index 2fb7a60c9a88..e8c48439b9f4 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx20.verify.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx20.verify.cpp
+@@ -39,6 +39,6 @@ void check()
+ 
+ void f() {
+     check<char>();
+-    check<char const>();
++    check<int>();
+     check<void>();
+ }
+diff --git a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx26.verify.cpp b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx26.verify.cpp
+index 72cc21402327..07332ec37bc3 100644
+--- a/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx26.verify.cpp
++++ b/libcxx/test/std/utilities/memory/default.allocator/allocator_types.removed_in_cxx26.verify.cpp
+@@ -29,6 +29,6 @@ void check() {
+ 
+ void test() {
+   check<char>();
+-  check<char const>();
++  check<int>();
+   check<void>();
+ }
+diff --git a/libcxx/test/std/utilities/memory/specialized.algorithms/specialized.construct/construct_at.pass.cpp b/libcxx/test/std/utilities/memory/specialized.algorithms/specialized.construct/construct_at.pass.cpp
+index 47d4bba51be6..334517861e7b 100644
+--- a/libcxx/test/std/utilities/memory/specialized.algorithms/specialized.construct/construct_at.pass.cpp
++++ b/libcxx/test/std/utilities/memory/specialized.algorithms/specialized.construct/construct_at.pass.cpp
+@@ -81,7 +81,7 @@ constexpr bool test()
+     }
+ 
+     {
+-        std::allocator<Counted const> a;
++        std::allocator<Counted> a;
+         Counted const* p = a.allocate(2);
+         int count = 0;
+         std::construct_at(p, count);
+@@ -92,7 +92,7 @@ constexpr bool test()
+         assert(count == 1);
+         p->~Counted();
+         assert(count == 0);
+-        a.deallocate(p, 2);
++        a.deallocate(const_cast<Counted*>(p), 2);
+     }
+ 
+     return true;
+-- 
+2.47.0.163.g1226f6d8fa-goog
+
