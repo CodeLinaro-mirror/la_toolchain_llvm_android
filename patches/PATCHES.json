@@ -1697,6 +1697,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Remove the allocator<const T> extension (#96319)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/eb12d9b5cb6d15ce151a63ad32b4e0e5823ddb87.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 540791
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] CodeGen, IR: Add target-{cpu,features} attributes to functions created via createWithDefaultAttr()."
         },
         "platforms": [
