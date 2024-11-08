@@ -18,6 +18,7 @@ from datetime import timedelta
 
 import atexit
 import os
+from llvm_android.build_info import ToolchainBuild
 
 class Timer:
     times = {}
@@ -29,7 +30,9 @@ class Timer:
 
     def __exit__(self, t, value, traceback):
         end = time()
-        type(self).times[self.descr] = end - self.start
+        build_time = end - self.start
+        type(self).times[self.descr] = build_time
+        ToolchainBuild.BuildTime.append({"step": self.descr, "time": round(build_time, 2)})
 
     @classmethod
     def report(cls):

@@ -31,7 +31,7 @@ import context
 
 from llvm_android.base_builders import Builder, LLVMBuilder
 from llvm_android.builder_registry import BuilderRegistry
-from llvm_android import (android_version, builders, configs, hosts, paths, source_manager, toolchain_errors, timer, toolchains, utils, win_sdk)
+from llvm_android import (android_version, builders, build_info, configs, hosts, paths, source_manager, toolchain_errors, timer, toolchains, utils, win_sdk)
 
 def logger():
     """Returns the module level logger."""
@@ -999,6 +999,7 @@ def main():
             logger().info(f'Keeping older build in {paths.OUT_DIR}: {out_dir_items}')
 
     timer.Timer.register_atexit(paths.DIST_DIR / 'build_times.txt')
+    build_info.ToolchainBuild.register_atexit(paths.DIST_DIR / 'build_info.json')
 
     if args.skip_build:
         # Skips all builds
