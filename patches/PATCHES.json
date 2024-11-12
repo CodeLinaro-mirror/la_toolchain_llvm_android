@@ -479,20 +479,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] [Fuzzer] Enable custom libc++ for Android (#70407)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/3747cde5e84f7415dbad8d56fb7443237656c820.patch",
-        "version_range": {
-            "from": 510928,
-            "until": 517489
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[UPSTREAM] Revert \"Reland [clang] Canonicalize system headers in dependency file when -canonical-prefixes\" (#71697)"
         },
         "platforms": [
@@ -927,20 +913,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] [libc++] Fix missing and incorrect push/pop macros (#79204)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/7b4622514d232ce5f7110dd8b20d90e81127c467.patch",
-        "version_range": {
-            "from": 510928,
-            "until": 525596
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[UPSTREAM] [ELF] Implement R_RISCV_TLSDESC for RISC-V"
         },
         "platforms": [
@@ -1179,20 +1151,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] Revert \"[libc++] Fix tests on musl (#85085)\""
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/0847c903c8a04a2bdf53d5f1b93be5705d998801.patch",
-        "version_range": {
-            "from": 530567,
-            "until": 530881
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[UPSTREAM] Revert \"[RISCV] Recursively split concat_vector into smaller LMULs (#83035)\""
         },
         "platforms": [
@@ -1272,20 +1230,6 @@
         "version_range": {
             "from": 530567,
             "until": 531573
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[UPSTREAM] [libc++] Don't push and pop extensions diagnostics when using clang modules (#85917)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/f886dfed3ae6cf70827cedc8d8aefde6250a239b.patch",
-        "version_range": {
-            "from": 530567,
-            "until": 531617
         }
     },
     {
@@ -2049,20 +1993,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[libc++][Android] enable-libcxx-testing-using-adb.patch"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "enable-libcxx-testing-using-adb.patch",
-        "version_range": {
-            "from": 475365,
-            "until": 516012
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[libc++abi] Optionally move __cxa_demangle into libc++demangle.a"
         },
         "platforms": [
@@ -2071,48 +2001,6 @@
         "rel_patch_path": "move-cxa-demangle-into-libcxxdemangle.patch",
         "version_range": {
             "from": 475365,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][Android] Avoid triggering fdsan in filebuf test"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "avoid-triggering-fdsan-in-filebuf-test.patch",
-        "version_range": {
-            "from": 475365,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][Android] Disable test_no_resolve_symlink_on_symlink on Android"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "disable-symlink-resolve-test-on-android.patch",
-        "version_range": {
-            "from": 498229,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][Android] fs tests: avoid fifo/socket/hardlink SELinux denials"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "avoid-fifo-socket-hardlink-in-libcxx-tests.patch",
-        "version_range": {
-            "from": 498229,
             "until": null
         }
     },
@@ -2156,34 +2044,6 @@
         "version_range": {
             "from": 510928,
             "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][Android] Hide locale Lit features for Bionic"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "hide-locale-lit-features-for-bionic-v2.patch",
-        "version_range": {
-            "from": 510928,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][Android] Bionic also includes + for NAN"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "bionic-includes-plus-sign-for-nan-v2.patch",
-        "version_range": {
-            "from": 510928,
-            "until": 530511
         }
     },
     {
