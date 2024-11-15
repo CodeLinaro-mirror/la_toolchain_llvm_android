@@ -1839,6 +1839,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] Extend clang's <limits.h> to define *LONG_LONG*_ macros for bionic (#115406)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7d20ea9d32954e8e5becab8495fa509a3f67b710.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 556169
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
