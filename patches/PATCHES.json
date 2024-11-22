@@ -2087,5 +2087,19 @@
             "from": 529470,
             "until": 550282
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [libc++] Implement std::gcd using the binary version (#77747)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-libc-Implement-std-gcd-using-the-binary-versi.patch",
+        "version_range": {
+            "from": 536225,
+            "until": null
+        }
     }
 ]
