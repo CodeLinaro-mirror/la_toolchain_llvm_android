@@ -1092,15 +1092,17 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
                        # TODO(b/266595187): Remove the following feature once it is
                        # enabled in LLVM by default.
                        '-mllvm', '-improved-fs-discriminator=true'))
-        result.append('-flto=thin')
-        if not self._is_hwasan:
+        if self._is_hwasan:
+            result.append('-fsanitize=hwaddress')
+        else:
+            # Build failure with thinlto+hwasan b/376526115
+            result.append('-flto=thin')
             # https://github.com/llvm/llvm-project/issues/105569
             # clang crashes with hwasan + -ffat-lto-objects
             result.append('-ffat-lto-objects')
+
         if self._config.target_arch is hosts.Arch.ARM:
             result.append('-mthumb')
-        if self._is_hwasan:
-            result.append('-fsanitize=hwaddress')
         return result
 
     @property
