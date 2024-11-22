@@ -344,6 +344,10 @@ class LinuxMuslConfig(LinuxConfig):
     def cflags(self) -> List[str]:
         cflags = super().cflags + [
                 f'--target={self.llvm_triple}',
+                # TODO: Try removing -D_LIBCPP_HAS_MUSL_LIBC now that the
+                # LIBCXX_HAS_MUSL_LIBC CMake var is set. We may have to wait
+                # until the bootstrap compiler's c++/v1/__config_site header is
+                # new enough to define _LIBCPP_HAS_MUSL_LIBC to 1.
                 '-D_LIBCPP_HAS_MUSL_LIBC',
                 '-D_LARGEFILE64_SOURCE=1',
                 # gcc does this automatically and glibc includes it in features.h
@@ -399,6 +403,7 @@ class LinuxMuslConfig(LinuxConfig):
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
         defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
+        defines['LIBCXX_HAS_MUSL_LIBC'] = 'TRUE'
         defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
         defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
         # clang generates call to builtin functions when building
