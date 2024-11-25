@@ -43,10 +43,10 @@ def set_default_toolchain(toolchain: toolchains.Toolchain) -> None:
     Builder.toolchain = toolchain
 
 
-def extract_pgo_profile(args: argparse.Namespace) -> Path:
-    if args.pgo:
-        if isinstance(args.pgo, Path):
-            pgo_profdata_path = args.pgo
+def extract_pgo_profile(pgo) -> Path:
+    if pgo:
+        if isinstance(pgo, Path):
+            pgo_profdata_path = pgo
         else:
             pgo_profdata_path = paths.pgo_profdata_path()
 
@@ -67,8 +67,8 @@ def extract_pgo_profile(args: argparse.Namespace) -> Path:
         return None
 
 
-def extract_bolt_profile(args: argparse.Namespace) -> Path:
-    if args.bolt:
+def extract_bolt_profile(bolt) -> Path:
+    if bolt:
         bolt_fdata_tar = paths.bolt_fdata_tar()
         if not bolt_fdata_tar:
             raise RuntimeError(f'{bolt_fdata_tar} does not exist')
@@ -775,6 +775,14 @@ def parse_args():
         default=False,
         help='Enable assertions (only affects stage2)')
 
+    parser.add_argument(
+    '--preset',
+    type=str,
+    choices=['release', 'fast', 'debug', 'bootstrap', 'musl'],
+    help=(
+        "Version of the builder. Choices are: ['release', 'fast', 'debug', 'bootstrap', 'musl']"
+    ),)
+
     lto_group = parser.add_mutually_exclusive_group()
     lto_group.add_argument(
         '--lto',
@@ -783,9 +791,8 @@ def parse_args():
         help='Enable LTO (only affects stage2).  This option increases build time.')
     lto_group.add_argument(
         '--no-lto',
-        action='store_false',
+        action='store_true',
         default=False,
-        dest='lto',
         help='Disable LTO to speed up build (only affects stage2)')
 
     bolt_group = parser.add_mutually_exclusive_group()
@@ -796,9 +803,8 @@ def parse_args():
         help='Enable BOLT optimization (only affects stage2).  This option increases build time.')
     bolt_group.add_argument(
         '--no-bolt',
-        action='store_false',
+        action='store_true',
         default=False,
-        dest='bolt',
         help='Disable BOLT optimization to speed up build (only affects stage2)')
     bolt_group.add_argument(
         '--bolt-instrument',
@@ -815,9 +821,8 @@ def parse_args():
         help='Enable PGO (only affects stage2)')
     pgo_group.add_argument(
         '--no-pgo',
-        action='store_false',
+        action='store_true',
         default=False,
-        dest='pgo',
         help='Disable PGO (only affects stage2)')
 
     parser.add_argument(
@@ -995,6 +1000,28 @@ def parse_args():
 
     return parser.parse_args()
 
+def preset(target, preset_name):
+    """Return a list of configuration of [PGO, LTO, MLGO, BOLT]"""
+    if target.startswith("linux"):
+        match preset_name.upper():
+            case "FAST" | "BOOTSTRAP":
+                return [False, False, True, False]
+            case "RELEASE":
+                return [True, True, True, True]
+            case "MUSL":
+                return [False, True, False, False]
+            case "DEBUG":
+                return [False, False, False, False]
+    elif target.startswith("darwin"):
+        if preset_name.upper() == "RELEASE":
+            return [True, True, False, False]
+    elif target.startswith("windows"):
+        match preset_name.upper():
+            case "RELEASE":
+              return [True, True, False, False]
+            case "FAST":
+              return [False, False, False, False]
+    raise ValueError(f"Unknown preset {preset_name} for {target}")
 
 def main():
     logging.basicConfig(level=logging.DEBUG)
@@ -1026,10 +1053,24 @@ def main():
     do_strip = not args.no_strip
     do_strip_host_package = do_strip and not args.debug and not (args.build_llvm_next)
     build_lldb = 'lldb' not in args.no_build
-    mlgo = args.mlgo
     musl = args.musl
 
     host_configs = [configs.host_config(musl)]
+
+    preset_pgo = False
+    preset_lto = False
+    preset_mlgo = False
+    preset_bolt = False
+    if args.preset:
+      preset_pgo, preset_lto, preset_mlgo, preset_bolt = preset(hosts.build_host().value, args.preset)
+
+    pgo = (args.pgo or preset_pgo) and not args.no_pgo
+    lto = (args.lto or preset_lto) and not args.no_lto
+    mlgo = args.mlgo or preset_mlgo
+    bolt = (args.bolt or preset_bolt) and not args.no_bolt
+
+    if bolt and (not (pgo and lto and mlgo)):
+        raise ValueError(f"Before enabling BOLT, you should enable PGO, LTO and MLGO first!")
 
     android_version.set_llvm_next(args.build_llvm_next)
 
@@ -1045,7 +1086,7 @@ def main():
 
     logger().info('do_build=%r do_stage1=%r do_stage2=%r do_runtimes=%r do_package=%r need_windows=%r lto=%r bolt=%r musl=%r' %
                   (not args.skip_build, BuilderRegistry.should_build('stage1'), BuilderRegistry.should_build('stage2'),
-                  do_runtimes, do_package, need_windows, args.lto, args.bolt, args.musl))
+                  do_runtimes, do_package, need_windows, lto, bolt, args.musl))
 
     if paths.get_tensorflow_path() is None:
         if mlgo:
@@ -1118,8 +1159,8 @@ def main():
     else:
         swig_builder = None
 
-    profdata = extract_pgo_profile(args)
-    clang_bolt_fdata = extract_bolt_profile(args)
+    profdata = extract_pgo_profile(pgo)
+    clang_bolt_fdata = extract_bolt_profile(bolt)
 
     if need_host:
         stage2 = builders.Stage2Builder(host_configs)
@@ -1127,10 +1168,10 @@ def main():
         stage2.svn_revision = android_version.get_svn_revision()
         stage2.debug_build = args.debug
         stage2.enable_assertions = args.enable_assertions
-        stage2.lto = args.lto
+        stage2.lto = lto
         stage2.build_instrumented = instrumented
         stage2.enable_mlgo = mlgo
-        stage2.bolt_optimize = args.bolt
+        stage2.bolt_optimize = bolt
         stage2.bolt_instrument = args.bolt_instrument
         stage2.profdata_file = profdata
         stage2.build_cross_runtimes = hosts.build_host().is_linux
@@ -1190,7 +1231,7 @@ def main():
             win_sdk.set_path(Path(args.windows_sdk))
         win_builder, win_lldb_bins = build_llvm_for_windows(
             enable_assertions=args.enable_assertions,
-            enable_lto=args.lto,
+            enable_lto=lto,
             profdata_file=profdata,
             build_name=args.build_name,
             build_lldb=build_lldb,
