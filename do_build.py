@@ -640,7 +640,17 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     if manifest:
         manifest_path = os.fspath(manifest[0])
         manifest_context = open(manifest_path).read()
-        get_scripts_sha = re.findall(r'name="toolchain/llvm_android" revision="(.*)" /',
+        # This regular expression is used to search through a repository
+        # manifest XML file for the revision number of the
+        # `toolchain/llvm_android` project.  In some manifests the `upstream`
+        # attribute is interposed between the `name` and `revision` attributes.
+        # This expression allows for this by using a non-capturing optional
+        # group to match the `upstream` attribute.
+        #
+        # Examples of matching strings:
+        #  * `<project path="toolchain/llvm_android" name="toolchain/llvm_android" revision="e48a6dd852478abaace98c0c94ea63a6ffe30410" />`
+        #  * `<project path="toolchain/llvm_android" name="toolchain/llvm_android" upstream="llvm-r536225-release" revision="e48a6dd852478abaace98c0c94ea63a6ffe30410" />`
+        get_scripts_sha = re.findall(r'name="toolchain/llvm_android" (?:upstream="[^"]+" )?revision="([^"]+)" /',
                                      manifest_context)[0]
     else:
         get_scripts_sha = 'refs/heads/main'
