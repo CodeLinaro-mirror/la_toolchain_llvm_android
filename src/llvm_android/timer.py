@@ -32,7 +32,7 @@ class Timer:
         end = time()
         build_time = end - self.start
         type(self).times[self.descr] = build_time
-        ToolchainBuild.BuildTime.append({"step": self.descr, "time": round(build_time, 2)})
+        ToolchainBuild.BuildTime.append({"step": self.descr, "time": str(round(build_time, 2)) + "s"})
 
     @classmethod
     def report(cls):
