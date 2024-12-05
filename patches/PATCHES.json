@@ -1909,6 +1909,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with --pack-dyn-relocs=android."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 558288
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
