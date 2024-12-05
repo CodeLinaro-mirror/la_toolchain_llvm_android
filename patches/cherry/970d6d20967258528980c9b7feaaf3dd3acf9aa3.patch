@@ -1,0 +1,146 @@
+From 574c444a11cea3e17f375a2310b1fff8f155d5c7 Mon Sep 17 00:00:00 2001
+From: Peter Collingbourne <pcc@google.com>
+Date: Thu, 5 Dec 2024 10:35:13 -0800
+Subject: [PATCH] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with
+ --pack-dyn-relocs=android.
+
+In #86751 we moved the IRELATIVE relocations to .rela.plt when
+--pack-dyn-relocs=android was enabled but we neglected to also move
+the __rela_iplt_{start,end} symbols. As a result, static binaries
+linked with this flag were unable to find their IRELATIVE relocations.
+Fix it by having the symbols surround the correct section.
+
+Reviewers: MaskRay, smithp35
+
+Reviewed By: MaskRay
+
+Pull Request: https://github.com/llvm/llvm-project/pull/118585
+---
+ lld/ELF/Relocations.cpp              | 20 ++++++++++++--------
+ lld/ELF/Relocations.h                |  3 +++
+ lld/ELF/Writer.cpp                   | 14 +++++++++-----
+ lld/test/ELF/pack-dyn-relocs-ifunc.s | 25 +++++++++++++++++++++++++
+ 4 files changed, 49 insertions(+), 13 deletions(-)
+
+diff --git a/lld/ELF/Relocations.cpp b/lld/ELF/Relocations.cpp
+index 7d73503a9651..b75868c760d2 100644
+--- a/lld/ELF/Relocations.cpp
++++ b/lld/ELF/Relocations.cpp
+@@ -1633,6 +1633,17 @@ template <class ELFT> void elf::scanRelocations() {
+   });
+ }
+ 
++RelocationBaseSection &elf::getIRelativeSection() {
++  // Prior to Android V, there was a bug that caused RELR relocations to be
++  // applied after packed relocations. This meant that resolvers referenced by
++  // IRELATIVE relocations in the packed relocation section would read
++  // unrelocated globals with RELR relocations when
++  // --pack-relative-relocs=android+relr is enabled. Work around this by placing
++  // IRELATIVE in .rela.plt.
++  return config->androidPackDynRelocs ? *in.relaPlt
++                                      : *mainPart->relaDyn;
++}
++
+ static bool handleNonPreemptibleIfunc(Symbol &sym, uint16_t flags) {
+   // Handle a reference to a non-preemptible ifunc. These are special in a
+   // few ways:
+@@ -1682,16 +1693,9 @@ static bool handleNonPreemptibleIfunc(Symbol &sym, uint16_t flags) {
+   // original section/value pairs. For non-GOT non-PLT relocation case below, we
+   // may alter section/value, so create a copy of the symbol to make
+   // section/value fixed.
+-  //
+-  // Prior to Android V, there was a bug that caused RELR relocations to be
+-  // applied after packed relocations. This meant that resolvers referenced by
+-  // IRELATIVE relocations in the packed relocation section would read
+-  // unrelocated globals with RELR relocations when
+-  // --pack-relative-relocs=android+relr is enabled. Work around this by placing
+-  // IRELATIVE in .rela.plt.
+   auto *directSym = makeDefined(cast<Defined>(sym));
+   directSym->allocateAux();
+-  auto &dyn = config->androidPackDynRelocs ? *in.relaPlt : *mainPart->relaDyn;
++  auto &dyn = getIRelativeSection();
+   addPltEntry(*in.iplt, *in.igotPlt, dyn, target->iRelativeRel, *directSym);
+   sym.allocateAux();
+   symAux.back().pltIdx = symAux[directSym->auxIdx].pltIdx;
+diff --git a/lld/ELF/Relocations.h b/lld/ELF/Relocations.h
+index b7b9c09e1b89..c3cd5d803008 100644
+--- a/lld/ELF/Relocations.h
++++ b/lld/ELF/Relocations.h
+@@ -19,6 +19,7 @@ class Symbol;
+ class InputSection;
+ class InputSectionBase;
+ class OutputSection;
++class RelocationBaseSection;
+ class SectionBase;
+ 
+ // Represents a relocation type, such as R_X86_64_PC32 or R_ARM_THM_CALL.
+@@ -227,6 +228,8 @@ ArrayRef<RelTy> sortRels(ArrayRef<RelTy> rels, SmallVector<RelTy, 0> &storage) {
+   return rels;
+ }
+ 
++RelocationBaseSection &getIRelativeSection();
++
+ // Returns true if Expr refers a GOT entry. Note that this function returns
+ // false for TLS variables even though they need GOT, because TLS variables uses
+ // GOT differently than the regular variables.
+diff --git a/lld/ELF/Writer.cpp b/lld/ELF/Writer.cpp
+index 71d82dd29263..20b1e219aa94 100644
+--- a/lld/ELF/Writer.cpp
++++ b/lld/ELF/Writer.cpp
+@@ -808,11 +808,15 @@ template <class ELFT> void Writer<ELFT>::setReservedSymbolSections() {
+     ElfSym::globalOffsetTable->section = sec;
+   }
+ 
+-  // .rela_iplt_{start,end} mark the start and the end of .rel[a].dyn.
+-  if (ElfSym::relaIpltStart && mainPart->relaDyn->isNeeded()) {
+-    ElfSym::relaIpltStart->section = mainPart->relaDyn.get();
+-    ElfSym::relaIpltEnd->section = mainPart->relaDyn.get();
+-    ElfSym::relaIpltEnd->value = mainPart->relaDyn->getSize();
++  // .rela_iplt_{start,end} mark the start and the end of the section containing
++  // IRELATIVE relocations.
++  if (ElfSym::relaIpltStart) {
++    auto &dyn = getIRelativeSection();
++    if (dyn.isNeeded()) {
++      ElfSym::relaIpltStart->section = &dyn;
++      ElfSym::relaIpltEnd->section = &dyn;
++      ElfSym::relaIpltEnd->value = dyn.getSize();
++    }
+   }
+ 
+   PhdrEntry *last = nullptr;
+diff --git a/lld/test/ELF/pack-dyn-relocs-ifunc.s b/lld/test/ELF/pack-dyn-relocs-ifunc.s
+index 6168d06f99d9..b6000df3d616 100644
+--- a/lld/test/ELF/pack-dyn-relocs-ifunc.s
++++ b/lld/test/ELF/pack-dyn-relocs-ifunc.s
+@@ -47,3 +47,28 @@ _start:
+ .globl bar
+ bar:
+   ret
++
++#--- c.s
++
++# RUN: llvm-mc -filetype=obj -triple=aarch64-linux-android c.s -o c.o
++# RUN: ld.lld --pack-dyn-relocs=android c.o -o c
++# RUN: llvm-readelf -sS c | FileCheck --check-prefix=STATIC %s
++
++# STATIC: .rela.plt         RELA            0000000000200158 000158 000018 18  AI  0   5  8
++# STATIC: 0000000000200158     0 NOTYPE  LOCAL  HIDDEN      1 __rela_iplt_start
++# STATIC: 0000000000200170     0 NOTYPE  LOCAL  HIDDEN      1 __rela_iplt_end
++
++.text
++.type foo, %gnu_indirect_function
++.globl foo
++foo:
++  ret
++
++.globl _start
++_start:
++  bl foo
++
++.data
++.balign 8
++.quad __rela_iplt_start
++.quad __rela_iplt_end
+-- 
+2.47.0.338.g60cca15819-goog
+
