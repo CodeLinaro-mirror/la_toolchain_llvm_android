@@ -1739,6 +1739,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++abi] Avoid using deprecated throw specifications in >= C++11 (#109296)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "original_sha": "0a00d32c5f88fce89006dcde6e235bc77d7b495e",
             "title": "[lldb] Add armv7a and armv8a ArchSpecs (#106433)"
         },
@@ -1816,9 +1830,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8.patch",
+        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8-v2.patch",
         "version_range": {
-            "from": 522817,
+            "from": 547379,
             "until": 551432
         }
     },
