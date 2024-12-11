@@ -1903,6 +1903,20 @@
         "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3.patch",
         "version_range": {
             "from": 536225,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with --pack-dyn-relocs=android."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3-v2.patch",
+        "version_range": {
+            "from": 547379,
             "until": 558288
         }
     },
