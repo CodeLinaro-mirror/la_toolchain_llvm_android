@@ -1725,6 +1725,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9a2fd97d391caf1060e303f636d7113501788d2f-v1.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++abi] Avoid using deprecated throw specifications in >= C++11 (#109296)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8.patch",
+        "version_range": {
+            "from": 522817,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Reapply \"[clang][CodeGen] Zero init unspecified fields in initializers in C\" (#109898) (#110051)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/627746581b8fde4143533937130f420bbbdf9ddf.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "original_sha": "0a00d32c5f88fce89006dcde6e235bc77d7b495e",
             "title": "[lldb] Add armv7a and armv8a ArchSpecs (#106433)"
         },
@@ -1746,9 +1788,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/9a2fd97d391caf1060e303f636d7113501788d2f-v1.patch",
+        "rel_patch_path": "cherry/9a2fd97d391caf1060e303f636d7113501788d2f-v2.patch",
         "version_range": {
-            "from": 536225,
+            "from": 547379,
             "until": 548556
         }
     },
@@ -1802,9 +1844,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8.patch",
+        "rel_patch_path": "cherry/7e542a2536017b1ea0ba157f74b8b8ff07c191f8-v2.patch",
         "version_range": {
-            "from": 522817,
+            "from": 547379,
             "until": 551432
         }
     },
@@ -1816,9 +1858,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/627746581b8fde4143533937130f420bbbdf9ddf.patch",
+        "rel_patch_path": "cherry/627746581b8fde4143533937130f420bbbdf9ddf-v2.patch",
         "version_range": {
-            "from": 536225,
+            "from": 547379,
             "until": 552949
         }
     },
@@ -1861,6 +1903,20 @@
         "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3.patch",
         "version_range": {
             "from": 536225,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with --pack-dyn-relocs=android."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3-v2.patch",
+        "version_range": {
+            "from": 547379,
             "until": 558288
         }
     },
@@ -2156,6 +2212,20 @@
         "version_range": {
             "from": 529470,
             "until": 550282
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[libc++][locale] Update grouping tests"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "119463.patch",
+        "version_range": {
+            "from": 547379,
+            "until": null
         }
     }
 ]
