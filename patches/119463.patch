@@ -1,0 +1,120 @@
+From 092a73b9ae5b9014ba017ac573295770febfbcaa Mon Sep 17 00:00:00 2001
+From: Vitaly Buka <vitalybuka@google.com>
+Date: Tue, 10 Dec 2024 14:10:56 -0800
+Subject: [PATCH] =?UTF-8?q?[=F0=9D=98=80=F0=9D=97=BD=F0=9D=97=BF]=20initia?=
+ =?UTF-8?q?l=20version?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Created using spr 1.3.4
+Pull Request: https://patch-diff.githubusercontent.com/raw/llvm/llvm-project/pull/119463.patch
+---
+ .../grouping.pass.cpp                         | 27 +++++++------------
+ .../locale.numpunct.byname/grouping.pass.cpp  | 12 ++-------
+ 2 files changed, 11 insertions(+), 28 deletions(-)
+
+diff --git a/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp b/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
+index ca5b6736f32726..6f23d444f2fe9d 100644
+--- a/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
++++ b/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
+@@ -24,6 +24,7 @@
+ 
+ // string grouping() const;
+ 
++#include <iostream>
+ #include <locale>
+ #include <limits>
+ #include <cassert>
+@@ -89,27 +90,22 @@ int main(int, char**)
+     }
+ #endif
+ 
+-#if defined( _WIN32) || defined(_AIX)
+-    std::string us_grouping = "\3";
+-#else
+-    std::string us_grouping = "\3\3";
+-#endif
+     {
+         Fnf f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fnt f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+     {
+         Fwf f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fwt f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #endif
+ 
+@@ -132,27 +128,22 @@ int main(int, char**)
+     }
+ #endif
+ 
+-#if defined( _WIN32) || defined(_AIX)
+-    std::string ru_grouping = "\3";
+-#else
+-    std::string ru_grouping = "\3\3";
+-#endif
+     {
+         Fnf f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fnt f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+     {
+         Fwf f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fwt f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #endif
+ 
+diff --git a/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp b/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
+index 86c447d400aaae..1e68bb3967f0f3 100644
+--- a/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
++++ b/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
+@@ -48,21 +48,13 @@ int main(int, char**)
+         {
+             typedef char C;
+             const std::numpunct<C>& np = std::use_facet<std::numpunct<C> >(l);
+-#if defined(_WIN32) || defined(_AIX)
+-            assert(np.grouping() == "\3");
+-#else
+-            assert(np.grouping() == "\3\3");
+-#endif
++            assert(np.grouping() == "\3" || np.grouping() == "\3\3");
+         }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+         {
+             typedef wchar_t C;
+             const std::numpunct<C>& np = std::use_facet<std::numpunct<C> >(l);
+-#  if defined(_WIN32) || defined(_AIX)
+-            assert(np.grouping() == "\3");
+-#  else
+-            assert(np.grouping() == "\3\3");
+-#  endif
++            assert(np.grouping() == "\3" || np.grouping() == "\3\3");
+         }
+ #endif
+     }
