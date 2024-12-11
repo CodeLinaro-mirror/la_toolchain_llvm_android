@@ -2029,6 +2029,20 @@
         "rel_patch_path": "Support-for-WASM-as-native-IR-v3.patch",
         "version_range": {
             "from": 556313,
+            "until": 558896
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Support WASM as native IR"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Support-for-WASM-as-native-IR-v4.patch",
+        "version_range": {
+            "from": 558896,
             "until": null
         }
     },
