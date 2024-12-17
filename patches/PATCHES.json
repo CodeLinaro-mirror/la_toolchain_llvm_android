@@ -1767,6 +1767,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with --pack-dyn-relocs=android."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 547379
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "original_sha": "0a00d32c5f88fce89006dcde6e235bc77d7b495e",
             "title": "[lldb] Add armv7a and armv8a ArchSpecs (#106433)"
         },
@@ -1900,20 +1914,6 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3.patch",
-        "version_range": {
-            "from": 536225,
-            "until": 547379
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[UPSTREAM] ELF: Have __rela_iplt_{start,end} surround .rela.iplt with --pack-dyn-relocs=android."
-        },
-        "platforms": [
-            "android"
-        ],
         "rel_patch_path": "cherry/970d6d20967258528980c9b7feaaf3dd3acf9aa3-v2.patch",
         "version_range": {
             "from": 547379,
@@ -1932,6 +1932,20 @@
         "version_range": {
             "from": 536225,
             "until": 558443
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Update locale grouping tests (#119463)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/31272e4f83f24fee1bf37ebc8ea7dd4d082edea8.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 559526
         }
     },
     {
@@ -2212,20 +2226,6 @@
         "version_range": {
             "from": 529470,
             "until": 550282
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "[libc++][locale] Update grouping tests"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "119463.patch",
-        "version_range": {
-            "from": 547379,
-            "until": null
         }
     }
 ]
