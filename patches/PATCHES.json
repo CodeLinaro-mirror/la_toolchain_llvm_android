@@ -1753,6 +1753,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Fix a regression with alignas on structure members in C (#98642)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bf02f41726a48e5eb1dbe7c188f9e36ec6a29ac2.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 543383
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [compiler-rt] [HWASan] leave BufferedStackTrace uninit (#102247)"
         },
         "platforms": [
