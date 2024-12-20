@@ -26,7 +26,7 @@ In practice, there have been an average of 3-4 updates a year (rougly new clang 
 
 ### Android Clang Development
 
-Android clang development happens in the `llvm-toolchain` repo branch in AOSP.  See [here](https://android.googlesource.com/toolchain/llvm_android/+/main/Build.md) for build instructions.
+Android clang development happens in the `llvm-toolchain` repo branch in AOSP.  See [here](https://android.googlesource.com/toolchain/llvm_android/+/main/BUILD.md) for build instructions.
 
 [aosp-llvm-toolchain](https://ci.android.com/builds/branches/aosp-llvm-toolchain/grid) is the public CI build of Android clang toolchain.
 
