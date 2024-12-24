@@ -2063,62 +2063,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Support WASM as native IR"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Support-for-WASM-as-native-IR.patch",
-        "version_range": {
-            "from": 510928,
-            "until": 547740
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Support WASM as native IR"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Support-for-WASM-as-native-IR-v2.patch",
-        "version_range": {
-            "from": 547740,
-            "until": 556313
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Support WASM as native IR"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Support-for-WASM-as-native-IR-v3.patch",
-        "version_range": {
-            "from": 556313,
-            "until": 558896
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Support WASM as native IR"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Support-for-WASM-as-native-IR-v4.patch",
-        "version_range": {
-            "from": 558896,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[compiler-rt] Allow finding LLVMConfig if CMAKE_FIND_ROOT_PATH_MODE_PACKAGE is set to ONLY"
         },
         "platforms": [
