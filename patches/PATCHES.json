@@ -2119,6 +2119,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "Do not build libcxx benchmarks by default"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Do-not-build-libcxx-benchmarks-by-default.patch",
+        "version_range": {
+            "from": 555370,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Remove inline_asm tests for now"
         },
         "platforms": [
