@@ -74,6 +74,12 @@ class ArgParser(argparse.ArgumentParser):
             help='Skip the cleanup, and leave intermediate files')
 
         self.add_argument(
+            '--skip-kleaf-update',
+            action='store_true',
+            default=False,
+            help='Skip updating kleaf/versions.bzl (useful during respins for the NDK)')
+
+        self.add_argument(
             '--skip-update-profiles',
             '-sp',
             action='store_true',
@@ -196,7 +202,7 @@ def format_bug(bug):
 
 
 def update_clang(host, build_number, use_current_branch, download_dir, bug,
-                 manifest, overwrite, do_validity_check, is_testing):
+                 manifest, overwrite, do_validity_check, is_testing, do_kleaf_update):
     prebuilt_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / host
     os.chdir(prebuilt_dir)
 
@@ -252,15 +258,16 @@ def update_clang(host, build_number, use_current_branch, download_dir, bug,
             for name in ('libc++.a', 'libc++abi.a'):
                 shutil.move(src_dir / name, dest_dir / name)
 
-        with open(paths.KLEAF_VERSIONS_BZL) as f:
-            kleaf_versions_lines = f.read().splitlines()
-        new_version_line = '    "{}",'.format(svn_revision)
-        list_end_idx = kleaf_versions_lines.index("]")
-        if new_version_line not in kleaf_versions_lines:
-            kleaf_versions_lines.insert(list_end_idx, new_version_line)
-        with open(paths.KLEAF_VERSIONS_BZL, "w") as f:
-            f.write("\n".join(kleaf_versions_lines))
-        utils.check_call(['git', 'add', paths.KLEAF_VERSIONS_BZL])
+        if do_kleaf_update:
+            with open(paths.KLEAF_VERSIONS_BZL) as f:
+                kleaf_versions_lines = f.read().splitlines()
+            new_version_line = '    "{}",'.format(svn_revision)
+            list_end_idx = kleaf_versions_lines.index("]")
+            if new_version_line not in kleaf_versions_lines:
+                kleaf_versions_lines.insert(list_end_idx, new_version_line)
+            with open(paths.KLEAF_VERSIONS_BZL, "w") as f:
+                f.write("\n".join(kleaf_versions_lines))
+            utils.check_call(['git', 'add', paths.KLEAF_VERSIONS_BZL])
 
     # Some platform tests (e.g. system/bt/profile/sdp) build directly with
     # coverage instrumentation and rely on the driver to pick the correct
@@ -380,6 +387,7 @@ def main():
 
     logger().info('Using branch: %s', branch)
     is_testing = (branch == 'aosp-llvm-toolchain-testing')
+    do_kleaf_update = not args.skip_kleaf_update
 
     try:
         if do_fetch:
@@ -398,7 +406,7 @@ def main():
         for host in hosts:
             update_clang(host, args.build, args.use_current_branch,
                          download_dir, args.bug, manifest, args.overwrite,
-                         not args.no_validity_check, is_testing)
+                         not args.no_validity_check, is_testing, do_kleaf_update)
 
         if not args.skip_update_profiles and 'linux-x86' in hosts:
             update_profiles(download_dir, args.build, args.bug)
