@@ -854,6 +854,10 @@ class LLVMBuilder(LLVMBaseBuilder):
                 cxxflags_str = ' '.join(cxxflags)
                 ldflags_str = ' '.join(ldflags)
 
+                # Do not build benchmarks (only need the RUNTIMES_* version of this
+                # flag).  See b/386218327 - configure step of google-benchmark is broken.
+                defines[f'RUNTIMES_{triple}_LIBCXX_INCLUDE_BENCHMARKS'] = 'OFF'
+
                 for base in ('BUILTINS', 'RUNTIMES'):
                     if _config.sysroot:
                         defines[f'{base}_{triple}_CMAKE_SYSROOT'] = _config.sysroot
