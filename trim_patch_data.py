@@ -16,13 +16,11 @@
 #
 
 import os
-from pathlib import Path
-import string
-import subprocess
 import sys
 
 import context
-from llvm_android import android_version, hosts, paths, utils, source_manager
+from llvm_android import android_version, paths, utils
+from llvm_android.patch_utils import PatchItem, PatchList
 
 _LLVM_ANDROID_PATH = paths.SCRIPTS_DIR
 _PATCH_DIR = _LLVM_ANDROID_PATH / 'patches'
@@ -31,41 +29,18 @@ _PATCH_JSON = _PATCH_DIR / 'PATCHES.json'
 _SVN_REVISION = (android_version.get_svn_revision_number())
 
 
-def get_removed_patches(output):
-    """
-    Parse the list of removed patches from patch_manager.py's output.
-
-    The output is of the form:
-    Removed <n> old patches:
-    - <patch_path1>: <patch_title1>
-    - <patch_path2>: <patch_title2>
-    ...
-    """
-
-    def _get_file_from_line(line):
-        # each line is '- <patch_path>: patch_title\n'
-        line = line[2:]
-        return line[:line.find(':')]
-
-    marker = ' old patches:\n'
-    marker_start = output.find(marker)
-    if marker_start == -1:
-        return None
-    removed = output[marker_start + len(marker):].splitlines()
-    rmfiles = [_PATCH_DIR / _get_file_from_line(p) for p in removed if p]
-    for rmfile in rmfiles:
-        if not rmfile.exists():
-            raise RuntimeError(f'Removed file {rmfile} doesn\'t exist')
-    return rmfiles
-
-
 def trim_patches_json():
-    """Invoke patch_manager.py with failure_mode=remove_patches."""
-    source_dir = paths.TOOLCHAIN_LLVM_PATH
-    output = source_manager.apply_patches(source_dir, _SVN_REVISION,
-                                          _PATCH_JSON, _PATCH_DIR,
-                                          'remove_patches')
-    return get_removed_patches(output)
+    """Remove old patches and return list of removed patch files."""
+    patch_list = PatchList.load_from_file()
+    retain = list()
+    trimmed_files = list()
+    for patch in patch_list:
+        if patch.end_version is None or patch.end_version >= int(_SVN_REVISION):
+            retain.append(patch)
+        else:
+            trimmed_files.append(_PATCH_DIR / patch.rel_patch_path)
+    PatchList(retain).save_to_file()
+    return trimmed_files
 
 
 def main():
