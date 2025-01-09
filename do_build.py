@@ -45,12 +45,14 @@ def set_default_toolchain(toolchain: toolchains.Toolchain) -> None:
 
 def extract_pgo_profile(args: argparse.Namespace) -> Path:
     if args.pgo:
-        if isinstance(args.pgo, Path):
-            pgo_profdata_path = args.pgo
+        if isinstance(args.pgo, str):
+            pgo_profdata_path = Path(args.pgo)
         else:
             pgo_profdata_path = paths.pgo_profdata_path()
 
-        if not pgo_profdata_path or not pgo_profdata_path.exists():
+        if pgo_profdata_path is None:
+            raise RuntimeError('Failed to construct PGO profdata path')
+        elif not pgo_profdata_path.exists():
             raise RuntimeError(f'{pgo_profdata_path} does not exist')
 
         if pgo_profdata_path.suffix == ".profdata":
