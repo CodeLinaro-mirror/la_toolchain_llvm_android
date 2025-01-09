@@ -74,6 +74,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [compiler-rt][AArch64][Android] Use getauxval on Android. (#102979)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/cd634f57c10dedbe4f908889dece2c4460b702c9.patch",
+        "version_range": {
+            "from": 530567,
+            "until": 548051
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
         },
         "platforms": [
