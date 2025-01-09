@@ -442,7 +442,6 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         'llvm-ifs' + ext,
         'llvm-lib' + ext,
         'llvm-link' + ext,
-        'llvm-lipo' + ext,
         'llvm-modextract' + ext,
         'llvm-ml' + ext,
         'llvm-nm' + ext,
@@ -472,6 +471,11 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
             'lldb-argdumper' + ext,
             'lldb' + ext,
             'lldb' + script_ext,
+        })
+
+    if host.is_darwin:
+        necessary_bin_files.update({
+            'llvm-lipo' + ext,
         })
 
     if host.is_windows:
