@@ -482,7 +482,10 @@ def parse_error_log() -> Set[str]:
         with open(paths.OUT_DIR / 'error.log', 'r') as f:
             errors = set()
             in_failure_context = False
-            for line in f:
+            lines = f.readlines()
+            if len(lines) == 0:
+                return {'Empty error.log file'}
+            for line in lines:
                 if 'FAILED:' in line:
                     if in_failure_context:
                         errors.add('Unknown error, check full logs for failure')
@@ -501,7 +504,7 @@ def parse_error_log() -> Set[str]:
                     in_failure_context = False
             return errors
     except:
-        return {}
+        return set()
 
 
 if __name__ == '__main__':
