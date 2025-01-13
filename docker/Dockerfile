@@ -1,9 +1,11 @@
 FROM ubuntu:22.04
 RUN apt-get update \
 && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install --no-install-recommends -y \
-  build-essential \
+  # Required to build LLVM and AOSP.
   git \
   libssl-dev \
+  make \
+  patch \
   pkg-config \
   python3 \
   python3-pip \
@@ -12,7 +14,7 @@ RUN apt-get update \
   ssh \
   unzip \
   zip \
-  # Required by android-build buildbot
+  # Required by android-build buildbot.
   tzdata \
   # Necessary to test 32-bit runtimes.
   gcc-multilib \
