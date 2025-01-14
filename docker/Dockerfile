@@ -13,6 +13,7 @@ RUN apt-get update \
   rsync \
   ssh \
   unzip \
+  xz-utils \
   zip \
   # Required by android-build buildbot.
   tzdata \
