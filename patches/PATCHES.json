@@ -242,6 +242,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Driver] Error when using msan on Android (#122540)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fdfe7e7fabc85ed7293ca6f5f234d41812644584.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 561470
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
