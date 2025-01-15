@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import json
 
 from llvm_android import paths
+import logging
+import re
 
 
 @dataclass
