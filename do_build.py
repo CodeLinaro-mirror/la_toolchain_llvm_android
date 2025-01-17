@@ -657,7 +657,9 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         #  * `<project path="toolchain/llvm_android" name="toolchain/llvm_android" revision="e48a6dd852478abaace98c0c94ea63a6ffe30410" />`
         #  * `<project path="toolchain/llvm_android" name="toolchain/llvm_android" upstream="llvm-r536225-release" revision="e48a6dd852478abaace98c0c94ea63a6ffe30410" />`
         #  * `<project path="toolchain/llvm_android" name="toolchain/llvm_android" revision="f478bb92556b32f16441f7e9d80465bc19d0bd2e" upstream="llvm-r536225-release" />`
-        get_scripts_sha = re.findall(r'name="toolchain/llvm_android" (?:upstream="[^"]+" )?revision="([^"]+)"',
+        #  * `<project name="toolchain/llvm_android" path="toolchain/llvm_android" revision="f478bb92556b32f16441f7e9d80465bc19d0bd2e" upstream="llvm-r536225-release" />`
+        #  * `<project name="toolchain/llvm_android" path="toolchain/llvm_android" upstream="llvm-r536225-release" revision="f478bb92556b32f16441f7e9d80465bc19d0bd2e" />`
+        get_scripts_sha = re.findall(r'name="toolchain/llvm_android" (?:path="[^"]+" )?(?:upstream="[^"]+" )?revision="([^"]+)"',
                                      manifest_context)[0]
     else:
         get_scripts_sha = 'refs/heads/main'
