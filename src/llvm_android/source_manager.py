@@ -91,7 +91,7 @@ class PatchInfo:
             '{{scripts_sha}}'
         assert patch_file.is_file(), f"patch file doesn't exist: {patch_file}"
         patch_name = patch_file.name
-        if re.match('([0-9a-f]+)(_v[0-9]+)?\.patch$', patch_name):
+        if re.match('([0-9a-f]+)(-v[0-9]+)?\.patch$', patch_name):
             url_suffix = '/patches/cherry/' + patch_name
             link_text = PatchInfo.get_subject(patch_file)
         else:
