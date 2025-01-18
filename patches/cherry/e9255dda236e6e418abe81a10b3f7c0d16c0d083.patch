@@ -1,0 +1,60 @@
+From e9255dda236e6e418abe81a10b3f7c0d16c0d083 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Wed, 15 Jan 2025 16:23:23 -0500
+Subject: [PATCH] [Driver][ARM] Change Android's NEON FPU hardcoding to "== 7"
+ as it pessimizes future ArmV8 code (#122969)
+
+Android hardcoded NEON FPU for ARM version ">=" 7. This hardcoding was
+pessimizing ARMv8 code as it was locking it to NEON FPU instead of
+something more powerful.
+---
+ clang/lib/Driver/ToolChains/Arch/ARM.cpp |  2 +-
+ clang/test/Driver/arm-mfpu.c             | 19 +++++++++++++++++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Arch/ARM.cpp b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+index b8181ce6dc01..2fb16d2e4132 100644
+--- a/clang/lib/Driver/ToolChains/Arch/ARM.cpp
++++ b/clang/lib/Driver/ToolChains/Arch/ARM.cpp
+@@ -647,7 +647,7 @@ llvm::ARM::FPUKind arm::getARMTargetFeatures(const Driver &D,
+     (void)getARMFPUFeatures(D, WaFPU->first, Args, WaFPU->second, Features);
+   } else if (FPUArg) {
+     FPUKind = getARMFPUFeatures(D, FPUArg, Args, FPUArg->getValue(), Features);
+-  } else if (Triple.isAndroid() && getARMSubArchVersionNumber(Triple) >= 7) {
++  } else if (Triple.isAndroid() && getARMSubArchVersionNumber(Triple) == 7) {
+     const char *AndroidFPU = "neon";
+     FPUKind = llvm::ARM::parseFPU(AndroidFPU);
+     if (!llvm::ARM::getFPUFeatures(FPUKind, Features))
+diff --git a/clang/test/Driver/arm-mfpu.c b/clang/test/Driver/arm-mfpu.c
+index 1b174be38812..babfa16741ad 100644
+--- a/clang/test/Driver/arm-mfpu.c
++++ b/clang/test/Driver/arm-mfpu.c
+@@ -409,6 +409,25 @@
+ // CHECK-ARM7-ANDROID-FP-DEFAULT-NOT: "-target-feature" "+sha2"
+ // CHECK-ARM7-ANDROID-FP-DEFAULT-NOT: "-target-feature" "+aes"
+ 
++// RUN: %clang -target armv8-linux-androideabi21 %s -### -c 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-ARM8-ANDROID-FP-DEFAULT %s
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+soft-float-abi"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+vfp3"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+vfp4"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+fp-armv8"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+aes"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-DAG: "-target-feature" "+sha2"
++// CHECK-ARM8-ANDROID-FP-DEFAULT-NOT: "-target-feature" "+neon"
++
++// RUN: %clang -target armv8-linux-android %s -### -c 2>&1 \
++// RUN:   | FileCheck --check-prefix=CHECK-ARM8-ANDROID-DEFAULT %s
++// CHECK-ARM8-ANDROID-DEFAULT-DAG: "-target-feature" "+vfp3"
++// CHECK-ARM8-ANDROID-DEFAULT-DAG: "-target-feature" "+vfp4"
++// CHECK-ARM8-ANDROID-DEFAULT-DAG: "-target-feature" "+fp-armv8"
++// CHECK-ARM8-ANDROID-DEFAULT-DAG: "-target-feature" "+aes"
++// CHECK-ARM8-ANDROID-DEFAULT-DAG: "-target-feature" "+sha2"
++// CHECK-ARM8-ANDROID-DEFAULT-NOT: "-target-feature" "+neon"
++
+ // RUN: %clang -target armv7-linux-androideabi21 %s -mfpu=vfp3-d16 -### -c 2>&1 \
+ // RUN:   | FileCheck --check-prefix=CHECK-ARM7-ANDROID-FP-D16 %s
+ // CHECK-ARM7-ANDROID-FP-D16-NOT: "-target-feature" "+soft-float"
+-- 
+2.48.0.rc2.279.g1de40edade-goog
+

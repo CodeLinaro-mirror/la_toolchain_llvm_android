@@ -242,6 +242,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Driver] Error when using msan on Android (#122540)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fdfe7e7fabc85ed7293ca6f5f234d41812644584.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 561470
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Driver][ARM] Change Android's NEON FPU hardcoding to \"== 7\" as it pessimizes future ArmV8 code (#122969)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e9255dda236e6e418abe81a10b3f7c0d16c0d083.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 561896
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
