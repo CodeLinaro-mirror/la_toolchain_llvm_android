@@ -54,7 +54,8 @@ def remove_kleaf_version(prebuilt_dir: Path, version: str) -> None:
     version_line = '    "{}",'.format(version)
     with open(paths.KLEAF_VERSIONS_BZL) as f:
         kleaf_versions_lines = f.read().splitlines()
-    kleaf_versions_lines.remove(version_line)
+    if version_line in kleaf_versions_lines:
+        kleaf_versions_lines.remove(version_line)
     with open(paths.KLEAF_VERSIONS_BZL, "w") as f:
         f.write("\n".join(kleaf_versions_lines))
     utils.check_call(['git', 'add', paths.KLEAF_VERSIONS_BZL], cwd=prebuilt_dir)
