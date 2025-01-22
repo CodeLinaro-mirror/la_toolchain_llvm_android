@@ -420,5 +420,19 @@
             "from": 529470,
             "until": 550282
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [libc++] Don't implement <stdatomic.h> before C++23 (#123130)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-libc-Don-t-implement-stdatomic.h-before-C-23-.patch",
+        "version_range": {
+            "from": 562162,
+            "until": null
+        }
     }
 ]
