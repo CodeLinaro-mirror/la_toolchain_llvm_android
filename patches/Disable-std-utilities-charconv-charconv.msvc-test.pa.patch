@@ -1,0 +1,27 @@
+From 16a8111d6ab6ea62b090873f2cfb940952606a65 Mon Sep 17 00:00:00 2001
+From: Yi Kong <yikong@google.com>
+Date: Thu, 23 Jan 2025 17:20:32 +0800
+Subject: [PATCH] Disable std/utilities/charconv/charconv.msvc/test.pass.cpp
+
+---
+ .../test/std/utilities/charconv/charconv.msvc/test.pass.cpp   | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/libcxx/test/std/utilities/charconv/charconv.msvc/test.pass.cpp b/libcxx/test/std/utilities/charconv/charconv.msvc/test.pass.cpp
+index 9279511e46b1..82356b03775d 100644
+--- a/libcxx/test/std/utilities/charconv/charconv.msvc/test.pass.cpp
++++ b/libcxx/test/std/utilities/charconv/charconv.msvc/test.pass.cpp
+@@ -6,6 +6,10 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
++// FIXME: Flaky on Android i386 build
++// https://github.com/llvm/llvm-project/issues/113265
++// UNSUPPORTED: target=i386-unknown-linux-gnu
++
+ // UNSUPPORTED: c++03, c++11, c++14
+ 
+ // TODO Investigate why this fails
+-- 
+2.48.1.262.g85cc9f2d1e-goog
+
