@@ -434,5 +434,19 @@
             "from": 562162,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Disable std/utilities/charconv/charconv.msvc/test.pass.cpp test"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Disable-std-utilities-charconv-charconv.msvc-test.pa.patch",
+        "version_range": {
+            "from": 553667,
+            "until": null
+        }
     }
 ]
