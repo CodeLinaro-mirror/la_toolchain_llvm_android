@@ -1951,6 +1951,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MC] Fix DWARF file table for files with empty DWARF (#119572)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4a5f82b43be7328d7b7b4cd9912487fd3f284b49.patch",
+        "version_range": {
+            "from": 536225,
+            "until": 559165
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
