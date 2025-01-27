@@ -118,7 +118,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
         # Use x86_64 models to optimize the release Android Clang.
         if self.enable_mlgo:
             defines['LLVM_INLINER_MODEL_PATH'] = paths.mlgo_model('x86_64/inlining-Oz-99f0063-v1.1')
-            defines['LLVM_RAEVICT_MODEL_PATH'] = paths.mlgo_model('x86_64/regalloc-evict-e67430c-v1.0')
+            defines['LLVM_RAEVICT_MODEL_PATH'] = paths.mlgo_model('x86_64/regalloc-evict-v1.1')
 
         return defines
 
