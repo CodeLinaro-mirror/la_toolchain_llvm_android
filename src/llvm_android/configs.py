@@ -563,7 +563,6 @@ class AndroidConfig(_BaseConfig):
     target_os: hosts.Host = hosts.Host.Android
 
     target_arch: hosts.Arch
-    _toolchain_path: Optional[Path]
 
     static: bool = False
     platform: bool = False
@@ -629,10 +628,6 @@ class AndroidConfig(_BaseConfig):
         cflags = super().cflags
         cflags.append(f'--target={self.llvm_triple}')
 
-        if self._toolchain_path:
-            toolchain_bin = paths.GCC_ROOT / self._toolchain_path / 'bin'
-            cflags.append(f'-B{toolchain_bin}')
-
         cflags.append('-ffunction-sections')
         cflags.append('-fdata-sections')
         if (self.target_arch == hosts.Arch.X86_64 or
@@ -667,7 +662,6 @@ class AndroidConfig(_BaseConfig):
 class AndroidARMConfig(AndroidConfig):
     """Configs for android arm targets."""
     target_arch: hosts.Arch = hosts.Arch.ARM
-    _toolchain_path: Optional[Path] = Path('arm/arm-linux-androideabi-4.9/arm-linux-androideabi')
 
     @property
     def cflags(self) -> List[str]:
@@ -679,7 +673,6 @@ class AndroidARMConfig(AndroidConfig):
 class AndroidAArch64Config(AndroidConfig):
     """Configs for android arm64 targets."""
     target_arch: hosts.Arch = hosts.Arch.AARCH64
-    _toolchain_path: Optional[Path] = Path('aarch64/aarch64-linux-android-4.9/aarch64-linux-android')
 
     @property
     def cflags(self) -> List[str]:
@@ -691,19 +684,16 @@ class AndroidAArch64Config(AndroidConfig):
 class AndroidRiscv64Config(AndroidConfig):
     """Configs for android riscv64 targets."""
     target_arch: hosts.Arch = hosts.Arch.RISCV64
-    _toolchain_path: Optional[Path] = None
 
 
 class AndroidX64Config(AndroidConfig):
     """Configs for android x86_64 targets."""
     target_arch: hosts.Arch = hosts.Arch.X86_64
-    _toolchain_path: Optional[Path] = Path('x86/x86_64-linux-android-4.9/x86_64-linux-android')
 
 
 class AndroidI386Config(AndroidConfig):
     """Configs for android x86 targets."""
     target_arch: hosts.Arch = hosts.Arch.I386
-    _toolchain_path: Optional[Path] = Path('x86/x86_64-linux-android-4.9/x86_64-linux-android')
 
     @property
     def cflags(self) -> List[str]:
