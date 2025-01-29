@@ -693,13 +693,6 @@ class AndroidRiscv64Config(AndroidConfig):
     target_arch: hosts.Arch = hosts.Arch.RISCV64
     _toolchain_path: Optional[Path] = None
 
-    @property
-    def cflags(self) -> List[str]:
-        cflags = super().cflags
-        cflags.append(f'-isystem {self.sysroot}/usr/include/{self.ndk_sysroot_triple}')
-
-        return cflags
-
 
 class AndroidX64Config(AndroidConfig):
     """Configs for android x86_64 targets."""
