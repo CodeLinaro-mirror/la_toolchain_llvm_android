@@ -753,7 +753,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         tarball_name = package_name + '-' + tag + '.tar.xz'
         package_path = paths.DIST_DIR / tarball_name
         logger().info(f'Packaging {package_path}')
-        utils.create_tarball(install_host_dir, [package_name], package_path)
+        with timer.Timer(f'package_final_toolchain'):
+            utils.create_tarball(install_host_dir, [package_name], package_path)
 
 
 def parse_args():
