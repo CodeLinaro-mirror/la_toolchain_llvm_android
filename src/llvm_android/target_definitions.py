@@ -22,7 +22,7 @@ BUILD_NAME = os.environ.get("BUILD_NAME", "dev")
 # yapf: disable
 TARGET_DEFS: dict[str, dict[str, list[str]]] = {
     "aosp-llvm-toolchain": {
-        "darwin-mac": [
+        "darwin_mac": [
             "toolchain/llvm_android/build.py",
             "--lto",
             "--pgo",
