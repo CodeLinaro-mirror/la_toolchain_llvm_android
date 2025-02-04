@@ -88,6 +88,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] BPF: Generate locked insn for __sync_fetch_and_add() with cpu v1/v2 (#106494)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/06c531e808ceeafdf996867a2e8e66960ae4774e.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 548156
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
         },
         "platforms": [
