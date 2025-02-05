@@ -58,6 +58,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[RISCV] Add isel optimization for (and (sra y, c2), c1) to recover regression from #101751. (#104114)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/858afe90aad9ca45165d64baec9249dd680c85d5.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 547385
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "original_sha": "0a00d32c5f88fce89006dcde6e235bc77d7b495e",
             "title": "[lldb] Add armv7a and armv8a ArchSpecs (#106433)"
         },
