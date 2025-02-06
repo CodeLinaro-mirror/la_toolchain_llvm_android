@@ -1,0 +1,112 @@
+From 766027b8c676d18927526bef5798056f3be68df5 Mon Sep 17 00:00:00 2001
+From: Vitaly Buka <vitalybuka@google.com>
+Date: Mon, 16 Dec 2024 09:50:59 -0800
+Subject: [PATCH] [libc++] Update locale grouping tests (#119463)
+
+Fixes #119047
+
+Change-Id: I5af1d4118f667bcb037fa7ab7448db47780ab67b
+---
+ .../grouping.pass.cpp                         | 26 ++++++-------------
+ .../locale.numpunct.byname/grouping.pass.cpp  | 12 ++-------
+ 2 files changed, 10 insertions(+), 28 deletions(-)
+
+diff --git a/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp b/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
+index ca5b6736f327..3243db6a5cca 100644
+--- a/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
++++ b/libcxx/test/std/localization/locale.categories/category.monetary/locale.moneypunct.byname/grouping.pass.cpp
+@@ -89,27 +89,22 @@ int main(int, char**)
+     }
+ #endif
+ 
+-#if defined( _WIN32) || defined(_AIX)
+-    std::string us_grouping = "\3";
+-#else
+-    std::string us_grouping = "\3\3";
+-#endif
+     {
+         Fnf f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fnt f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+     {
+         Fwf f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fwt f(LOCALE_en_US_UTF_8, 1);
+-        assert(f.grouping() == us_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #endif
+ 
+@@ -132,27 +127,22 @@ int main(int, char**)
+     }
+ #endif
+ 
+-#if defined( _WIN32) || defined(_AIX)
+-    std::string ru_grouping = "\3";
+-#else
+-    std::string ru_grouping = "\3\3";
+-#endif
+     {
+         Fnf f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fnt f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+     {
+         Fwf f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+     {
+         Fwt f(LOCALE_ru_RU_UTF_8, 1);
+-        assert(f.grouping() == ru_grouping);
++        assert(f.grouping() == "\3" || f.grouping() == "\3\3");
+     }
+ #endif
+ 
+diff --git a/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp b/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
+index 2f2bc2fd8832..2284ab9c48df 100644
+--- a/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
++++ b/libcxx/test/std/localization/locale.categories/facet.numpunct/locale.numpunct.byname/grouping.pass.cpp
+@@ -49,21 +49,13 @@ int main(int, char**)
+         {
+             typedef char C;
+             const std::numpunct<C>& np = std::use_facet<std::numpunct<C> >(l);
+-#ifdef _WIN32
+-            assert(np.grouping() == "\3");
+-#else
+-            assert(np.grouping() == "\3\3");
+-#endif
++            assert(np.grouping() == "\3" || np.grouping() == "\3\3");
+         }
+ #ifndef TEST_HAS_NO_WIDE_CHARACTERS
+         {
+             typedef wchar_t C;
+             const std::numpunct<C>& np = std::use_facet<std::numpunct<C> >(l);
+-#ifdef _WIN32
+-            assert(np.grouping() == "\3");
+-#else
+-            assert(np.grouping() == "\3\3");
+-#endif
++            assert(np.grouping() == "\3" || np.grouping() == "\3\3");
+         }
+ #endif
+     }
+-- 
+2.48.1.362.g079036d154-goog
+
