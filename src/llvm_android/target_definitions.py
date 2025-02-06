@@ -22,7 +22,7 @@ BUILD_NAME = os.environ.get("BUILD_NAME", "dev")
 # yapf: disable
 TARGET_DEFS: dict[str, dict[str, list[str]]] = {
     "aosp-llvm-toolchain": {
-        "darwin_mac": [
+        "llvm_darwin_mac": [
             "toolchain/llvm_android/build.py",
             "--lto",
             "--pgo",
@@ -31,7 +31,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux": [
+        "llvm_linux": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--lto",
@@ -43,23 +43,23 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux_bootstrap": [
+        "llvm_linux_bootstrap": [
             "toolchain/llvm_android/build.py",
             "--mlgo",
             "--bootstrap-build-only",
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux_builders": [
+        "llvm_linux_builders": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--create-tar",
-            "--builders-package",
             "--no-build=windows",
+            "--builders-package",
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux_debug": [
+        "llvm_linux_debug": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--create-tar",
@@ -71,7 +71,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux_fastbuild": [
+        "llvm_linux_fastbuild": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--mlgo",
@@ -80,7 +80,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "linux_musl": [
+        "llvm_linux_musl": [
             "toolchain/llvm_android/build.py",
             "--musl",
             "--lto",
@@ -90,13 +90,13 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "windows_x86": [
+        "llvm_windows_x86": [
             "toolchain/llvm_android/build.py",
             "--no-build=linux,windows-x86-64",
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "windows_x86_64": [
+        "llvm_windows_x86_64": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--lto",
@@ -107,7 +107,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
-        "windows_x86_64_fastbuild": [
+        "llvm_windows_x86_64_fastbuild": [
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--create-tar",
