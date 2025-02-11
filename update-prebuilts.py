@@ -362,13 +362,13 @@ def main():
 
     os.chdir(download_dir)
 
-    targets_map = {'darwin-x86': 'darwin_mac',
-                   'linux-x86': 'linux',
-                   'windows-x86': 'windows_x86_64'}
+    targets_map = {'darwin-x86': 'llvm_darwin_mac',
+                   'linux-x86': 'llvm_linux',
+                   'windows-x86': 'llvm_windows_x86_64'}
     hosts = [args.host] if args.host else targets_map.keys()
     targets = [targets_map[h] for h  in hosts]
     if 'linux-x86' in hosts:
-        targets.append('linux_musl')
+        targets.append('llvm_linux_musl')
 
     build_info = 'BUILD_INFO'
     clang_pattern = 'clang-*.tar.xz'
@@ -380,7 +380,7 @@ def main():
                                      'get',
                                      '--raw', # prevent color text
                                      '--bid', args.build,
-                                     '--target', 'linux'])
+                                     '--target', 'llvm_linux'])
         # Example output is:
         #   aosp-llvm-toolchain linux 6732143 complete True
         branch = output.split()[0]
