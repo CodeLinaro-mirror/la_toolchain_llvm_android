@@ -19,6 +19,41 @@ import os
 
 BUILD_NAME = os.environ.get("BUILD_NAME", "dev")
 
+# Flags Order (based on how the flags were in original GCL):
+# toolchain/llvm_android/build.py
+# --bootstrap-use=
+# --musl
+# --lto
+# --pgo
+# --bolt
+# --mlgo
+# --package-stage2-install
+# --create-tar
+# --enable-assertions
+# --debug
+# --no-build=
+# --skip-runtimes
+# --skip-tests
+# --bootstrap-build-only
+# --builders-package
+# --build-name
+# --no-incremental
+#
+# toolchain/llvm_android/test_compiler.py
+# --build-only
+# --target
+# --no-clean-built-target
+# --no-pgo
+# --generate-bolt-profile
+# --generate-clang-profile
+# --module dist
+# --module droid
+# --module platform_tests
+# --module tidy-soong_subset
+# --with-tidy
+# --clang-package-path
+# ./
+
 # yapf: disable
 TARGET_DEFS: dict[str, dict[str, list[str]]] = {
     "aosp-llvm-toolchain": {
@@ -115,6 +150,85 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
+    },
+
+    "aosp-master-plus-llvm": {
+        "aosp_cf_arm64_phone-eng": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_cf_arm64_phone-trunk_staging-eng",
+            "--no-clean-built-target",
+            "--module", "dist",
+            "--module", "droid",
+            "--clang-package-path", "out/prebuilt_cached/clang-prebuilt",
+            "./",
+        ],
+        "aosp_cf_arm64_phone-userdebug": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_cf_arm64_phone-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--module", "dist",
+            "--module", "droid",
+            "--clang-package-path", "out/prebuilt_cached/clang-prebuilt",
+            "./",
+        ],
+        "aosp_cf_riscv64_phone-userdebug": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_cf_riscv64_phone-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--module", "dist",
+            "--module", "droid",
+            "--clang-package-path", "out/prebuilt_cached/clang-prebuilt",
+            "./",
+        ],
+        "aosp_cf_x86_64_phone-userdebug": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_cf_x86_64_phone-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--module", "dist",
+            "--module", "droid",
+            "--module", "platform_tests",
+            "--clang-package-path", "out/prebuilt_cached/clang-prebuilt",
+            "./",
+        ],
+        "Clang-PGO": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_raven-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--generate-clang-profile",
+            "./",
+        ],
+        "Clang-BOLT": [
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_raven-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--generate-bolt-profile",
+            "./",
+        ],
+        "linux_bootstrap": [
+            "toolchain/llvm_android/build.py",
+            "--mlgo",
+            "--bootstrap-build-only",
+            "--no-incremental",
+        ],
+        "linux_fastbuild": [
+            "toolchain/llvm_android/build.py",
+            "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
+            "--mlgo",
+            "--package-stage2-install",
+            "--create-tar",
+            "--no-build=windows",
+            "--no-incremental",
+        ],
+        "LLVM-Kythe": [
+            "toolchain/llvm_android/kythe_xref.py",
+            BUILD_NAME,
+        ]
     }
 }
 # yapf: enable
