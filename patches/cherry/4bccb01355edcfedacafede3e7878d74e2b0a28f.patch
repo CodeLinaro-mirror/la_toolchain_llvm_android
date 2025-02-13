@@ -1,0 +1,141 @@
+From d496349f4a1d9fcf126b900968f773862bddca30 Mon Sep 17 00:00:00 2001
+From: cor3ntin <corentinjabot@gmail.com>
+Date: Wed, 4 Sep 2024 10:02:55 +0200
+Subject: [PATCH] Workaround dependent source location issues (#106925)
+
+In #78436 we made some SourceLocExpr dependent to
+deal with the fact that their value should reflect the name of
+specialized function - rather than the rtemplate in which they are first
+used.
+
+However SourceLocExpr are unusual in two ways
+ - They don't depend on template arguments
+- They morally depend on the context in which they are used (rather than
+called from).
+
+It's fair to say that this is quite novels and confuses clang. In
+particular, in some cases, we used to create dependent SourceLocExpr and
+never subsequently transform them, leaving dependent objects in
+instantiated functions types. To work around that we avoid replacing
+SourceLocExpr when we think they could remain dependent.
+It's certainly not perfect but it fixes a number of reported bugs, and
+seem to only affect scenarios in which the value of the SourceLocExpr
+does not matter (overload resolution).
+
+Fixes #106428
+Fixes #81155
+Fixes #80210
+Fixes #85373
+
+---------
+
+Co-authored-by: Aaron Ballman <aaron@aaronballman.com>
+---
+ clang/lib/Sema/SemaExpr.cpp            | 21 +++++++--
+ clang/test/SemaCXX/source_location.cpp | 60 ++++++++++++++++++++++++++
+ 2 files changed, 77 insertions(+), 4 deletions(-)
+
+diff --git a/clang/lib/Sema/SemaExpr.cpp b/clang/lib/Sema/SemaExpr.cpp
+index ea57316ad801..75d29daf8de0 100644
+--- a/clang/lib/Sema/SemaExpr.cpp
++++ b/clang/lib/Sema/SemaExpr.cpp
+@@ -5441,11 +5441,24 @@ struct EnsureImmediateInvocationInDefaultArgs
+ 
+   // Rewrite to source location to refer to the context in which they are used.
+   ExprResult TransformSourceLocExpr(SourceLocExpr *E) {
+-    if (E->getParentContext() == SemaRef.CurContext)
++    DeclContext *DC = E->getParentContext();
++    if (DC == SemaRef.CurContext)
+       return E;
+-    return getDerived().RebuildSourceLocExpr(E->getIdentKind(), E->getType(),
+-                                             E->getBeginLoc(), E->getEndLoc(),
+-                                             SemaRef.CurContext);
++
++    // FIXME: During instantiation, because the rebuild of defaults arguments
++    // is not always done in the context of the template instantiator,
++    // we run the risk of producing a dependent source location
++    // that would never be rebuilt.
++    // This usually happens during overload resolution, or in contexts
++    // where the value of the source location does not matter.
++    // However, we should find a better way to deal with source location
++    // of function templates.
++    if (!SemaRef.CurrentInstantiationScope ||
++        !SemaRef.CurContext->isDependentContext() || DC->isDependentContext())
++      DC = SemaRef.CurContext;
++
++    return getDerived().RebuildSourceLocExpr(
++        E->getIdentKind(), E->getType(), E->getBeginLoc(), E->getEndLoc(), DC);
+   }
+ };
+ 
+diff --git a/clang/test/SemaCXX/source_location.cpp b/clang/test/SemaCXX/source_location.cpp
+index 6b3610d703e7..34177bfe287f 100644
+--- a/clang/test/SemaCXX/source_location.cpp
++++ b/clang/test/SemaCXX/source_location.cpp
+@@ -929,3 +929,63 @@ void test() {
+ }
+ 
+ }
++
++namespace GH106428 {
++
++struct add_fn {
++    template <typename T>
++    constexpr auto operator()(T lhs, T rhs,
++                              const std::source_location loc = std::source_location::current())
++        const -> T
++    {
++        return lhs + rhs;
++    }
++};
++
++
++template <class _Fp, class... _Args>
++decltype(_Fp{}(0, 0))
++__invoke(_Fp&& __f);
++
++template<typename T>
++struct type_identity { using type = T; };
++
++template<class Fn>
++struct invoke_result : type_identity<decltype(__invoke(Fn{}))> {};
++
++using i = invoke_result<add_fn>::type;
++static_assert(__is_same(i, int));
++
++}
++
++#if __cplusplus >= 202002L
++
++namespace GH81155 {
++struct buff {
++  buff(buff &, const char * = __builtin_FUNCTION());
++};
++
++template <class Ty>
++Ty declval();
++
++template <class Fx>
++auto Call(buff arg) -> decltype(Fx{}(arg));
++
++template <typename>
++struct F {};
++
++template <class Fx>
++struct InvocableR : F<decltype(Call<Fx>(declval<buff>()))> {
++  static constexpr bool value = false;
++};
++
++template <class Fx, bool = InvocableR<Fx>::value>
++void Help(Fx) {}
++
++void Test() {
++  Help([](buff) {});
++}
++
++}
++
++#endif
+-- 
+2.48.1.601.g30ceb7b040-goog
+
