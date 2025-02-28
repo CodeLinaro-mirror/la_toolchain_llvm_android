@@ -502,7 +502,7 @@
         "rel_patch_path": "Revert-libc-Don-t-implement-stdatomic.h-before-C-23-.patch",
         "version_range": {
             "from": 562162,
-            "until": null
+            "until": 566445
         }
     },
     {
@@ -516,6 +516,20 @@
         "rel_patch_path": "Disable-std-utilities-charconv-charconv.msvc-test.pa.patch",
         "version_range": {
             "from": 553667,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [libc++] Don't implement <stdatomic.h> before C++23 (#123130)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-libc-Don-t-implement-stdatomic.h-before-C-23-v2.patch",
+        "version_range": {
+            "from": 566446,
             "until": null
         }
     }
