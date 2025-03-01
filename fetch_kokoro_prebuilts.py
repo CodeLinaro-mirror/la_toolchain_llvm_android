@@ -110,7 +110,7 @@ def stubby_call(request: str):
         "KokoroApi.GetBuildStatus",
         request,
     ]
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 
 
 def get_build_number(sha: str):
