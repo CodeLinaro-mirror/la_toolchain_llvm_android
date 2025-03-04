@@ -979,46 +979,34 @@ class DeviceSysrootsBuilder(base_builders.Builder):
 
         # Copy the NDK prebuilt's sysroot, but for the platform variant, omit
         # the STL and android_support headers and libraries.
-        if arch == hosts.Arch.RISCV64:
-            src_sysroot = paths.RISCV64_ANDROID_SYSROOT
-        else:
-            src_sysroot = paths.NDK_BASE / 'toolchains' / 'llvm' / 'prebuilt' / 'linux-x86_64' / 'sysroot'
+        src_sysroot = paths.NDK_BASE / 'toolchains' / 'llvm' / 'prebuilt' / 'linux-x86_64' / 'sysroot'
 
         # Copy over usr/include.
         shutil.copytree(src_sysroot / 'usr' / 'include',
                         sysroot / 'usr' / 'include', symlinks=True)
 
-        if arch != hosts.Arch.RISCV64:
-            # Remove the STL headers.
-            shutil.rmtree(sysroot / 'usr' / 'include' / 'c++')
+        # Remove the STL headers.
+        shutil.rmtree(sysroot / 'usr' / 'include' / 'c++')
 
         # Copy over usr/lib/$TRIPLE.
         src_lib = src_sysroot / 'usr' / 'lib' / config.ndk_sysroot_triple
         dest_lib = sysroot / 'usr' / 'lib' / config.ndk_sysroot_triple
         shutil.copytree(src_lib, dest_lib, symlinks=True)
 
-        # For RISCV64, symlink the 10000 api-dir to 35
-        # TODO (http://b/287650094 Remove this hack when we have a risc-v
-        # sysroot in the NDK.
-        if arch == hosts.Arch.RISCV64:
-            (dest_lib / '35').symlink_to('10000')
-
         # Remove the NDK's libcompiler_rt-extras.  Also remove the NDK libc++,
         # except for the riscv64 sysroot which doesn't have these files.
         (dest_lib / 'libcompiler_rt-extras.a').unlink()
-        if arch != hosts.Arch.RISCV64:
-            (dest_lib / 'libc++abi.a').unlink()
-            (dest_lib / 'libc++_static.a').unlink()
-            (dest_lib / 'libc++_shared.so').unlink()
+        (dest_lib / 'libc++abi.a').unlink()
+        (dest_lib / 'libc++_static.a').unlink()
+        (dest_lib / 'libc++_shared.so').unlink()
         # Each per-API-level directory has libc++.so and libc++.a.
         for subdir in dest_lib.iterdir():
             if subdir.is_symlink() or not subdir.is_dir():
                 continue
             if not re.match(r'\d+$', subdir.name):
                 continue
-            if arch != hosts.Arch.RISCV64:
-                (subdir / 'libc++.a').unlink()
-                (subdir / 'libc++.so').unlink()
+            (subdir / 'libc++.a').unlink()
+            (subdir / 'libc++.so').unlink()
         # Verify that there aren't any extra copies somewhere else in the
         # directory hierarchy.
         verify_gone = [
