@@ -66,8 +66,6 @@ ZSTD_SRC_DIR: Path = EXTERNAL_DIR / 'zstd'
 
 NDK_BASE: Path = TOOLCHAIN_DIR / 'prebuilts' / 'ndk' / 'releases' / constants.NDK_VERSION
 
-RISCV64_ANDROID_SYSROOT: Path = TOOLCHAIN_DIR / 'prebuilts' / 'sysroot' / 'platform' / 'riscv64-linux-android'
-
 GCC_ROOT: Path = PREBUILTS_DIR / 'gcc' / hosts.build_host().os_tag
 GO_ROOT: Path = PREBUILTS_DIR / 'go' / hosts.build_host().os_tag
 MINGW_ROOT: Path = PREBUILTS_DIR / 'gcc' / 'linux-x86' / 'host' / 'x86_64-w64-mingw32-4.8' / 'x86_64-w64-mingw32'
