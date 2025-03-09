@@ -20,8 +20,8 @@ _llvm_next = False
 _version_read = False
 
 _patch_level = '0'
-_svn_revision = 'r547379'
-_git_sha = 'f142f8afe21bceb00fb495468aa0b5043e98c419'
+_svn_revision = 'r563880'
+_git_sha = '386af4a5c64ab75eaee2448dc38f2e34a40bfed0'
 
 # Psudo revision for top of trunk LLVM.
 _svn_revision_next = 'r99999999'
