@@ -340,6 +340,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[libc++] Reduce std::conjunction overhead (#124259)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0227396417d4625bc93affdd8957ff8d90c76299.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564591
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ARM] Speedups for CombineBaseUpdate. (#129725)"
         },
         "platforms": [
