@@ -354,6 +354,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][DAG] Allow fptos/ui.sat to scalarized. (#126799)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bf7af2d12e3bb8c7bc322ed1c5bf4e9904ad409c.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 565011
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ARM] Speedups for CombineBaseUpdate. (#129725)"
         },
         "platforms": [
