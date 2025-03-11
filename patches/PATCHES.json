@@ -368,6 +368,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Clang] Treat constexpr-unknown value as invalid in `EvaluateAsInitializer` (#128409)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/27757fb87429c89a65bb5e1f619ad700928db0fd.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 567357
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ARM] Speedups for CombineBaseUpdate. (#129725)"
         },
         "platforms": [
