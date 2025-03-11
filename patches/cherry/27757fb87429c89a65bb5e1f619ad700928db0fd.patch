@@ -1,0 +1,89 @@
+From 27757fb87429c89a65bb5e1f619ad700928db0fd Mon Sep 17 00:00:00 2001
+From: Yingwei Zheng <dtcxzyw2333@gmail.com>
+Date: Wed, 5 Mar 2025 14:01:24 +0800
+Subject: [PATCH] [Clang] Treat constexpr-unknown value as invalid in
+ `EvaluateAsInitializer` (#128409)
+
+It is an alternative to
+https://github.com/llvm/llvm-project/pull/127525.
+Close https://github.com/llvm/llvm-project/issues/127475.
+---
+ clang/lib/AST/ExprConstant.cpp          | 14 ++++++++++++--
+ clang/lib/CodeGen/CGExprConstant.cpp    |  5 ++++-
+ clang/test/CodeGenCXX/cxx23-p2280r4.cpp | 15 +++++++++++++++
+ 3 files changed, 31 insertions(+), 3 deletions(-)
+ create mode 100644 clang/test/CodeGenCXX/cxx23-p2280r4.cpp
+
+diff --git a/clang/lib/AST/ExprConstant.cpp b/clang/lib/AST/ExprConstant.cpp
+index 7244120d1be5..d9a1e5bb4234 100644
+--- a/clang/lib/AST/ExprConstant.cpp
++++ b/clang/lib/AST/ExprConstant.cpp
+@@ -3628,8 +3628,6 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
+   if (AllowConstexprUnknown) {
+     if (!Result)
+       Result = &Info.CurrentCall->createConstexprUnknownAPValues(VD, Base);
+-    else
+-      Result->setConstexprUnknown();
+   }
+   return true;
+ }
+@@ -16995,6 +16993,18 @@ bool Expr::EvaluateAsInitializer(APValue &Value, const ASTContext &Ctx,
+ 
+     if (!Info.discardCleanups())
+       llvm_unreachable("Unhandled cleanup; missing full expression marker?");
++
++    if (Value.allowConstexprUnknown()) {
++      assert(Value.isLValue() && "Expected an lvalue");
++      auto Base = Value.getLValueBase();
++      const auto *NewVD = Base.dyn_cast<const ValueDecl *>();
++      if (!NewVD)
++        NewVD = VD;
++      Info.FFDiag(getExprLoc(), diag::note_constexpr_var_init_non_constant, 1)
++          << NewVD;
++      NoteLValueLocation(Info, Base);
++      return false;
++    }
+   }
+ 
+   return CheckConstantExpression(Info, DeclLoc, DeclTy, Value,
+diff --git a/clang/lib/CodeGen/CGExprConstant.cpp b/clang/lib/CodeGen/CGExprConstant.cpp
+index ee5874b26f53..08e42a9e1dcf 100644
+--- a/clang/lib/CodeGen/CGExprConstant.cpp
++++ b/clang/lib/CodeGen/CGExprConstant.cpp
+@@ -1883,8 +1883,11 @@ llvm::Constant *ConstantEmitter::tryEmitPrivateForVarInit(const VarDecl &D) {
+ 
+   // Try to emit the initializer.  Note that this can allow some things that
+   // are not allowed by tryEmitPrivateForMemory alone.
+-  if (APValue *value = D.evaluateValue())
++  if (APValue *value = D.evaluateValue()) {
++    assert(!value->allowConstexprUnknown() &&
++           "Constexpr unknown values are not allowed in CodeGen");
+     return tryEmitPrivateForMemory(*value, destType);
++  }
+ 
+   return nullptr;
+ }
+diff --git a/clang/test/CodeGenCXX/cxx23-p2280r4.cpp b/clang/test/CodeGenCXX/cxx23-p2280r4.cpp
+new file mode 100644
+index 000000000000..d5409be451df
+--- /dev/null
++++ b/clang/test/CodeGenCXX/cxx23-p2280r4.cpp
+@@ -0,0 +1,15 @@
++// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++23 %s -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++20 %s -emit-llvm -o - | FileCheck %s
++// RUN: %clang_cc1 -triple %itanium_abi_triple -std=c++17 %s -emit-llvm -o - | FileCheck %s
++
++extern int& s;
++
++// CHECK: @_Z4testv()
++// CHECK-NEXT: entry:
++// CHECK-NEXT: [[I:%.*]] = alloca ptr, align {{.*}}
++// CHECK-NEXT: [[X:%.*]] = load ptr, ptr @s, align {{.*}}
++// CHECK-NEXT: store ptr [[X]], ptr [[I]], align {{.*}}
++int& test() {
++  auto &i = s;
++  return i;
++}
+-- 
+2.49.0.rc0.332.g42c0ae87b1-goog
+
