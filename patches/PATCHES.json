@@ -340,6 +340,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Also provide an alignment assumption for vector in C++03 mode (#124839)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ccb08b9dab7d829f8d9703d8b46b98e2d6717d0e.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564270
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[libc++] Reduce std::conjunction overhead (#124259)\""
         },
         "platforms": [
