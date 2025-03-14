@@ -327,7 +327,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
         ],
     },
 
-    "git_master-plus-llvm": {
+    "git_main-plus-llvm": {
         "aosp_cf_arm64_phone-eng": [
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
