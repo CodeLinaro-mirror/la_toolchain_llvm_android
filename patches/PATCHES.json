@@ -340,6 +340,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [InstCombine] Check nowrap flags when folding comparison of GEPs with the same base pointer (#121892)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9725595f3acc0c1aaa354e15ac4ee2b1f8ff4cc9.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 563898
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [VPlan] Only use SCEV for live-ins in tryToWiden. (#125436)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/30f3752e54fa7cd595a434a985efbe9a7abe9b65.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564011
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Disallow vscale x 1  partial reductions (#125252)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c7995a6905f2320f280013454676f992a8c6f89f.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564266
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Also provide an alignment assumption for vector in C++03 mode (#124839)"
         },
         "platforms": [
@@ -368,6 +410,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Fix op mask detection in performZExtDeinterleaveShuffleCombine (#126054)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2c43479683651f0eb208c97bf12e49bacbea4e6f.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564607
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64][DAG] Allow fptos/ui.sat to scalarized. (#126799)"
         },
         "platforms": [
@@ -377,6 +433,34 @@
         "version_range": {
             "from": 563880,
             "until": 565011
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Diagnose the code with trailing comma in the function call. (#125232)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/922f339c4ef3631f66dc4b8caa4c356103dbf69d.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 565310
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Fix an integer overflow issue in computing CTAD's parameter depth (#128704)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b8d1f3d62746110ff0c969a136fc15f1d52f811d.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 566527
         }
     },
     {
@@ -405,6 +489,20 @@
         "version_range": {
             "from": 547379,
             "until": 567490
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [MemCpyOpt] Fix clobber check in fca2memcpy optimization"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5da9044c40840187330526ca888290a95927a629.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 568276
         }
     },
     {
