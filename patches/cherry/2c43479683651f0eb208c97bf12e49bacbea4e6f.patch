@@ -1,0 +1,184 @@
+From 2c43479683651f0eb208c97bf12e49bacbea4e6f Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Fri, 7 Feb 2025 16:37:05 +0000
+Subject: [PATCH] [AArch64] Fix op mask detection in
+ performZExtDeinterleaveShuffleCombine (#126054)
+
+Given a zext from an extract vector, with a shuffle mask like <4, 0, 0, 4> we
+would previously recognize the top half as a deinterleave. In order to convert
+into a uzp we should have been checking that the bottom half is also poison.
+
+Fixes #125989
+---
+ .../Target/AArch64/AArch64ISelLowering.cpp    |   3 +
+ llvm/test/CodeGen/AArch64/zext-shuffle.ll     | 143 ++++++++++++++++++
+ 2 files changed, 146 insertions(+)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index 7f6da4fa38f9..34464d317bea 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -22363,6 +22363,9 @@ static SDValue performZExtDeinterleaveShuffleCombine(SDNode *N,
+   if (!IsDeInterleave)
+     IsUndefDeInterleave =
+         Shuffle->getOperand(1).isUndef() &&
++        all_of(
++            Shuffle->getMask().slice(ExtOffset, VT.getVectorNumElements() / 2),
++            [](int M) { return M < 0; }) &&
+         ShuffleVectorInst::isDeInterleaveMaskOfFactor(
+             Shuffle->getMask().slice(ExtOffset + VT.getVectorNumElements() / 2,
+                                      VT.getVectorNumElements() / 2),
+diff --git a/llvm/test/CodeGen/AArch64/zext-shuffle.ll b/llvm/test/CodeGen/AArch64/zext-shuffle.ll
+index 2965996ddcb0..20d2071d7fe5 100644
+--- a/llvm/test/CodeGen/AArch64/zext-shuffle.ll
++++ b/llvm/test/CodeGen/AArch64/zext-shuffle.ll
+@@ -543,3 +543,146 @@ define <8 x double> @uitofp_load_fadd(ptr %p) {
+     ret <8 x double> %c
+ }
+ 
++define <4 x i32> @isUndefDeInterleave_b0(<8 x i16> %a, <8 x i16> %b) {
++; CHECK-LABEL: isUndefDeInterleave_b0:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    movi v1.2d, #0x00ffff0000ffff
++; CHECK-NEXT:    uzp1 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    and v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 0, i32 4, i32 poison, i32 poison, i32 poison, i32 poison>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_b1(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_b1:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    uzp1 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    ushr v0.4s, v0.4s, #16
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 1, i32 5, i32 poison, i32 poison, i32 poison, i32 poison>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_b2(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_b2:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    movi v1.2d, #0x00ffff0000ffff
++; CHECK-NEXT:    uzp2 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    and v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 2, i32 6, i32 poison, i32 poison, i32 poison, i32 poison>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_b3(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_b3:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    uzp2 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    ushr v0.4s, v0.4s, #16
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 3, i32 7, i32 poison, i32 poison, i32 poison, i32 poison>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_t0(<8 x i16> %a, <8 x i16> %b) {
++; CHECK-LABEL: isUndefDeInterleave_t0:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    movi v1.2d, #0x00ffff0000ffff
++; CHECK-NEXT:    uzp1 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    and v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 0, i32 4>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_t1(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_t1:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    uzp1 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    ushr v0.4s, v0.4s, #16
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 1, i32 5>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_t2(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_t2:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    movi v1.2d, #0x00ffff0000ffff
++; CHECK-NEXT:    uzp2 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    and v0.16b, v0.16b, v1.16b
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 2, i32 6>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_t3(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_t3:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    uzp2 v0.4s, v0.4s, v0.4s
++; CHECK-NEXT:    ushr v0.4s, v0.4s, #16
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 poison, i32 3, i32 7>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_b0_bad(<8 x i16> %a, <8 x i16> %b) {
++; CHECK-LABEL: isUndefDeInterleave_b0_bad:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    adrp x8, .LCPI40_0
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI40_0]
++; CHECK-NEXT:    tbl v0.16b, { v0.16b }, v1.16b
++; CHECK-NEXT:    ushll v0.4s, v0.4h, #0
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 4, i32 4, i32 0, i32 4, i32 poison, i32 poison, i32 poison, i32 poison>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 0, i32 1, i32 2, i32 3>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define <4 x i32> @isUndefDeInterleave_t1_bad(<8 x i16> %a) {
++; CHECK-LABEL: isUndefDeInterleave_t1_bad:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    adrp x8, .LCPI41_0
++; CHECK-NEXT:    ldr q1, [x8, :lo12:.LCPI41_0]
++; CHECK-NEXT:    tbl v0.16b, { v0.16b }, v1.16b
++; CHECK-NEXT:    ushll2 v0.4s, v0.8h, #0
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %a, <8 x i16> poison, <8 x i32> <i32 poison, i32 poison, i32 poison, i32 poison, i32 4, i32 4, i32 1, i32 5>
++  %s2 = shufflevector <8 x i16> %2, <8 x i16> poison, <4 x i32> <i32 4, i32 5, i32 6, i32 7>
++  %3 = zext <4 x i16> %s2 to <4 x i32>
++  ret <4 x i32> %3
++}
++
++define i16 @undeftop(<8 x i16> %0) {
++; CHECK-LABEL: undeftop:
++; CHECK:       // %bb.0:
++; CHECK-NEXT:    dup v0.8h, v0.h[4]
++; CHECK-NEXT:    uaddl v0.4s, v0.4h, v0.4h
++; CHECK-NEXT:    xtn v0.4h, v0.4s
++; CHECK-NEXT:    umov w0, v0.h[0]
++; CHECK-NEXT:    ret
++  %2 = shufflevector <8 x i16> %0, <8 x i16> zeroinitializer, <8 x i32> <i32 4, i32 5, i32 6, i32 7, i32 9, i32 7, i32 5, i32 3>
++  %3 = zext <8 x i16> %2 to <8 x i64>
++  %new0 = add <8 x i64> %3, %3
++  %last = trunc <8 x i64> %new0 to <8 x i16>
++  %4 = extractelement <8 x i16> %last, i32 0
++  ret i16 %4
++}
+-- 
+2.49.0.rc1.451.g8f38331e32-goog
+
