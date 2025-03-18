@@ -1431,8 +1431,8 @@ class WindowsToolchainBuilder(base_builders.LLVMBuilder):
         lldb_wrapper_path = self.install_dir / 'bin' / 'lldb.cmd'
         lldb_wrapper_path.write_text(textwrap.dedent("""\
             @ECHO OFF
-            SET PYTHONHOME=%~dp0..\python3
-            SET PATH=%~dp0..\python3;%PATH%
+            SET PYTHONHOME=%~dp0..\\python3
+            SET PATH=%~dp0..\\python3;%PATH%
             %~dp0lldb.exe %*
             EXIT /B %ERRORLEVEL%
         """))
