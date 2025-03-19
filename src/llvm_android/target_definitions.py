@@ -231,7 +231,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
         ]
     },
 
-    "git_llvm-toolchain": {
+    "git_main-llvm-toolchain": {
         "llvm_darwin_mac": [
             "toolchain/llvm_android/build.py",
             "--lto",
