@@ -2,21 +2,28 @@ Android Clang/LLVM Toolchain Build Instructions
 ===============================================
 
 For the latest version of this doc, please make sure to visit:
-[Android Clang/LLVM Toolchain Readme Doc](https://android.googlesource.com/toolchain/llvm_android/+/main/README.md)
+[Android Clang/LLVM Toolchain Readme Doc](https://android.googlesource.com/toolchain/llvm_android/+/mirror-goog-main-llvm-toolchain-source/README.md)
 
 You can also visit the
-[Android Clang/LLVM Prebuilts Readme Doc](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/main/README.md)
+[Android Clang/LLVM Prebuilts Readme Doc](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/mirror-goog-main-llvm-toolchain-source/README.md)
 for more information about our prebuilt toolchains (and what versions they are based upon).
 
 Build Instructions
 ------------------
 
 ```
+# Googlers
 $ mkdir llvm-toolchain && cd llvm-toolchain
-$ repo init -u https://android.googlesource.com/platform/manifest -b llvm-toolchain
-$ repo sync -c
+
+# Use command from go/repo-init/main-llvm-toolchain for googleplex-android host
+# to create and sync the toolchain repo.
+
 $ python toolchain/llvm_android/build.py
 ```
+
+> Other users: Please wait for new instructions in light of
+> https://source.android.com/docs/whatsnew/site-updates#aosp-changes
+
 
 The built toolchain will be installed to `out/install/$HOST/clang-dev`.
 
@@ -75,8 +82,12 @@ The build number for that toolchain is `6317467` and the manifest is found in
 Rebuild the toolchain with that manifest:
 
 ```
+# For Googlers:
 $ mkdir llvm-toolchain && cd llvm-toolchain
-$ repo init -u https://android.googlesource.com/platform/manifest -b llvm-toolchain
+
+# Use command from go/repo-init/main-llvm-toolchain for googleplex-android host
+# to create a toolchain repo.  No need to sync.
+
 $ cp $TOOLCHAIN_DIR/manifest_6317467.xml .repo/manifests
 $ repo init -m manifest_6317467.xml
 $ repo sync -c
@@ -86,11 +97,14 @@ $ repo sync -c
 $ python toolchain/llvm_android/build.py
 ```
 
+> Other users: Please wait for new instructions in light of
+> https://source.android.com/docs/whatsnew/site-updates#aosp-changes
+
 Compiler Update Steps
 ---------------------
 
-This section is out-of-date. The source of truth is moved to
-http://go/android-llvm-update-process
+> This section is out-of-date. The source of truth is moved to
+> http://go/android-llvm-update-process
 
 ### Step 1: Update source code
 
@@ -238,7 +252,7 @@ by RBE.
 ### Step 7: Switch to the new compiler
 
 All places need to switch to the new compiler are listed in
-https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/main/README.md.
+https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/mirror-goog-main-llvm-toolchain-source/README.md.
 
 The updates in the kernel and NDK are done separately.
 

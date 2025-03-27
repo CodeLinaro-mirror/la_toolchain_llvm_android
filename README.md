@@ -2,10 +2,10 @@
 
 
 > Quick links:
-> * [Android clang build instructions](https://android.googlesource.com/toolchain/llvm_android/+/main/BUILD.md)
-> * [Android clang version history](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/master/README.md)
+> * [Android clang build instructions](https://android.googlesource.com/toolchain/llvm_android/+/mirror-goog-main-llvm-toolchain-source/BUILD.md)
+> * [Android clang version history](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/mirror-goog-main-llvm-toolchain-source/README.md)
 
-Android's clang toolchain is used to build the Android platform, kernel and is also part of the Android NDK.  It also builds various tools and projects in the Android ecosystem.  See [this](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/main/README.md) page for a list of current versions used by various projects.
+Android's clang toolchain is used to build the Android platform, kernel and is also part of the Android NDK.  It also builds various tools and projects in the Android ecosystem.  See [this](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/mirror-goog-main-llvm-toolchain-source/README.md) page for a list of current versions used by various projects.
 
 Android clang follows a rolling release schedule based on upstream llvm-project's main branch.  It **does not** correspond to a numbered llvm-project release branch.
 
@@ -26,12 +26,12 @@ In practice, there have been an average of 3-4 updates a year (rougly new clang 
 
 ### Android Clang Development
 
-Android clang development happens in the `llvm-toolchain` repo branch in AOSP.  See [here](https://android.googlesource.com/toolchain/llvm_android/+/main/BUILD.md) for build instructions.
+Android clang development happens in the `main-llvm-toolchain` branch in googleplex-android.  See [here](https://android.googlesource.com/toolchain/llvm_android/+/mirror-goog-main-llvm-toolchain-source/BUILD.md) for build instructions.
 
-[aosp-llvm-toolchain](https://ci.android.com/builds/branches/aosp-llvm-toolchain/grid) is the public CI build of Android clang toolchain.
+[git_main-llvm-toolchain](https://go/ab/git_main-llvm-toolchain) is the internal CI build of Android clang toolchain.
 
 clang binaries from this CI branch are checked into three platform-specific projects:
 
-*   [prebuilts/clang/host/linux-x86](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/)
-*   [prebuilts/clang/host/darwin-x86](https://android.googlesource.com/platform/prebuilts/clang/host/darwin-x86/)
-*   [prebuilts/clang/host/windows-x86](https://android.googlesource.com/platform/prebuilts/clang/host/windows-x86/)
+*   [prebuilts/clang/host/linux-x86](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+/refs/heads/mirror-goog-main-llvm-toolchain-source)
+*   [prebuilts/clang/host/darwin-x86](https://android.googlesource.com/platform/prebuilts/clang/host/darwin-x86/+/refs/heads/mirror-goog-main-llvm-toolchain-source)
+*   [prebuilts/clang/host/windows-x86](https://android.googlesource.com/platform/prebuilts/clang/host/windows-x86/+/refs/heads/mirror-goog-main-llvm-toolchain-source)
