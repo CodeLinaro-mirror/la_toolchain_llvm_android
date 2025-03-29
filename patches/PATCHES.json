@@ -130,6 +130,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MachineOutliner] Preserve instruction bundles (#106402)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/de37da8e37c4c9042563e186068adca98bf59e07.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 548467
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Reapply^2 \"[HWASan] remove incorrectly inferred attributes\" (#106622) (#106816)"
         },
         "platforms": [
