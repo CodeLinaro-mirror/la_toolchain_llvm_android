@@ -74,14 +74,14 @@ def sync_branch(path):
 def fetch_upstream():
     # Fetching upstream may take a long time. So print something.
     print('fetch upstream...')
-    subprocess.check_call(['git', 'fetch', 'aosp'],
+    subprocess.check_call(['git', 'fetch', 'goog'],
                           cwd=paths.TOOLCHAIN_LLVM_PATH)
 
 
 def sha_to_revision(sha: str) -> int:
     fetch_upstream()
     git_llvm_rev.MAIN_BRANCH = 'upstream-main'
-    llvm_config = git_llvm_rev.LLVMConfig(remote='aosp',
+    llvm_config = git_llvm_rev.LLVMConfig(remote='goog',
                                           dir=str(paths.TOOLCHAIN_LLVM_PATH))
     rev = git_llvm_rev.translate_sha_to_rev(llvm_config, sha)
     return rev.number
@@ -90,7 +90,7 @@ def sha_to_revision(sha: str) -> int:
 def revision_to_sha(rev: int) -> str:
     fetch_upstream()
     git_llvm_rev.MAIN_BRANCH = 'upstream-main'
-    llvm_config = git_llvm_rev.LLVMConfig(remote='aosp',
+    llvm_config = git_llvm_rev.LLVMConfig(remote='goog',
                                           dir=str(paths.TOOLCHAIN_LLVM_PATH))
     return git_llvm_rev.translate_rev_to_sha(
         llvm_config, git_llvm_rev.Rev.parse(f'r{rev}'))
