@@ -382,6 +382,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++][TZDB] Fixes %z escaping. (#125399)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a27f3b2bb137001735949549354aff89dbf227f4.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564142
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64] Disallow vscale x 1  partial reductions (#125252)"
         },
         "platforms": [
