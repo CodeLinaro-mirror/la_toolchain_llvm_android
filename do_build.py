@@ -45,10 +45,7 @@ def set_default_toolchain(toolchain: toolchains.Toolchain) -> None:
 
 def extract_pgo_profile(pgo) -> Path:
     if pgo:
-        if isinstance(pgo, str):
-            pgo_profdata_path = Path(pgo)
-        else:
-            pgo_profdata_path = paths.pgo_profdata_path()
+        pgo_profdata_path = paths.pgo_profdata_path()
 
         if pgo_profdata_path is None:
             raise RuntimeError('Failed to construct PGO profdata path')
@@ -1303,6 +1300,13 @@ def main():
                 with_runtimes=do_runtimes,
                 create_tar=args.create_tar,
                 builders_package=True)
+
+    # Copy PGO and BOLT profiles if they were set via environment variables
+    # (typically in CI builds).
+    for env_var in ('LLVM_PGO_PROFILE', 'LLVM_BOLT_PROFILE'):
+        if profile_env := os.environ.get(env_var):
+            profile = Path(glob.glob(profile_env)[0])
+            shutil.copy2(profile, paths.DIST_DIR)
 
     if build_errors:
         logger().info(toolchain_errors.combine_toolchain_errors(build_errors))
