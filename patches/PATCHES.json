@@ -550,20 +550,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Ensure that we use our toolchain's lipo, and not the system version"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Ensure-that-we-use-our-toolchain-s-lipo-and-not-the-.patch",
-        "version_range": {
-            "from": 407598,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
