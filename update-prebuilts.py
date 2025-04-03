@@ -400,8 +400,8 @@ def main():
                 fetch_artifact(branch, target, args.build, clang_pattern)
 
             if not args.skip_update_profiles and 'linux-x86' in hosts:
-                fetch_artifact(branch, 'linux', args.build, PGO_PROFILE_PATTERN)
-                fetch_artifact(branch, 'linux', args.build, BOLT_PROFILE_PATTERN)
+                fetch_artifact(branch, 'llvm_linux', args.build, PGO_PROFILE_PATTERN)
+                fetch_artifact(branch, 'llvm_linux', args.build, BOLT_PROFILE_PATTERN)
 
         for host in hosts:
             update_clang(host, args.build, args.use_current_branch,
