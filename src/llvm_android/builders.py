@@ -796,6 +796,10 @@ class XzBuilder(base_builders.CMakeBuilder, base_builders.LibInfo):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
+        # XZ change 5875a45be0 caused it to generate multiple rules to generate
+        # unxz. Needs to turn the change off.
+        defines['CREATE_XZ_SYMLINKS'] = 'OFF'
+        defines['CREATE_LZMA_SYMLINKS'] = 'OFF'
         # CMake actually generates a malformed archive command. llvm-ranlib does
         # not accept it, but the Apple ranlib accepts this. Workaround to use
         # the system ranlib until either CMake fixes this or llvm-ranlib also
