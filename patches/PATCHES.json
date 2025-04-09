@@ -424,6 +424,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LLD][ELF][AArch64] Discard .ARM.attributes sections (#125838)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ba476d0b83dc8a4bbf066dc02a0f73ded27114f0.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564320
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[libc++] Reduce std::conjunction overhead (#124259)\""
         },
         "platforms": [
