@@ -293,6 +293,11 @@ def build_target(android_base: Path, clang_version: version.Version,
     env['LLVM_PREBUILTS_VERSION'] = 'clang-dev'
     env['LLVM_RELEASE_VERSION'] = clang_version.major_version()
     env['LLVM_NEXT'] = 'true'
+
+    # FIXME: Temporarily turn off MLGO since the new model requires an
+    # additional flag.
+    env['THINLTO_USE_MLGO'] = 'false'
+
     if no_mlgo:
         env['THINLTO_USE_MLGO'] = 'false'
 
