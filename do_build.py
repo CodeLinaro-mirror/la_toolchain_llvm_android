@@ -245,26 +245,34 @@ def install_wrappers(llvm_install_path: Path, llvm_next=False) -> None:
     clang_tidy_sh_path = paths.SCRIPTS_DIR / 'clang-tidy.sh'
     bin_path = llvm_install_path / 'bin'
     clang_path = bin_path / 'clang'
-    clang_real_path = bin_path / 'clang.real'
+    clang_real_path = bin_path / 'clang-real'
+    clang_real_extra_path = bin_path / 'clang.real'
     clangxx_path = bin_path / 'clang++'
-    clangxx_real_path = bin_path / 'clang++.real'
+    clangxx_real_path = bin_path / 'clang++-real'
+    clangxx_real_extra_path = bin_path / 'clang++.real'
     clang_tidy_path = bin_path / 'clang-tidy'
-    clang_tidy_real_path = bin_path / 'clang-tidy.real'
+    clang_tidy_real_path = bin_path / 'clang-tidy-real'
+    clang_tidy_real_extra_path = bin_path / 'clang-tidy.real'
 
-    # Rename clang and clang++ to clang.real and clang++.real.
+    # Rename clang and clang++ to clang-real and clang++-real.
     # clang and clang-tidy may already be moved by this script if we use a
-    # prebuilt clang. So we only move them if clang.real and clang-tidy.real
+    # prebuilt clang. So we only move them if clang-real and clang-tidy-real
     # doesn't exist.
     if not clang_real_path.exists():
         clang_path.rename(clang_real_path)
-    clang_tidy_real_path = clang_tidy_path.parent / (clang_tidy_path.name + '.real')
+    clang_tidy_real_path = clang_tidy_path.parent / (clang_tidy_path.name + '-real')
     if not clang_tidy_real_path.exists():
         clang_tidy_path.rename(clang_tidy_real_path)
     clang_path.unlink(missing_ok=True)
     clangxx_path.unlink(missing_ok=True)
     clang_tidy_path.unlink(missing_ok=True)
     clangxx_real_path.unlink(missing_ok=True)
-    clangxx_real_path.symlink_to('clang.real')
+    clangxx_real_path.symlink_to('clang-real')
+
+    # Extra parts for now
+    clang_real_extra_path.symlink_to('clang-real')
+    clangxx_real_extra_path.symlink_to('clang-real')
+    clang_tidy_real_extra_path.symlink_to('clang-tidy-real')
 
     shutil.copy2(wrapper_path, clang_path)
     shutil.copy2(wrapper_path, clangxx_path)
@@ -272,10 +280,10 @@ def install_wrappers(llvm_install_path: Path, llvm_next=False) -> None:
     shutil.copy2(bisect_path, bin_path)
     shutil.copy2(clang_tidy_sh_path, bin_path)
 
-    # point clang-cl to clang.real instead of clang (which is the wrapper)
+    # point clang-cl to clang-real instead of clang (which is the wrapper)
     clangcl_path = bin_path / 'clang-cl'
     clangcl_path.unlink()
-    clangcl_path.symlink_to('clang.real')
+    clangcl_path.symlink_to('clang-real')
 
 
 def install_license_files(install_dir: Path) -> None:
@@ -728,8 +736,11 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                             'clang++\n'
                             'clang.real\n'
                             'clang++.real\n'
+                            'clang-real\n'
+                            'clang++-real\n'
                             'clang-tidy\n'
                             'clang-tidy.real\n'
+                            'clang-tidy-real\n'
                             '../lib/libc++.so\n'
                             'lld\n'
                             'ld64.lld\n'
