@@ -25,7 +25,7 @@ import sys
 import context
 from llvm_android import paths, utils
 
-sys.path.append(str(paths.TOOLCHAIN_UTILS_DIR / 'llvm_tools'))
+sys.path.append(str(paths.TOOLCHAIN_UTILS_DIR / 'py' / 'bin' / 'llvm_tools'))
 #pylint: disable=wrong-import-position,wrong-import-order
 import git_llvm_rev
 #pylint: enable=wrong-import-position,wrong-import-order

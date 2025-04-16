@@ -46,7 +46,7 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
     assert failure_mode, "Invalid failure_mode"
     patch_manager_cmd = [
         sys.executable,
-        str(paths.TOOLCHAIN_UTILS_DIR / 'llvm_tools' / 'patch_manager.py'),
+        str(paths.TOOLCHAIN_UTILS_DIR / 'py' / 'bin' / 'llvm_tools' / 'patch_manager.py'),
         '--svn_version', str(svn_version),
         '--patch_metadata_file', str(patch_json),
         '--src_path', str(source_dir),
