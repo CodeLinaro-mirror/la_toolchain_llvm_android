@@ -550,6 +550,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MTE] decide whether to tag global in AsmPrinter (#135891)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9ed4c705ac1c5c8797f328694f6cd22fbcdae03b.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 572390
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [MTE] do not tag zero sized globals (#136020)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6bac20b391edce2bde348e59f5be2143157304b5.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 572391
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
