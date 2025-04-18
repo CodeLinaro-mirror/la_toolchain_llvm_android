@@ -410,6 +410,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Fix stray usage of _LIBCPP_HAS_NO_WIDE_CHARACTERS on Windows"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bcfd9f81e1bc9954d616ffbb8625099916bebd5b.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 564267
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Also provide an alignment assumption for vector in C++03 mode (#124839)"
         },
         "platforms": [
@@ -489,6 +503,20 @@
         "version_range": {
             "from": 563880,
             "until": 565310
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Reduce the dependency of the locale base API on the base system from the headers (#117764)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f00b32e2d0ee666d32f1ddd0c687e269fab95b44.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 565900
         }
     },
     {
