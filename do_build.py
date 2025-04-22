@@ -514,7 +514,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     strip_cmd = Builder.toolchain.strip
 
     for binary in bin_dir.iterdir():
-        if binary.is_file():
+        if binary.is_symlink() or binary.is_file():
             if binary.name not in necessary_bin_files:
                 if not builders_package:
                     binary.unlink()
