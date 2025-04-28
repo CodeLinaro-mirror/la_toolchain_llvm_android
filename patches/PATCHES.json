@@ -620,6 +620,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Fix connecting via abstract socket (#136466)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/488eeb3ae508221f8e476bbc9d2e9f014542862e.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573315
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Fix Windows build (#137414)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/935bc84158e933239047de69b9edc77969b5c70c.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573330
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Skip tests if socket name is longer than 107 bytes (#137405)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6c78dedc14e7431aa0dd92b9dd8d35bed3e0ed7d.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573331
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
