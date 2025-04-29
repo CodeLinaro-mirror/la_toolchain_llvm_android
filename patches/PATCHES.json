@@ -620,6 +620,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [lld] Merge equivalent symbols found during ICF (#134342)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8389d6fad76bd880f02bddce7f0f2612ff0afc40.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 572756
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix connecting via abstract socket (#136466)"
         },
         "platforms": [
