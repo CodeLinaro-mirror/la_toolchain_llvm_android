@@ -578,6 +578,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][SME2] Don't preserve ZT0 around SME ABI routines (#132722)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/107260cc29368070bba815d94f9d5b7cec1df7d0.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 569778
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [MTE] decide whether to tag global in AsmPrinter (#135891)"
         },
         "platforms": [
@@ -601,6 +615,76 @@
         "version_range": {
             "from": 563880,
             "until": 572391
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [lld] Merge equivalent symbols found during ICF (#134342)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8389d6fad76bd880f02bddce7f0f2612ff0afc40.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 572756
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64][SME] Allow spills of ZT0 around SME ABI routines again (#136726)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8c7a2ce01a77c96028fe2c8566f65c45ad9408d3.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 573249
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Fix connecting via abstract socket (#136466)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/488eeb3ae508221f8e476bbc9d2e9f014542862e.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573315
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Fix Windows build (#137414)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/935bc84158e933239047de69b9edc77969b5c70c.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573330
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Skip tests if socket name is longer than 107 bytes (#137405)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6c78dedc14e7431aa0dd92b9dd8d35bed3e0ed7d.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 573331
         }
     },
     {
