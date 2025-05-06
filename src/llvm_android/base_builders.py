@@ -739,6 +739,7 @@ class LLVMBuilder(LLVMBaseBuilder):
 
         defines['LLVM_ENABLE_PROJECTS'] = ';'.join(sorted(self.llvm_projects))
         defines['LLVM_ENABLE_RUNTIMES'] = ';'.join(sorted(self.llvm_runtime_projects))
+        defines['LLVM_INCLUDE_DOCS'] = 'OFF' # We don't ship LLVM docs.
 
         defines['LLVM_TARGETS_TO_BUILD'] = ';'.join(sorted(self.llvm_targets))
         if isinstance(self._config, configs.MSVCConfig):
