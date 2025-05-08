@@ -368,6 +368,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [HWASan] fix missing BTI attribute on personality function thunks (#139138)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a76cf062a57097ad7971325551854bd5f3d38d94.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 574745
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
