@@ -290,7 +290,7 @@ class Stage2Builder(base_builders.LLVMBuilder):
         lldb_wrapper_path = self.install_dir / 'bin' / 'lldb.sh'
         lldb_wrapper_path.write_text(textwrap.dedent(f"""\
             #!/bin/bash
-            CURDIR=$(cd $(dirname $0) && pwd)
+            CURDIR=$(cd "$(dirname "$0")" && pwd)
             export PYTHONHOME="$CURDIR/../python3"
             export {self.ld_library_path_env_name}="$CURDIR/../python3/lib:${self.ld_library_path_env_name}"
             "$CURDIR/lldb" "$@"
