@@ -29,15 +29,6 @@ from typing import Dict, List, Optional, Set
 import context
 from llvm_android import hosts, paths, utils, version
 
-STDERR_REDIRECT_KEY = 'ANDROID_LLVM_STDERR_REDIRECT'
-PREBUILT_COMPILER_PATH_KEY = 'ANDROID_LLVM_PREBUILT_COMPILER_PATH'
-DISABLED_WARNINGS_KEY = 'ANDROID_LLVM_FALLBACK_DISABLED_WARNINGS'
-
-# We may introduce some new warnings after rebasing and we need to disable them
-# before we fix those warnings.
-DISABLED_WARNINGS = [
-]
-
 
 class ProfileHandler(object):
 
@@ -180,17 +171,6 @@ def parse_args():
         action='store_false',
         dest='clean_built_target',
         help='Do not remove target output.')
-    fallback_group = parser.add_mutually_exclusive_group()
-    fallback_group.add_argument(
-        '--enable-fallback',
-        action='store_true',
-        default=False,
-        help='Enable clang wrapper fallback to older prebuilts.')
-    fallback_group.add_argument(
-        '--disable-fallback',
-        action='store_false',
-        dest='enable_fallback',
-        help='Disable clang wrapper fallback to older prebuilts.')
 
     profile_generate_group = parser.add_mutually_exclusive_group()
     profile_generate_group.add_argument(
@@ -250,8 +230,7 @@ def extract_clang_version(clang_install: Path) -> version.Version:
 
 def build_target(android_base: Path, clang_version: version.Version,
                  target: str, modules: List[str],
-                 max_jobs: int, enable_fallback: bool, with_tidy: bool,
-                 no_mlgo: bool,
+                 max_jobs: int, with_tidy: bool, no_mlgo: bool,
                  profiler: Optional[ProfileHandler]=None) -> None:
     jobs = '-j{}'.format(max(1, min(max_jobs, multiprocessing.cpu_count())))
     try:
@@ -277,18 +256,6 @@ def build_target(android_base: Path, clang_version: version.Version,
     # Ninja.  We use it for disabling warnings in the compiler wrapper and for
     # setting path to write PGO profiles.
     env['ALLOW_NINJA_ENV'] = 'true'
-
-    if enable_fallback:
-        redirect_key = STDERR_REDIRECT_KEY
-        if 'DIST_DIR' in env:
-            redirect_path = Path(env['DIST_DIR']) / 'logs' / 'clang-error.log'
-        else:
-            redirect_path = (android_base / 'out' / 'clang-error.log').resolve()
-            redirect_path.unlink(missing_ok=True)
-        env[redirect_key] = str(redirect_path)
-        fallback_path = str(paths.CLANG_PREBUILT_DIR / 'bin')
-        env[PREBUILT_COMPILER_PATH_KEY] = fallback_path
-        env[DISABLED_WARNINGS_KEY] = ' '.join(DISABLED_WARNINGS)
 
     env['LLVM_PREBUILTS_VERSION'] = 'clang-dev'
     env['LLVM_RELEASE_VERSION'] = clang_version.major_version()
@@ -334,7 +301,7 @@ def build_target(android_base: Path, clang_version: version.Version,
 
 def test_device(android_base: Path, clang_version: version.Version, device: List[str],
                 modules: List[str], max_jobs: int, clean_output: str, flashall_path: Optional[Path],
-                enable_fallback: bool, with_tidy: bool, no_mlgo: bool) -> bool:
+                with_tidy: bool, no_mlgo: bool) -> bool:
     [label, target] = device[-1].split(':')
     # If current device is not connected correctly we will just skip it.
     if label != 'device':
@@ -344,7 +311,7 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
         target = 'aosp_' + target + '-eng'
     try:
         build_target(android_base, clang_version, target, modules, max_jobs,
-                     enable_fallback, with_tidy, no_mlgo)
+                     with_tidy, no_mlgo)
         if flashall_path is None:
             bin_path = (android_base / 'out' / 'host' /
                         hosts.build_host().os_tag / 'bin')
@@ -462,8 +429,7 @@ def main():
             profiler = None
 
         build_target(Path(args.android_path), clang_version, args.target,
-                     modules, args.jobs,
-                     args.enable_fallback, args.with_tidy, no_mlgo, profiler)
+                     modules, args.jobs, args.with_tidy, no_mlgo, profiler)
 
         if profiler is not None:
             profiler.mergeProfiles()
@@ -476,7 +442,7 @@ def main():
             result = test_device(Path(args.android_path), clang_version, device,
                                  modules, args.jobs, args.clean_built_target,
                                  Path(args.flashall_path) if args.flashall_path else None,
-                                 args.enable_fallback, args.with_tidy, no_mlgo)
+                                 args.with_tidy, no_mlgo)
             if not result and not args.keep_going:
                 break
 
