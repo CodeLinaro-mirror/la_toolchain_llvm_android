@@ -354,6 +354,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ARM] Speedups for CombineBaseUpdate. (#129725)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/86cf4ed7e9510a6828e95e8b36893eec116c9cf9.patch",
+        "version_range": {
+            "from": 547379,
+            "until": 563880
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [InstCombine] Check nowrap flags when folding comparison of GEPs with the same base pointer (#121892)"
         },
         "platforms": [
@@ -555,9 +569,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/86cf4ed7e9510a6828e95e8b36893eec116c9cf9.patch",
+        "rel_patch_path": "cherry/86cf4ed7e9510a6828e95e8b36893eec116c9cf9-v2.patch",
         "version_range": {
-            "from": 547379,
+            "from": 563880,
             "until": 567490
         }
     },
@@ -712,7 +726,7 @@
         "rel_patch_path": "Add-stubs-and-headers-for-nl_types-APIs.patch",
         "version_range": {
             "from": 370808,
-            "until": null
+            "until": 563880
         }
     },
     {
@@ -880,6 +894,34 @@
         "rel_patch_path": "Revert-libc-Don-t-implement-stdatomic.h-before-C-23-v3.patch",
         "version_range": {
             "from": 569304,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Add stubs and headers for nl_types APIs."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Add-stubs-and-headers-for-nl_types-APIs-v2.patch",
+        "version_range": {
+            "from": 563880,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Disable integer sanitizer for __libcxx_blsr"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Disable-integer-sanitizer-for-__libcpp_blsr.patch",
+        "version_range": {
+            "from": 563880,
             "until": null
         }
     }
