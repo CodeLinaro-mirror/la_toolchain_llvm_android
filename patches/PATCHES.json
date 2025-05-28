@@ -910,5 +910,19 @@
             "from": 563880,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Disable integer sanitizer for __libcxx_blsr"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Disable-integer-sanitizer-for-__libcpp_blsr.patch",
+        "version_range": {
+            "from": 563880,
+            "until": null
+        }
     }
 ]
