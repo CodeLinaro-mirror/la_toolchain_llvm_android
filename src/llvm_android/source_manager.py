@@ -154,18 +154,7 @@ def get_source_info(source_dir: str, patch_output: str) -> PatchInfo:
 
     return pi
 
-def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continue_on_patch_errors=False) -> Optional[ToolchainError]:
-    """Setup toolchain sources into paths.LLVM_PATH.
-
-    Copy toolchain/llvm-project into paths.LLVM_PATH or clone from upstream.
-    Apply patches per the specification in
-    toolchain/llvm_android/patches/PATCHES.json.  The function overwrites
-    paths.LLVM_PATH only if necessary to avoid recompiles during incremental builds.
-    """
-    # Return the error messages upon failure.
-    ret: Optional[ToolchainError] = []
-    source_dir = paths.LLVM_PATH
-    tmp_source_dir = source_dir.parent / (source_dir.name + '.tmp')
+def setup_temp_llvm_project(tmp_source_dir, git_am, llvm_rev) -> None:
     if os.path.exists(tmp_source_dir):
         shutil.rmtree(tmp_source_dir)
 
@@ -216,6 +205,20 @@ def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continu
             subprocess.check_call(cmd)
             cmd = ['git', 'reset', '--hard', 'FETCH_HEAD']
             subprocess.check_call(cmd)
+
+def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continue_on_patch_errors=False) -> Optional[ToolchainError]:
+    """Setup toolchain sources into paths.LLVM_PATH.
+
+    Copy toolchain/llvm-project into paths.LLVM_PATH or clone from upstream.
+    Apply patches per the specification in
+    toolchain/llvm_android/patches/PATCHES.json.  The function overwrites
+    paths.LLVM_PATH only if necessary to avoid recompiles during incremental builds.
+    """
+    # Return the error messages upon failure.
+    ret: Optional[ToolchainError] = []
+    source_dir = paths.LLVM_PATH
+    tmp_source_dir = source_dir.parent / (source_dir.name + '.tmp')
+    setup_temp_llvm_project(tmp_source_dir, git_am, llvm_rev)
 
     # patch source tree
     patch_dir = paths.SCRIPTS_DIR / 'patches'
