@@ -1133,8 +1133,6 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
     @property
     def cmake_defines(self) -> Dict[str, str]:
-        executor = paths.LLVM_PATH / 'libcxx' / 'utils' / 'adb_run.py'
-
         defines: Dict[str, str] = super().cmake_defines
         # debug info is needed for AutoFDO
         defines['CMAKE_BUILD_TYPE'] = 'RelWithDebInfo'
@@ -1148,14 +1146,10 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         defines['CMAKE_SYSROOT'] = self._config.sysroot
 
         defines['LIBCXXABI_ENABLE_SHARED'] = 'OFF'
-        defines['LIBCXXABI_EXECUTOR'] = executor
         defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'OFF'
         if self._config.platform:
             defines['LIBCXXABI_NON_DEMANGLING_TERMINATE'] = 'ON'
             defines['LIBCXXABI_STATIC_DEMANGLE_LIBRARY'] = 'ON'
-            # TODO: Set LIBCXXABI_TEST_CONFIG for the platform libc++.so.
-        else:
-            defines['LIBCXXABI_TEST_CONFIG'] = 'llvm-libc++abi-android-ndk.cfg.in'
 
         if self._is_noexcept:
             defines['LIBCXX_ENABLE_SHARED'] = 'OFF'
@@ -1171,22 +1165,30 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         defines['LIBCXX_ENABLE_ABI_LINKER_SCRIPT'] = 'OFF'
         defines['LIBCXX_ENABLE_STATIC_ABI_LIBRARY'] = 'ON'
         defines['LIBCXX_STATICALLY_LINK_ABI_IN_SHARED_LIBRARY'] = 'ON'
-        defines['LIBCXX_EXECUTOR'] = executor
+
         if self._config.platform:
             defines['LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY'] = 'ON'
-            # TODO: Set LIBCXX_TEST_CONFIG for the platform libc++.so.
         else:
             defines['LIBCXX_SHARED_OUTPUT_NAME'] = 'c++_shared'
             defines['LIBCXX_STATICALLY_LINK_ABI_IN_STATIC_LIBRARY'] = 'OFF'
             defines['LIBCXX_ABI_VERSION'] = '1'
             defines['LIBCXX_ABI_NAMESPACE'] = '__ndk1'
-            defines['LIBCXX_TEST_CONFIG'] = 'llvm-libc++-android-ndk.cfg.in'
+
+
+        defines['LIBCXX_TEST_CONFIG'] = 'llvm-libc++-android.cfg.in'
+        defines['LIBCXXABI_TEST_CONFIG'] = 'llvm-libc++abi-android.cfg.in'
 
         # There is a check for ANDROID_NATIVE_API_LEVEL in
         # HandleLLVMOptions.cmake that determines the value of
         # LLVM_FORCE_SMALLFILE_FOR_ANDROID and _FILE_OFFSET_BITS. Maybe it
         # should use a different name for the API level macro in CMake?
         defines['ANDROID_NATIVE_API_LEVEL'] = str(self._config.api_level)
+
+        # Testing on-device
+        TEST_PARAMS = f"executor={paths.LLVM_PATH}/libcxx/utils/adb_run.py;target_triple={self._config.base_llvm_triple}33"
+        defines['LLVM_LIT_ARGS'] = "-sv --xunit-xml-output test-results.xml --filter-out \"(permissions.pass.cpp|print.file.pass.cpp|println.file.pass.cpp|vprint_nonunicode.file.pass.cpp|vprint_unicode.file.pass.cpp)\""
+        defines['LIBCXX_TEST_PARAMS'] = TEST_PARAMS
+        defines['LIBCXXABI_TEST_PARAMS'] = TEST_PARAMS
 
         return defines
 
