@@ -695,24 +695,70 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         with (install_dir / 'BUILD.bazel').open('w') as bazel_file:
             bazel_file.write(
                 textwrap.dedent("""\
-                    package(default_visibility = ["//visibility:public"])
+                    load("@rules_python//python:defs.bzl", "py_runtime")
+
+                    package(default_visibility = ["//visibility:private"])
 
                     filegroup(
-                        name = "binaries",
+                        name = "common_binaries",
                         srcs = glob([
                             "bin/*",
                             "lib/*",
-                            "lib/x86_64-unknown-linux-gnu/*",
                         ]),
+                        visibility = ["//visibility:public"],
                     )
 
                     filegroup(
-                        name = "includes",
+                        name = "common_includes",
                         srcs = glob([
                             "lib/clang/*/include/**",
                             "include/c++/**",
-                            "include/x86_64-unknown-linux-gnu/c++/**",
                         ]),
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "glibc_binaries",
+                        srcs = glob([
+                            "lib/x86_64-unknown-linux-gnu/*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "glibc_includes",
+                        srcs = glob([
+                            "include/x86_64-unknown-linux-gnu/c++/**",
+                        ]) + [
+                            ":common_includes",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "musl_binaries",
+                        srcs = glob([
+                            "bin/*",
+                            "lib/*",
+                            "lib/x86_64-unknown-linux-musl/*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "musl_includes",
+                        srcs = glob([
+                            "lib/clang/*/include/**",
+                            "include/c++/**",
+                            "include/x86_64-unknown-linux-musl/c++/**",
+                        ]) + [
+                            ":common_includes",
+                        ],
+                        visibility = ["//visibility:public"],
                     )
 
                     # Special python3 for u-boot.
@@ -728,6 +774,14 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                         python_version = "PY3",
                         visibility = ["//u-boot:__subpackages__"],
                     )
+
+                    exports_files([
+                        "bin/clang",
+                        "bin/clang++",
+                        "bin/llvm-ar",
+                        "bin/llvm-objcopy",
+                        "bin/llvm-strip",
+                    ])
                     """))
 
         # Create RBE input files.
