@@ -13,7 +13,7 @@ trap cleanup EXIT
 cd $TOP
 
 # Fetch aosp-main repo
-repo init -u https://android.googlesource.com/platform/manifest -b main --depth=1 < /dev/null
+repo init -u https://android.googlesource.com/platform/manifest -b android-latest-release --depth=1 < /dev/null
 repo sync -c
 
 # Apply local patches
