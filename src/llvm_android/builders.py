@@ -290,14 +290,6 @@ class Stage2Builder(base_builders.LLVMBuilder):
         """))
         lldb_wrapper_path.chmod(0o755)
 
-        # Update rpath for lldb so we don't need to rely on DYLD_LIBRARY_PATH for darwin.  We need
-        # to re-sign the binary so it continues working out of prebuilts/clang.
-        if self._config.target_os.is_darwin:
-            lldb_binary = self.install_dir / 'bin' / 'lldb'
-            utils.check_call(['install_name_tool', lldb_binary,
-                              '-add_rpath', '@loader_path/../python3/lib'])
-            utils.check_call(['codesign', '-f', '-v', '-s', '-', lldb_binary])
-
     def test(self) -> None:
         if isinstance(self._config, configs.LinuxMuslConfig):
             # musl cannot run check-cxx yet
