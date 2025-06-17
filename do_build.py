@@ -740,8 +740,6 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                     filegroup(
                         name = "musl_binaries",
                         srcs = glob([
-                            "bin/*",
-                            "lib/*",
                             "lib/x86_64-unknown-linux-musl/*",
                         ]) + [
                             ":common_binaries",
