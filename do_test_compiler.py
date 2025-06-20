@@ -207,7 +207,7 @@ def copy_clang(android_base: Path, clang_path: Path) -> None:
 def get_connected_device_list() -> List[List[str]]:
     try:
         # Get current connected device list.
-        out = subprocess.check_output(['adb', 'devices', '-l'], text=True)
+        out = utils.check_output(['adb', 'devices', '-l'])
         devices = [x.split() for x in out.strip().split('\n')[1:]]
         return devices
     except subprocess.CalledProcessError:
@@ -234,13 +234,13 @@ def build_target(android_base: Path, clang_version: version.Version,
                  profiler: Optional[ProfileHandler]=None) -> None:
     jobs = '-j{}'.format(max(1, min(max_jobs, multiprocessing.cpu_count())))
     try:
-        env_out = subprocess.check_output(
+        env_out = utils.check_output(
             [
                 'bash', '-c', '. ./build/envsetup.sh;'
                 'lunch ' + target + ' >/dev/null && env'
             ],
-            text=True,
-            cwd=android_base)
+            cwd=android_base
+        )
     except subprocess.CalledProcessError:
         raise RuntimeError('Failed to lunch ' + target)
 
@@ -287,11 +287,12 @@ def build_target(android_base: Path, clang_version: version.Version,
     modulesList = ' '.join(modules)
     print('Start building target %s and modules %s.' % (target, modulesList))
     try:
-        subprocess.check_call(
+        utils.check_call(
             ['/bin/bash', '-c', 'build/soong/soong_ui.bash --make-mode ' + jobs + \
              ' -k100 ' + modulesList],
             cwd=android_base,
-            env=env)
+            env=env
+        )
     except subprocess.CalledProcessError:
         errors = parse_error_log()
         print("===== Error Summary =====")
@@ -315,14 +316,14 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
         if flashall_path is None:
             bin_path = (android_base / 'out' / 'host' /
                         hosts.build_host().os_tag / 'bin')
-            subprocess.check_call(
+            utils.check_call(
                 ['./adb', '-s', device[0], 'reboot', 'bootloader'],
                 cwd=bin_path)
-            subprocess.check_call(
+            utils.check_call(
                 ['./fastboot', '-s', device[0], 'flashall'], cwd=bin_path)
         else:
             os.environ['ANDROID_SERIAL'] = device[0]
-            subprocess.check_call(['./flashall'], cwd=flashall_path)
+            utils.check_call(['./flashall'], cwd=flashall_path)
         result = True
     except subprocess.CalledProcessError:
         print('Flashing/testing android for target %s failed!' % target)
