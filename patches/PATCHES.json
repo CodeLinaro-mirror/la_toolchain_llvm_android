@@ -886,6 +886,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "Revert [Clang][counted_by] Refactor __builtin_dynamic_object_size on FAMs (#122198)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-Clang-counted_by-Refactor-__builtin_dynamic_o.patch",
+        "version_range": {
+            "from": 563729,
+            "until": 563880
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Disable std/utilities/charconv/charconv.msvc/test.pass.cpp test"
         },
         "platforms": [
