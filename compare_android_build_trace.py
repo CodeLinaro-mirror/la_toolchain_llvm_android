@@ -13,6 +13,7 @@
 # limitations under the License.
 #
 import argparse
+import json
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 import itertools
@@ -224,6 +225,57 @@ class BuildConfiguration:
         self.desc = ", ".join([trace.name for trace in build_traces])
         self.build_traces = build_traces
 
+    @classmethod
+    def from_soong_traces(
+        cls,
+        build_configuration_name: str,
+        paths: List[Path],
+    ) -> "BuildConfiguration":
+        """
+        Initialize a build configuration from a list of Soong-generated build trace files.
+        """
+
+        traces: List[BuildTrace] = []
+
+        for path in paths:
+            targets: List[Target] = []
+
+            with path.open() as file:
+                file_data = json.load(file)
+
+                for entry in file_data:
+                    if "name" not in entry or "dur" not in entry:
+                        continue
+
+                    target_path = Path(entry["name"])
+                    time_s = entry["dur"] / Target.MICROSEC_IN_SEC
+                    module_name = None
+                    module_type = None
+                    rule_name = None
+
+                    tags = entry.get("args", {}).get("tags")
+                    if tags:
+                        module_name = tags.get("module_name")
+                        module_type = tags.get("module_type")
+                        rule_name = tags.get("rule_name")
+
+                    target = Target(
+                        target_path,
+                        time_s,
+                        module_name,
+                        module_type,
+                        rule_name,
+                    )
+                    targets.append(target)
+
+                trace = BuildTrace(str(path), targets)
+                traces.append(trace)
+
+        return cls(
+            build_configuration_name,
+            traces,
+        )
+
 
 def compare_android_build_configurations(
     paths_a: List[Path],
@@ -240,6 +292,9 @@ def compare_android_build_configurations(
     generated charts are written to a single HTML file at the specified output
     path.
     """
+
+    build_a = BuildConfiguration.from_soong_traces("a", paths_a)
+    build_b = BuildConfiguration.from_soong_traces("b", paths_b)
 
     return
 
