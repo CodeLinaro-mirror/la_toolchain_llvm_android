@@ -41,13 +41,22 @@ __doc__ = (
     " runtime)."
 )
 
+example_usage = f"""
+Examples:
+    python %(prog)s -a build.trace.a.1 -a build.trace.a.2 -b build.trace.b.1 -b build.trace.b.2 --ie .o --ie .so -s 60 -o ./a-b-build.html
+"""
+
 
 def parse_args() -> argparse.Namespace:
     """
     Parse program command line arguments.
     """
 
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=example_usage,
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
 
     parser.add_argument(
         "-a",
@@ -77,7 +86,7 @@ def parse_args() -> argparse.Namespace:
         "--group-by",
         choices=[Target.NAME_KEY, Target.MODULE_NAME_KEY],
         default=Target.NAME_KEY,
-        help="How to group target data into build units",
+        help=f"How to group target data into build units. Default is {Target.NAME_KEY}.",
     )
     parser.add_argument(
         "--include-module-names",
@@ -664,6 +673,121 @@ def get_bar_chart_comparison(
     return fig
 
 
+def get_bar_chart(
+    build: BuildConfiguration,
+    filters: Filters,
+    limit: int = 10,
+    confidence_lvl: float = 0.95,
+) -> plotting.figure:
+    """
+    Generates a bar chart showing the build units with the K (limit) largest
+    build times of a given build configuration.
+
+    The traces of a build configuration are first filtered before being
+    aggregated to calculate mean build times and confidence intervals.
+
+    The y-axis shows build times, and the x-axis shows build unit names. Each
+    build unit name has a bar with a confidence interval.
+    """
+
+    filtered_build_trace_dfs = build.get_filtered_build_trace_dfs(filters)
+
+    if filtered_build_trace_dfs is None:
+        return plotting.figure()
+
+    merged_df = aggregate_dfs(
+        filtered_build_trace_dfs,
+        confidence_lvl,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+
+    k_largest_units_df = merged_df.nlargest(limit, Target.TIME_S_KEY).sort_values(
+        by=Target.TIME_S_KEY, ascending=False
+    )
+
+    build_unit_names = k_largest_units_df[
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY
+    ].to_list()
+
+    data = {
+        "build_unit_names": build_unit_names,
+        "time_s": k_largest_units_df[Target.TIME_S_KEY].to_list(),
+        "moe": k_largest_units_df[BuildConfiguration.MOE_KEY].to_list(),
+        "ci_lower": k_largest_units_df[BuildConfiguration.CI_LOWER_KEY].to_list(),
+        "ci_upper": k_largest_units_df[BuildConfiguration.CI_UPPER_KEY].to_list(),
+    }
+
+    source = models.ColumnDataSource(data=data)
+
+    fig = plotting.figure(
+        x_range=build_unit_names,
+        y_range=ranges.Range1d(0, max(data["time_s"]) * 1.5),
+        title=(
+            f"Largest Build Times for Build {build.name} ({build.desc})\nGrouped by"
+            f" {filters.group_by}\n{limit} largest build times shown"
+        ),
+        width=FIGURE_WIDTH,
+        height=FIGURE_HEIGHT,
+    )
+
+    bar_width = 0.6
+
+    bar_glyph = fig.vbar(
+        x="build_unit_names",
+        top="time_s",
+        source=source,
+        width=bar_width,
+        color="#8e44ad",
+        legend_label=f"Build {build.name} ({build.desc})",
+    )
+
+    ci_desc = f"Margin of Error (Confidence Level {confidence_lvl})"
+
+    fig.segment(
+        x0=transform.dodge("build_unit_names", -bar_width / 2, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", bar_width / 2, range=fig.x_range),
+        y0="ci_lower",
+        y1="ci_lower",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+    fig.segment(
+        x0=transform.dodge("build_unit_names", -bar_width / 2, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", bar_width / 2, range=fig.x_range),
+        y0="ci_upper",
+        y1="ci_upper",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+
+    fig.xgrid.grid_line_color = None
+    fig.xaxis.major_label_orientation = math.pi / 2
+    fig.xaxis.major_label_text_font_size = "16px"
+
+    fig.legend.location = "top_left"
+    fig.add_layout(fig.legend[0], "above")
+
+    fig.xaxis.formatter = models.CustomJSTickFormatter(
+        code="return tick.split('/').pop();"
+    )
+
+    fig.add_tools(
+        models.HoverTool(
+            tooltips=[
+                ("Build Unit", "@build_unit_names"),
+                (f"Time (s)", "@time_s{0.2f} ± @moe{0.2f}"),
+                ("Confidence Interval", "(@ci_lower{0.2f} - @ci_upper{0.2f})"),
+            ],
+            renderers=[bar_glyph],
+        ),
+    )
+
+    return fig
+
+
 def compare_android_build_configurations(
     paths_a: List[Path], paths_b: List[Path], output_file_path: Path, filters: Filters
 ):
@@ -681,11 +805,19 @@ def compare_android_build_configurations(
     build_b = BuildConfiguration.from_soong_traces("b", paths_b)
 
     bar = get_bar_chart_comparison(build_a, build_b, filters)
+    spacer1 = models.Div(text="", width=1, height=60)
+    bar_a = get_bar_chart(build_a, filters)
+    spacer2 = models.Div(text="", width=1, height=60)
+    bar_b = get_bar_chart(build_b, filters)
 
     plotting.output_file(output_file_path)
     plotting.save(
         layouts.column(
             bar,
+            spacer1,
+            bar_a,
+            spacer2,
+            bar_b,
         )
     )
 
