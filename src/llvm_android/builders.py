@@ -35,19 +35,19 @@ class SanitizerMapFileBuilder(base_builders.Builder):
         arch = self._config.target_arch
 
         lib_dir = self.output_toolchain.clang_lib_dir / 'lib' / 'linux'
-        self._build_sanitizer_map_file('asan', arch, lib_dir, 'ASAN')
-        self._build_sanitizer_map_file('ubsan_standalone', arch, lib_dir, 'ASAN')
+        self._build_sanitizer_map_file('asan', arch, lib_dir)
+        self._build_sanitizer_map_file('ubsan_standalone', arch, lib_dir)
         if super()._is_64bit():
-           self._build_sanitizer_map_file('tsan', arch, lib_dir, 'TSAN')
+           self._build_sanitizer_map_file('tsan', arch, lib_dir)
 
         if arch == hosts.Arch.AARCH64:
-            self._build_sanitizer_map_file('hwasan', arch, lib_dir, 'ASAN')
+            self._build_sanitizer_map_file('hwasan', arch, lib_dir)
 
     @staticmethod
-    def _build_sanitizer_map_file(san: str, arch: hosts.Arch, lib_dir: Path, section_name: str) -> None:
+    def _build_sanitizer_map_file(san: str, arch: hosts.Arch, lib_dir: Path) -> None:
         lib_file = lib_dir / f'libclang_rt.{san}-{arch.llvm_arch}-android.so'
         map_file = lib_dir / f'libclang_rt.{san}-{arch.llvm_arch}-android.map.txt'
-        mapfile.create_map_file(lib_file, map_file, section_name)
+        mapfile.create_map_file(lib_file, map_file)
 
 
 class Stage1Builder(base_builders.LLVMBuilder):

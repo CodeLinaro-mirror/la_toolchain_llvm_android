@@ -106,7 +106,7 @@ def build_kythe_corpus(builder: builders.Stage2Builder) -> None:
                            f'Unexpected failures: {unexpected}\n')
 
 
-def package(build_name: str) -> None:
+def package(_build_name: str) -> None:
     # Use SHA of toolchain/llvm-project in output file.  Fail build if we cannot
     # find the SHA.
     out_prefix = utils.check_output([

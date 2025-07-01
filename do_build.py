@@ -140,6 +140,7 @@ def build_llvm_for_windows(enable_assertions: bool,
         win_builder.svn_revision = android_version.get_svn_revision()
         win_builder.enable_assertions = enable_assertions
         win_builder.lto = enable_lto
+        win_builder.profdata_file = profdata_file
         win_builder.build()
 
     if build_simpleperf_readelf:

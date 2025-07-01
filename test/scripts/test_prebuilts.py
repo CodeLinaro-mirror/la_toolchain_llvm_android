@@ -256,7 +256,7 @@ def getKernelCL(revision: str, version: str, cl_number: Optional[str],
 
 
 def evaluateConfig(retry_policy: str, build: str, tag: str, branch: str,
-                   target: str, tests: List[str]) -> str:
+                   target: str) -> str:
     pending_row = CNSData.PendingWorkNodes.find(build, tag, branch, target)
     completed_row = CNSData.CompletedWorkNodes.find(build, tag, branch, target)
 
@@ -337,7 +337,7 @@ def invokeForrestRuns(cls, args):
         tests = config.tests
 
         evaluation = evaluateConfig(args.retry_policy, build, tag, branch,
-                                    target, tests)
+                                    target)
         if evaluation == 'skip':
             logging.info(f'Skipping previously-scheduled config {config}')
             continue

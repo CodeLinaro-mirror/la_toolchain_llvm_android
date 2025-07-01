@@ -99,7 +99,7 @@ class PatchInfo:
             link_text = patch_name
         return f'- [{link_text}]({url_prefix}{url_suffix})'
 
-def write_source_info(source_dir: str, pi: PatchInfo) -> None:
+def write_source_info(pi: PatchInfo) -> None:
     output = []
     base_revision = android_version.get_git_sha()
     github_url = 'https://github.com/llvm/llvm-project/commits/' + base_revision
@@ -116,7 +116,7 @@ def write_source_info(source_dir: str, pi: PatchInfo) -> None:
         outfile.write('\n'.join(output))
 
 
-def get_source_info(source_dir: str, patch_output: str) -> PatchInfo:
+def get_source_info(patch_output: str) -> PatchInfo:
     pi = PatchInfo()
     patches = patch_output.strip().splitlines()
     patches_iter = iter(patches)
@@ -230,8 +230,8 @@ def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continu
       patch_output = apply_patches(tmp_source_dir, svn_version, patch_json,
                                    patch_dir, git_am, failure_mode)
       logger().info(patch_output)
-      pi = get_source_info(tmp_source_dir, patch_output)
-      write_source_info(tmp_source_dir, pi)
+      pi = get_source_info(patch_output)
+      write_source_info(pi)
       ret = ToolchainError(ToolchainErrorCode.PATCH_ERROR, str(pi.failed_patches))
 
     # Copy tmp_source_dir to source_dir if they are different.  This avoids

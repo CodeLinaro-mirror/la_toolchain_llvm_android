@@ -20,7 +20,7 @@ from pathlib import Path
 import sys
 import subprocess
 
-def create_map_file(lib_file: Path, map_file: Path, section_name: str) -> None:
+def create_map_file(lib_file: Path, map_file: Path) -> None:
     """Creates a map_file for lib_file."""
     symbols = subprocess.check_output(['nm', '-g', '--defined-only', str(lib_file)],
                                       text=True)
@@ -53,4 +53,4 @@ def create_map_file(lib_file: Path, map_file: Path, section_name: str) -> None:
 
 # for testing and standalone usage.
 if __name__ == '__main__':
-    create_map_file(Path(sys.argv[1]), Path(sys.argv[2]), str(sys.argv[3]))
+    create_map_file(Path(sys.argv[1]), Path(sys.argv[2]))

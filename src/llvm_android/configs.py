@@ -45,7 +45,7 @@ class Config:
         """Returns path to c++ compiler."""
         return toolchain.cxx
 
-    def get_linker(self, toolchain: toolchains.Toolchain) -> Optional[Path]:
+    def get_linker(self, _toolchain: toolchains.Toolchain) -> Optional[Path]:
         """Returns the path to linker."""
         return None
 
