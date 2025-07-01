@@ -13,11 +13,17 @@
 # limitations under the License.
 #
 import argparse
-import json
-from pathlib import Path
-from typing import List, Tuple, Dict, Any
-import itertools
+from typing import Any, Dict, List, Tuple
 from dataclasses import dataclass
+from pathlib import Path
+import itertools
+
+from functools import lru_cache
+import json
+
+import pandas as pd
+import numpy as np
+from scipy import stats
 
 
 __doc__ = (
@@ -275,6 +281,203 @@ class BuildConfiguration:
             build_configuration_name,
             traces,
         )
+
+    @lru_cache()
+    def get_filtered_build_trace_dfs(
+        self, filters: Filters
+    ) -> List[pd.DataFrame] | None:
+        """
+        Apply given filters to the build configuration.
+
+        Returns:
+            A list of Pandas dataframes, where each DataFrame corresponds to a
+            filtered build trace.
+            None if there are no build units left after applying filters.
+
+        Consider refactoring this function to a regex-based system.
+        - See: https://googleplex-android-review.git.corp.google.com/c/toolchain/llvm_android/+/34313400/comment/a0e9e25f_b4df79d4/
+        """
+
+        filtered_traces = []
+        for trace in self.build_traces:
+            filtered_targets = []
+            for target in trace.targets:
+                if (
+                    (
+                        not filters.include_module_names
+                        or target.module_name in filters.include_module_names
+                    )
+                    and (
+                        not filters.exclude_module_names
+                        or target.module_name not in filters.exclude_module_names
+                    )
+                    and (
+                        not filters.include_module_types
+                        or target.module_type in filters.include_module_types
+                    )
+                    and (
+                        not filters.exclude_module_types
+                        or target.module_type not in filters.exclude_module_types
+                    )
+                    and (
+                        not filters.include_rule_names
+                        or target.rule_name in filters.include_rule_names
+                    )
+                    and (
+                        not filters.exclude_rule_names
+                        or target.rule_name not in filters.exclude_rule_names
+                    )
+                    and (
+                        not filters.include_extensions
+                        or target.extension in filters.include_extensions
+                    )
+                    and (
+                        not filters.exclude_extensions
+                        or target.extension not in filters.exclude_extensions
+                    )
+                ):
+                    filtered_targets.append(target)
+
+            if not filtered_targets:
+                continue
+
+            filtered_trace = (
+                pd.DataFrame([target.to_dict() for target in filtered_targets])
+                .groupby(filters.group_by)[Target.TIME_S_KEY]
+                .sum()
+                .reset_index()
+            )
+
+            filtered_trace.rename(
+                columns={filters.group_by: self.GENERIC_BUILD_UNIT_NAME_KEY},
+                inplace=True,
+            )
+
+            if filters.remove_lower_than_s:
+                filtered_trace = filtered_trace[
+                    filtered_trace[Target.TIME_S_KEY] > filters.remove_lower_than_s
+                ].reset_index()
+
+            if not filtered_trace.empty:
+                filtered_traces.append(filtered_trace)
+
+        if not filtered_traces:
+            return None
+
+        return filtered_traces
+
+
+def aggregate_dfs(
+    dfs: List[pd.DataFrame], confidence_lvl: float, group_by_key: str, value_key: str
+) -> pd.DataFrame:
+    """
+    Aggregates a list of DataFrames by calculating the mean, margin of error,
+    and confidence intervals for a specified value key, grouped by a specific
+    group-by key.
+
+    Args:
+        dfs: A list of DataFrames to aggregate.
+        confidence_lvl: The confidence level for calculating the margin of error
+            (e.g., 0.95 for a 95% confidence interval).
+        group_by_key: The column name to group the data by.
+            (e.g., BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY).
+        value_key: The column name containing the values to aggregate.
+            (e.g., Target.TIME_S_KEY).
+
+    Returns:
+        A new DataFrame with the aggregated data, including the mean,
+        margin of error, and lower and upper bounds of the confidence interval.
+    """
+
+    if not dfs:
+        return pd.DataFrame()
+
+    def calc_moe(series: pd.Series) -> float:
+        n = len(series)
+        if n < 2:
+            return 0.0
+
+        t_critical = stats.t.ppf(confidence_lvl + (1 - confidence_lvl) / 2, n - 1)
+        std_error = series.std() / np.sqrt(n)
+
+        moe = t_critical * std_error
+
+        return moe
+
+    dfs_concat = pd.concat(dfs, ignore_index=True)
+
+    agg_kwargs = {
+        value_key: (value_key, "mean"),
+        BuildConfiguration.MOE_KEY: (value_key, calc_moe),
+    }
+
+    # Need to do a kwargs expansion here because the columns to aggregate on are dynamicly chosen
+    agg = dfs_concat.groupby(group_by_key).agg(**agg_kwargs).reset_index()
+
+    agg[BuildConfiguration.CI_LOWER_KEY] = (
+        agg[value_key] + agg[BuildConfiguration.MOE_KEY]
+    )
+    agg[BuildConfiguration.CI_UPPER_KEY] = (
+        agg[value_key] - agg[BuildConfiguration.MOE_KEY]
+    )
+
+    return agg
+
+
+def get_k_largest_relative_diffs(
+    df_a: pd.DataFrame,
+    suffix_a: str,
+    df_b: pd.DataFrame,
+    suffix_b: str,
+    k: int,
+    merge_on_key: str,
+    value_key: str,
+) -> pd.DataFrame:
+    """
+    Merges two DataFrames and returns the top K entries with the largest
+    relative differences in a given column name.
+
+    Args:
+        df_a: The first DataFrame.
+        suffix_a: The suffix to append to column names from df_a after merging.
+        df_b: The second DataFrame.
+        suffix_b: The suffix to append to column names from df_b after merging.
+        k: The number of top relative differences to return.
+        merge_on_key: The column name to merge the two DataFrames on.
+            (e.g., BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY).
+        value_key: The column name containing the values to compare for differences.
+            (e.g., Target.TIME_S_KEY).
+
+    Returns:
+        A DataFrame containing the top K entries with the largest relative
+        differences, sorted in descending order of relative difference.
+    """
+
+    df = pd.merge(
+        df_a,
+        df_b,
+        on=merge_on_key,
+        how="inner",
+        suffixes=(f"_{suffix_a}", f"_{suffix_b}"),
+    )
+
+    df["abs_diff"] = np.abs(
+        df[f"{value_key}_{suffix_a}"] - df[f"{value_key}_{suffix_b}"]
+    )
+    df["avg_time"] = (df[f"{value_key}_{suffix_a}"] + df[f"{value_key}_{suffix_b}"]) / 2
+    df["rel_diff"] = df.apply(
+        lambda row: (
+            row["abs_diff"] / row["avg_time"] if row["avg_time"] != 0 else np.nan
+        ),
+        axis=1,
+    )
+
+    df.drop(columns=["abs_diff", "avg_time"], inplace=True)
+    df = df.nlargest(k, "rel_diff")
+    df.sort_values(by="rel_diff", ascending=False, inplace=True)
+    df.drop(columns=["rel_diff"], inplace=True)
+
+    return df
 
 
 def compare_android_build_configurations(
