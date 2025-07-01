@@ -20,11 +20,17 @@ import itertools
 
 from functools import lru_cache
 import json
+import math
 
 import pandas as pd
 import numpy as np
 from scipy import stats
 
+from bokeh import layouts
+from bokeh import plotting
+from bokeh import transform
+from bokeh import models
+from bokeh.models import ranges
 
 __doc__ = (
     "This program can be used to better discover and document improvements and"
@@ -70,6 +76,7 @@ def parse_args() -> argparse.Namespace:
         "-g",
         "--group-by",
         choices=[Target.NAME_KEY, Target.MODULE_NAME_KEY],
+        default=Target.NAME_KEY,
         help="How to group target data into build units",
     )
     parser.add_argument(
@@ -480,11 +487,185 @@ def get_k_largest_relative_diffs(
     return df
 
 
-def compare_android_build_configurations(
-    paths_a: List[Path],
-    paths_b: List[Path],
-    output_file_path: Path,
+FIGURE_WIDTH = 900
+FIGURE_HEIGHT = 900
+
+
+def get_bar_chart_comparison(
+    build_a: BuildConfiguration,
+    build_b: BuildConfiguration,
     filters: Filters,
+    limit: int = 10,
+    confidence_lvl: float = 0.95,
+) -> plotting.figure:
+    """
+    Generates a bar chart comparing build times between two different build
+    configurations, showing only the top K (limit) build units with the largest
+    relative differences.
+
+    The traces of a build configuration are first filtered before being
+    aggregated to calculate mean build times and confidence intervals.
+
+    The y-axis shows build times, and the x-axis shows build unit names. Each
+    build unit name has side-by-side bars, one for each build configuration,
+    each with a confidence interval.
+    """
+
+    a_filtered_build_trace_dfs = build_a.get_filtered_build_trace_dfs(filters)
+    b_filtered_build_trace_dfs = build_b.get_filtered_build_trace_dfs(filters)
+
+    if a_filtered_build_trace_dfs is None or b_filtered_build_trace_dfs is None:
+        return plotting.figure()
+
+    a_agg_df = aggregate_dfs(
+        a_filtered_build_trace_dfs,
+        confidence_lvl,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+    b_agg_df = aggregate_dfs(
+        b_filtered_build_trace_dfs,
+        confidence_lvl,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+
+    merged_df = get_k_largest_relative_diffs(
+        a_agg_df,
+        build_a.name,
+        b_agg_df,
+        build_b.name,
+        limit,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+
+    if a_agg_df.empty or b_agg_df.empty:
+        return plotting.figure()
+
+    build_unit_names = list(merged_df[BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY])
+
+    data = {
+        "build_unit_names": build_unit_names,
+        "a": merged_df[f"{Target.TIME_S_KEY}_{build_a.name}"].to_list(),
+        "b": merged_df[f"{Target.TIME_S_KEY}_{build_b.name}"].to_list(),
+        "moe_a": merged_df[f"{BuildConfiguration.MOE_KEY}_{build_a.name}"].to_list(),
+        "moe_b": merged_df[f"{BuildConfiguration.MOE_KEY}_{build_b.name}"].to_list(),
+        "ci_lower_a": (
+            merged_df[f"{BuildConfiguration.CI_LOWER_KEY}_{build_a.name}"].to_list()
+        ),
+        "ci_upper_a": (
+            merged_df[f"{BuildConfiguration.CI_UPPER_KEY}_{build_a.name}"].to_list()
+        ),
+        "ci_lower_b": (
+            merged_df[f"{BuildConfiguration.CI_LOWER_KEY}_{build_b.name}"].to_list()
+        ),
+        "ci_upper_b": (
+            merged_df[f"{BuildConfiguration.CI_UPPER_KEY}_{build_b.name}"].to_list()
+        ),
+    }
+
+    source = models.ColumnDataSource(data=data)
+
+    fig = plotting.figure(
+        x_range=build_unit_names,
+        y_range=ranges.Range1d(0, max(max(data["a"]), max(data["b"])) * 1.5),
+        title=(
+            f"Build Time Comparison\nGrouped by {filters.group_by}\n{limit} largest"
+            " relative differences shown"
+        ),
+        width=FIGURE_WIDTH,
+        height=FIGURE_HEIGHT,
+    )
+
+    bar_width = 0.2
+
+    vbar_glyph_a = fig.vbar(
+        x=transform.dodge("build_unit_names", -bar_width / 2, range=fig.x_range),
+        top="a",
+        source=source,
+        width=bar_width,
+        color="#17a589",
+        legend_label=f"Build {build_a.name} ({build_a.desc})",
+    )
+    vbar_glyph_b = fig.vbar(
+        x=transform.dodge("build_unit_names", bar_width / 2, range=fig.x_range),
+        top="b",
+        source=source,
+        width=bar_width,
+        color="#abb2b9",
+        legend_label=f"Build {build_b.name} ({build_b.desc})",
+    )
+
+    ci_desc = f"Margin of Error (Confidence Level {confidence_lvl})"
+
+    fig.segment(
+        x0=transform.dodge("build_unit_names", -bar_width, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", 0, range=fig.x_range),
+        y0="ci_lower_a",
+        y1="ci_lower_a",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+
+    fig.segment(
+        x0=transform.dodge("build_unit_names", -bar_width, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", 0, range=fig.x_range),
+        y0="ci_upper_a",
+        y1="ci_upper_a",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+
+    fig.segment(
+        x0=transform.dodge("build_unit_names", 0, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", bar_width, range=fig.x_range),
+        y0="ci_lower_b",
+        y1="ci_lower_b",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+
+    fig.segment(
+        x0=transform.dodge("build_unit_names", 0, range=fig.x_range),
+        x1=transform.dodge("build_unit_names", bar_width, range=fig.x_range),
+        y0="ci_upper_b",
+        y1="ci_upper_b",
+        source=source,
+        line_color="black",
+        legend_label=ci_desc,
+    )
+
+    fig.xgrid.grid_line_color = None
+    fig.xaxis.major_label_orientation = math.pi / 2
+    fig.xaxis.major_label_text_font_size = "16px"
+
+    fig.legend.location = "top_left"
+    fig.add_layout(fig.legend[0], "above")
+
+    fig.xaxis.formatter = models.CustomJSTickFormatter(
+        code="return tick.split('/').pop()"
+    )
+
+    fig.add_tools(
+        models.HoverTool(
+            tooltips=[
+                ("Build Unit", "@build_unit_names"),
+                (f"Build {build_a.name} Time (s)", "@a{0.2f} ± @moe_a"),
+                (f"Build {build_b.name} Time (s)", "@b{0.2f} ± @moe_b"),
+            ],
+            renderers=[vbar_glyph_a, vbar_glyph_b],
+        ),
+    )
+
+    return fig
+
+
+def compare_android_build_configurations(
+    paths_a: List[Path], paths_b: List[Path], output_file_path: Path, filters: Filters
 ):
     """
     Compares build performance of two Android build configurations, given two
@@ -499,7 +680,14 @@ def compare_android_build_configurations(
     build_a = BuildConfiguration.from_soong_traces("a", paths_a)
     build_b = BuildConfiguration.from_soong_traces("b", paths_b)
 
-    return
+    bar = get_bar_chart_comparison(build_a, build_b, filters)
+
+    plotting.output_file(output_file_path)
+    plotting.save(
+        layouts.column(
+            bar,
+        )
+    )
 
 
 def main():
@@ -525,9 +713,11 @@ def main():
         exclude_rule_names=_tuplify(args.exclude_rule_names),
         include_extensions=_tuplify(args.include_extensions),
         exclude_extensions=_tuplify(args.exclude_extensions),
-        remove_lower_than_s=float(args.remove_lower_than_s)
-        if args.remove_lower_than_s is not None
-        else None,
+        remove_lower_than_s=(
+            float(args.remove_lower_than_s)
+            if args.remove_lower_than_s is not None
+            else None
+        ),
     )
 
     compare_android_build_configurations(
