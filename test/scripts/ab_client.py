@@ -191,8 +191,8 @@ class AndroidBuildClient():
                 stream, request, chunksize=CHUNK_SIZE)
             done = False
             while not done:
-                status, done = downloader.next_chunk()
+                _, done = downloader.next_chunk()
         except apiclient.errors.HttpError as e:
-            logging.error(f'Download failed: {resource} for {buildId}:{target}')
+            logging.error(f'Download failed: {resource} for {buildId}:{target}: {e}')
             return None
         return stream.getvalue()

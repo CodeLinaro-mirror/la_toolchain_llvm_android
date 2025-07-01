@@ -63,8 +63,8 @@ class Graph(object):
 
     def __str__(self) -> str:
         string = ""
-        for (f_symbol, value) in self.graph.items():
-            for (t_symbol, weight) in self.graph[f_symbol].items():
+        for f_symbol, value in self.graph.items():
+            for t_symbol, weight in value.items():
                 string += f'{f_symbol} --{weight}--> {t_symbol}\n'
         return string
 
@@ -197,7 +197,6 @@ class Graph(object):
         self.visited = set()
         self.curr_search = []
         self.cycles = []
-        lst = []
 
         for (_, vertex) in self.vertices.items():
             if vertex not in self.visited:
@@ -279,7 +278,6 @@ class Graph(object):
     def printOrder(self, output):
         self.order = []
         self.visited = set()
-        stack = []
 
         # Create an order using DFS from the root
         for root in self.getRoots():
@@ -367,7 +365,7 @@ def addSymbolsToGraph(graph: Graph, order: list[str], weight: int = 1) -> None:
         graph.addVertex(symbol)
 
         if prev_symbol is not None:
-            for i in range(weight):
+            for _ in range(weight):
                 graph.addEdge(prev_symbol, symbol)
 
         prev_symbol = symbol

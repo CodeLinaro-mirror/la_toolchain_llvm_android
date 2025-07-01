@@ -347,7 +347,6 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
-        arch = self._config.target_arch
         defines['COMPILER_RT_BUILTINS_HIDE_SYMBOLS'] = \
             'TRUE' if not self.is_exported else 'FALSE'
         # Most builders use COMPILER_RT_DEFAULT_TARGET_TRIPLE, but that cause
@@ -757,7 +756,6 @@ class LibEditBuilder(base_builders.AutoconfBuilder, base_builders.LibInfo):
 
 
     def build(self) -> None:
-        files: List[Path] = []
         super().build()
 
 
@@ -975,7 +973,6 @@ class DeviceSysrootsBuilder(base_builders.Builder):
 
     def _build_config(self) -> None:
         config: configs.AndroidConfig = cast(configs.AndroidConfig, self._config)
-        arch = config.target_arch
         sysroot = config.sysroot
         if sysroot.exists():
             shutil.rmtree(sysroot)
