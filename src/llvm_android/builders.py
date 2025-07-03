@@ -123,7 +123,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
         return defines
 
     def test(self) -> None:
-        with timer.Timer(f'stage1_test'):
+        with timer.Timer('stage1_test'):
             self._ninja(['check-clang', 'check-llvm', 'check-clang-tools'])
         # stage1 cannot run check-cxx yet
 
@@ -1378,7 +1378,7 @@ class WindowsToolchainBuilder(base_builders.LLVMBuilder):
         defines['LLVM_NATIVE_TOOL_DIR'] = str(self.toolchain.build_path / 'bin')
         if self.build_lldb:
             defines['LLDB_PYTHON_RELATIVE_PATH'] = f'lib/python{paths._PYTHON_VER}/site-packages'
-            defines['LLDB_PYTHON_EXE_RELATIVE_PATH'] = f'python3'
+            defines['LLDB_PYTHON_EXE_RELATIVE_PATH'] = 'python3'
             defines['LLDB_PYTHON_EXT_SUFFIX'] = '.exe'
         if self.lto:
             defines['LLVM_ENABLE_LTO'] = 'Thin'

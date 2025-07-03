@@ -815,7 +815,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         tarball_name = package_name + '-' + tag + '.tar.xz'
         package_path = paths.DIST_DIR / tarball_name
         logger().info(f'Packaging {package_path}')
-        with timer.Timer(f'package_final_toolchain'):
+        with timer.Timer('package_final_toolchain'):
             utils.create_tarball(install_host_dir, [package_name], package_path)
 
 
@@ -1142,7 +1142,7 @@ def main():
     bolt = (args.bolt or preset_bolt) and not args.no_bolt
 
     if bolt and (not (pgo and lto and mlgo)):
-        raise ValueError(f"Before enabling BOLT, you should enable PGO, LTO and MLGO first!")
+        raise ValueError("Before enabling BOLT, you should enable PGO, LTO and MLGO first!")
 
     android_version.set_llvm_next(args.build_llvm_next)
 
@@ -1212,7 +1212,7 @@ def main():
         if (paths.OUT_DIR / 'stage2-install').exists():
             shutil.rmtree(paths.OUT_DIR / 'stage2-install')
 
-        with timer.Timer(f'extract_bootstrap'):
+        with timer.Timer('extract_bootstrap'):
             utils.extract_tarball(paths.OUT_DIR, args.bootstrap_use)
 
         # If we were to use the full build as bootstrap, we need to rename it to stage-install.
@@ -1220,7 +1220,7 @@ def main():
             (paths.OUT_DIR / 'stage2-install').rename(paths.OUT_DIR / 'stage1-install')
         set_default_toolchain(toolchains.Toolchain(paths.OUT_DIR / 'stage1-install', paths.OUT_DIR / 'stage1'))
     if args.bootstrap_build_only:
-        with timer.Timer(f'package_bootstrap'):
+        with timer.Timer('package_bootstrap'):
             utils.create_tarball(paths.OUT_DIR, ['stage1', 'stage1-install'], paths.DIST_DIR / 'stage1-install.tar.xz')
         return
 

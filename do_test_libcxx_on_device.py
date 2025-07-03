@@ -73,7 +73,7 @@ def main() -> None:
     # Only other supported target is riscv64
 
     if target is None:
-        utils.logger().error(f"ABI of device is not supported")
+        utils.logger().error("ABI of device is not supported")
         return
 
     build_path = f"{paths.OUT_DIR}/lib/device-libcxx-{target}"

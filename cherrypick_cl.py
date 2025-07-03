@@ -230,7 +230,7 @@ def find_version(sha, patch_list, start_version) -> int:
         patch_list[last_idx].version_range['until'] = start_version
         if name == target:
             return 2
-        prefix = target + f'-v'
+        prefix = f'{target}-v'
         version = int(name.removeprefix(prefix)) + 1
 
     return version

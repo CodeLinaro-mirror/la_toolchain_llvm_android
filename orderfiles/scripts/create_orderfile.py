@@ -45,14 +45,14 @@ def parse_args():
     parser.add_argument(
         "--denylist",
         default="",
-        help=f"Exclude symbols based on a symbol-per-line file with @ or comma separarted values within a quotation."
-             f"For example, you can say @file.txt or 'main,bar,foo'")
+        help="Exclude symbols based on a symbol-per-line file with @ or comma separarted values within a quotation."
+             "For example, you can say @file.txt or 'main,bar,foo'")
 
     parser.add_argument(
         "--last-symbol",
-        help=f"Create an order file until the passed last symbol and ignore the symbols after it."
-             f"Useful if you want an order file only for startup so you should pass the last startup symbol."
-             f"Last-symbol has priority over leftover so we will output until the last symbol and ignore the leftover flag.")
+        help="Create an order file until the passed last symbol and ignore the symbols after it."
+             "Useful if you want an order file only for startup so you should pass the last startup symbol."
+             "Last-symbol has priority over leftover so we will output until the last symbol and ignore the leftover flag.")
 
     parser.add_argument(
         "--leftover",

@@ -107,7 +107,7 @@ def create_cl(new_patches: PatchList, bug: Optional[str]) -> None:
     # Add this CL was created by this script
     script = os.path.basename(sys.argv[0])
     argv_deepcopy = ' '.join(copy.deepcopy(sys.argv[1:]))
-    auto_msg = f'This change is generated automatically by the script:\n'
+    auto_msg = 'This change is generated automatically by the script:\n'
     commit_lines += [auto_msg, f' {script} {argv_deepcopy}', '']
 
     # Add bug if given

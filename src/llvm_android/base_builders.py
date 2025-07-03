@@ -332,7 +332,7 @@ class AutoconfBuilder(Builder):
         # Cannot add them to cflags_file since autoconf prechecks invokes clang -E and that doesn't
         # work when -arch flags also present.
         if self._config.target_os.is_darwin:
-            universal_cflags = f'-arch arm64 -arch x86_64'
+            universal_cflags = '-arch arm64 -arch x86_64'
             env['CFLAGS'] = universal_cflags
             env['CXXFLAGS'] = universal_cflags
 
@@ -914,7 +914,7 @@ class LLVMBuilder(LLVMBaseBuilder):
         return toolchains.Toolchain(self.install_dir, self.output_dir)
 
     def test(self) -> None:
-        with timer.Timer(f'stage2_test'):
+        with timer.Timer('stage2_test'):
             # newer test tools like dexp, clang-query, c-index-test
             # need libedit.so.*, libxml2.so.*, etc. in stage2/lib.
             self._install_lib_deps(self.output_dir / 'lib')
