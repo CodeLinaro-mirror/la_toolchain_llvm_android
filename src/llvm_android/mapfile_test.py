@@ -26,11 +26,11 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "../..
 import context  # pylint: disable=unused-import
 from llvm_android import (mapfile, paths)
 
-def build_sanitizer_map_file(san: str, arch: str, lib_dir: Path, section_name: str, tmp_dir: Path) -> tuple[Path, int]:
+def build_sanitizer_map_file(san: str, arch: str, lib_dir: Path, tmp_dir: Path) -> tuple[Path, int]:
     # map_file example: libclang_rt.hwasan-aarch64-android.map.txt
     lib_file = Path(lib_dir / f'libclang_rt.{san}-{arch}-android.so')
     map_file = Path(tmp_dir / f'libclang_rt.{san}-{arch}-android.map.txt')
-    num_symbols_annotated = mapfile.create_map_file(lib_file, map_file, section_name)
+    num_symbols_annotated = mapfile.create_map_file(lib_file, map_file)
     return (map_file, num_symbols_annotated)
 
 
@@ -60,13 +60,13 @@ def mapfile_test(tmp_dir: Path):
     arch = 'aarch64'
 
     tmp_dir_Path = Path(tmp_dir)
-    (asan_map_file, num_symbols_annotated) = build_sanitizer_map_file('asan', arch, lib_dir, 'ASAN', tmp_dir_Path)
+    (asan_map_file, num_symbols_annotated) = build_sanitizer_map_file('asan', arch, lib_dir, tmp_dir_Path)
     assert(grep_systemapi(asan_map_file) == num_symbols_annotated)
-    (ubsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('ubsan_standalone', arch, lib_dir, 'ASAN', tmp_dir_Path)
+    (ubsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('ubsan_standalone', arch, lib_dir, tmp_dir_Path)
     assert(grep_systemapi(ubsan_map_file) == num_symbols_annotated)
-    (tsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('tsan', arch, lib_dir, 'TSAN', tmp_dir_Path)
+    (tsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('tsan', arch, lib_dir, tmp_dir_Path)
     assert(grep_systemapi(tsan_map_file) == num_symbols_annotated)
-    (hwsan_map_file, num_symbols_annotated) =  build_sanitizer_map_file('hwasan', arch, lib_dir, 'ASAN', tmp_dir_Path)
+    (hwsan_map_file, num_symbols_annotated) =  build_sanitizer_map_file('hwasan', arch, lib_dir, tmp_dir_Path)
     assert(grep_apex(hwsan_map_file) == num_symbols_annotated)
 
 if __name__ == '__main__':
