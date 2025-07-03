@@ -12,4 +12,8 @@ init-hook='import sys; sys.path.append("."); sys.path.append("../../external/too
 # C0103 = invalid name
 # W0012 = unknown-option-value
 # W0403 = Relative imports
-disable=C0103,C0111,W0012,W0403
+disable=C0103,C0111,W0012,W0403,all
+
+enable=unused-argument,
+       unused-import,
+       unused-variable,

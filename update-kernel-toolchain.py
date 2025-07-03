@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# pylint: disable=not-callable, relative-import, line-too-long, no-else-return
+# pylint: disable=not-callable, line-too-long, no-else-return
 
 import argparse
 import fileinput
