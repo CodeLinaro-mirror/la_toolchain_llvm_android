@@ -15,6 +15,7 @@ init-hook='import sys; sys.path.append("."); sys.path.append("../../external/too
 disable=C0103,C0111,W0012,W0403,all
 
 enable=f-string-without-interpolation,
+       undefined-variable,
        unused-argument,
        unused-import,
        unused-variable,
