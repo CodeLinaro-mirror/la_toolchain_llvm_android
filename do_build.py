@@ -27,7 +27,7 @@ import textwrap
 from typing import List, Optional, Set
 import re
 
-import context
+import context  # pylint: disable=unused-import
 
 from llvm_android.base_builders import Builder, LLVMBuilder
 from llvm_android.builder_registry import BuilderRegistry

@@ -19,11 +19,10 @@ Package to manage LLVM sources when building a toolchain.
 
 import logging
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 import os
 import re
 import shutil
-import string
 import subprocess
 import sys
 

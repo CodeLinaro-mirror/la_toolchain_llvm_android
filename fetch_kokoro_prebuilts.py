@@ -22,7 +22,7 @@ import sys
 import tempfile
 from typing import List, Optional
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android.utils import check_tools, extract_tarball
 
 prefix = "gs://android-llvm-kokoro-ci-artifacts/prod/android-llvm/linux-tot/continuous/"

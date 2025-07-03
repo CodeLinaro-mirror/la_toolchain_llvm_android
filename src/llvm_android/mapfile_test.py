@@ -23,7 +23,7 @@ import tempfile
 
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), "../.."))
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import (mapfile, paths)
 
 def build_sanitizer_map_file(san: str, arch: str, lib_dir: Path, section_name: str, tmp_dir: Path) -> tuple[Path, int]:

@@ -26,7 +26,7 @@ import shutil
 import subprocess
 from typing import Dict, List, Optional, Set
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import hosts, paths, utils, version
 
 

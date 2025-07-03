@@ -22,7 +22,7 @@ from functools import lru_cache
 import subprocess
 import sys
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import paths, utils
 
 sys.path.append(str(paths.TOOLCHAIN_UTILS_DIR / 'llvm_tools'))

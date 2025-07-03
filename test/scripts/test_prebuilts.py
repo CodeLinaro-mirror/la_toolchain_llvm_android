@@ -17,7 +17,7 @@
 # pylint: disable=invalid-name
 """Test Clang prebuilts on Android"""
 
-from typing import List, NamedTuple, Optional, Set, Tuple
+from typing import List, NamedTuple, Optional, Set
 import argparse
 import inspect
 import logging

@@ -26,10 +26,9 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import utils, paths
 
 PGO_PROFILE_PATTERN = 'pgo-*.tar.xz'

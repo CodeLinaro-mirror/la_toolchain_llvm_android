@@ -24,7 +24,7 @@ import shutil
 import subprocess
 from typing import Optional
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import paths, utils
 
 def get_args():

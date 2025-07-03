@@ -35,7 +35,7 @@ import getpass
 import io
 import logging
 
-from data import WorkNodeRecord, TestResultRecord
+from data import TestResultRecord
 import utils
 
 ANDROID_BUILD_API_SCOPE = (

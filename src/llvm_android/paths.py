@@ -18,7 +18,6 @@
 import glob
 import os
 from pathlib import Path
-import string
 from typing import Optional
 
 from llvm_android import (android_version, constants, hosts)

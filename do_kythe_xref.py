@@ -22,7 +22,7 @@ import shutil
 import subprocess
 import sys
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import android_version, builders, configs, hosts, paths, utils
 
 def logger():

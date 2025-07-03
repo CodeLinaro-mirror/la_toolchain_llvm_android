@@ -17,10 +17,9 @@
 """Executes build steps for predefined build targets."""
 
 import argparse
-import os
 import logging
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android.target_definitions import TARGET_DEFS
 from llvm_android import (utils)
 

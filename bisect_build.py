@@ -19,7 +19,7 @@ import argparse
 import sys
 from typing import List, Optional
 from fetch_kokoro_prebuilts import check_valid_build, check_valid_path, fetch_prebuilts, get_build_number
-import context
+import context  # pylint: disable=unused-import
 from llvm_android.utils import check_tools
 
 

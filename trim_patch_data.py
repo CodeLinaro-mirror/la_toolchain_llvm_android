@@ -18,9 +18,9 @@
 import os
 import sys
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android import android_version, paths, utils
-from llvm_android.patch_utils import PatchItem, PatchList
+from llvm_android.patch_utils import PatchList
 
 _LLVM_ANDROID_PATH = paths.SCRIPTS_DIR
 _PATCH_DIR = _LLVM_ANDROID_PATH / 'patches'

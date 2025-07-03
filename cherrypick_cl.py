@@ -20,15 +20,14 @@ import argparse
 import copy
 import json
 import logging
-import math
 import os
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import urllib.request
 
-import context
+import context  # pylint: disable=unused-import
 from llvm_android.android_version import get_svn_revision_number
 from merge_from_upstream import fetch_upstream, sha_to_revision
 from llvm_android import paths, source_manager

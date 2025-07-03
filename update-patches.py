@@ -24,20 +24,17 @@
 
 import argparse
 import copy
-from enum import Enum, auto
 import logging
 import os
-from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import context
-from llvm_android import android_version, hosts, paths, source_manager, utils
+import context  # pylint: disable=unused-import
+from llvm_android import android_version, paths, source_manager, utils
 from llvm_android.patch_utils import PatchItem, PatchList
-from merge_from_upstream import fetch_upstream, sha_to_revision
+
 
 _PATCH_DIR = paths.SCRIPTS_DIR / 'patches'
 _PATCH_JSON = _PATCH_DIR / 'PATCHES.json'

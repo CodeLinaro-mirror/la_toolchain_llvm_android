@@ -18,8 +18,6 @@
 import functools
 from pathlib import Path
 from typing import List
-
-from llvm_android.builder_registry import BuilderRegistry
 from llvm_android import (paths, version)
 
 class Toolchain:
