@@ -16,7 +16,9 @@ disable=C0103,C0111,W0012,W0403,all
 
 enable=f-string-without-interpolation,
        no-member,
+       no-self-argument,
        undefined-variable,
        unused-argument,
        unused-import,
        unused-variable,
+       wrong-import-order,

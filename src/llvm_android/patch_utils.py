@@ -18,12 +18,12 @@ import collections
 import dataclasses
 from dataclasses import dataclass
 import json
-
-from llvm_android import paths
 import logging
 import math
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+from llvm_android import paths
 
 
 @dataclass
@@ -78,7 +78,7 @@ class PatchItem:
         return self.version_range.get('from', None)
 
     @property
-    def sort_key(item: PatchItem) -> Tuple:
+    def sort_key(self, item: PatchItem) -> Tuple:
         # Keep local patches at the end of the list, and don't change the
         # relative order between two local patches.
         if item.is_local_patch:

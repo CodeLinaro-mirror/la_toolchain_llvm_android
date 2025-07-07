@@ -1036,6 +1036,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         configs.android_configs(platform=False, extra_config={'hwasan': False, 'noexcept': False})
     )
 
+    @staticmethod
     def _hwasan_config(platform: bool, noexcept: bool) -> configs.Config:
         result = configs.AndroidAArch64Config()
         result.platform = platform

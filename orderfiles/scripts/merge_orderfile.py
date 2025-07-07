@@ -28,8 +28,8 @@
 # CSV and Folder assume all files have a weight of 1.
 # An example file can be found at ../test/merge-test/merge.txt
 
-from bitarray import bitarray
 import argparse
+from bitarray import bitarray
 import graphviz
 
 import orderfile_utils
