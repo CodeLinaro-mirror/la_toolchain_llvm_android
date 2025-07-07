@@ -218,7 +218,7 @@ def get_connected_device_list() -> List[List[str]]:
 def rm_current_product_out():
     if 'ANDROID_PRODUCT_OUT' in os.environ:
         product_out = Path(os.environ['ANDROID_PRODUCT_OUT'])
-        if product_out.isdir():
+        if product_out.is_dir():
             shutil.rmtree(product_out)
 
 
