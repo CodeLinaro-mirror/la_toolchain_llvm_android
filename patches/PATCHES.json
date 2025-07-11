@@ -994,5 +994,19 @@
             "from": 582027,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Fix for x86 ndk sysroot define being mixed with parameter for i686 lldb build"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Fix-for-x86-ndk-sysroot-define.patch",
+        "version_range": {
+            "from": 574158,
+            "until": null
+        }
     }
 ]
