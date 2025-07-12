@@ -78,20 +78,20 @@ class PatchItem:
         return self.version_range.get('from', None)
 
     @property
-    def sort_key(self, item: PatchItem) -> Tuple:
+    def sort_key(self) -> Tuple:
         # Keep local patches at the end of the list, and don't change the
         # relative order between two local patches.
-        if item.is_local_patch:
+        if self.is_local_patch:
             return (True,)
 
         # Just before local patches, include patches with no end_version. Sort
         # them by start_version.
-        if item.end_version is None:
-            return (False, math.inf, item.start_version)
+        if self.end_version is None:
+            return (False, math.inf, self.start_version)
 
         # At the front of the list, sort upstream patches by ascending order of
         # end_version. Don't reorder patches with the same end_version.
-        return (False, item.end_version)
+        return (False, self.end_version)
 
     def __lt__(self, other: PatchItem) -> bool:
         """Used to sort patches in PatchList"""
