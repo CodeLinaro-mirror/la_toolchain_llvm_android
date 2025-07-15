@@ -980,5 +980,19 @@
             "from": 563880,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [DAG] visitFREEZE - always allow freezing multiple operands (#145939)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-DAG-visitFREEZE-always-allow-freezing-multipl.patch",
+        "version_range": {
+            "from": 582027,
+            "until": null
+        }
     }
 ]
