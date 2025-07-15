@@ -93,14 +93,14 @@ def main():
                 md5_1 = "".join(md5_1_b_list)
                 md5_2 = "".join(md5_2_b_list)
 
-                if(md5_1 in mapping):
+                if md5_1 in mapping:
                     symbol_1 = mapping[md5_1]
                     seen.add(symbol_1)
 
                     if symbol_1 not in denylist:
                         symbols.append(symbol_1)
 
-                if(md5_2 in mapping):
+                if md5_2 in mapping:
                     symbol_2 = mapping[md5_2]
                     seen.add(symbol_2)
 

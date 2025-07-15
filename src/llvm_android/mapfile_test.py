@@ -61,13 +61,13 @@ def mapfile_test(tmp_dir: Path):
 
     tmp_dir_Path = Path(tmp_dir)
     (asan_map_file, num_symbols_annotated) = build_sanitizer_map_file('asan', arch, lib_dir, tmp_dir_Path)
-    assert(grep_systemapi(asan_map_file) == num_symbols_annotated)
+    assert grep_systemapi(asan_map_file) == num_symbols_annotated
     (ubsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('ubsan_standalone', arch, lib_dir, tmp_dir_Path)
-    assert(grep_systemapi(ubsan_map_file) == num_symbols_annotated)
+    assert grep_systemapi(ubsan_map_file) == num_symbols_annotated
     (tsan_map_file, num_symbols_annotated) = build_sanitizer_map_file('tsan', arch, lib_dir, tmp_dir_Path)
-    assert(grep_systemapi(tsan_map_file) == num_symbols_annotated)
+    assert grep_systemapi(tsan_map_file) == num_symbols_annotated
     (hwsan_map_file, num_symbols_annotated) =  build_sanitizer_map_file('hwasan', arch, lib_dir, tmp_dir_Path)
-    assert(grep_apex(hwsan_map_file) == num_symbols_annotated)
+    assert grep_apex(hwsan_map_file) == num_symbols_annotated
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory() as tmp_dir:

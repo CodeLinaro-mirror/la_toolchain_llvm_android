@@ -1124,7 +1124,7 @@ def main():
     do_runtimes = not args.skip_runtimes
     do_package = not args.skip_package
     do_strip = not args.no_strip
-    do_strip_host_package = do_strip and not args.debug and not (args.build_llvm_next)
+    do_strip_host_package = do_strip and not args.debug and not args.build_llvm_next
     build_lldb = 'lldb' not in args.no_build
     musl = args.musl
 

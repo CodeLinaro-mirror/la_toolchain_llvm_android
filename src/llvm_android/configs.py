@@ -292,8 +292,8 @@ class LinuxConfig(_GccConfig):
     """Configuration for Linux targets."""
 
     target_os: hosts.Host = hosts.Host.Linux
-    sysroot: Optional[Path] = (paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot')
-    gcc_root: Path = (paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8')
+    sysroot: Optional[Path] = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
+    gcc_root: Path = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8'
     gcc_triple: str = 'x86_64-linux'
     gcc_ver: str = '4.8.3'
     is_cross_compiling: bool = False
@@ -447,7 +447,7 @@ class MinGWConfig(_GccConfig):
     """Configuration for MinGW targets."""
 
     target_os: hosts.Host = hosts.Host.Windows
-    gcc_root: Path = (paths.GCC_ROOT / 'host' / 'x86_64-w64-mingw32-4.8')
+    gcc_root: Path = paths.GCC_ROOT / 'host' / 'x86_64-w64-mingw32-4.8'
     gcc_triple: str = 'x86_64-w64-mingw32'
     gcc_ver: str = '4.8.3'
 

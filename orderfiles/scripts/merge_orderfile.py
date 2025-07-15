@@ -393,7 +393,7 @@ def main() -> None:
 
     # Assert no cycles after removing them
     removeCycles(graph)
-    assert(len(graph.getCycles()) == 0)
+    assert len(graph.getCycles()) == 0
 
     # Create an image of the graph representation
     if args.graph_image:

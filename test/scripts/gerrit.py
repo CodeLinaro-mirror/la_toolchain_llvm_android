@@ -117,7 +117,7 @@ class PrebuiltCL(NamedTuple):
             version=clang_info.group('ver'),
             build_number=clang_info.group('bld'),
             cl_number=cl_number,
-            merged=(info['status'] == 'MERGED'))
+            merged=info['status'] == 'MERGED')
 
     @staticmethod
     def getNewCL(build_number, branch):

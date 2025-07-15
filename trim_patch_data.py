@@ -26,7 +26,7 @@ _LLVM_ANDROID_PATH = paths.SCRIPTS_DIR
 _PATCH_DIR = _LLVM_ANDROID_PATH / 'patches'
 _PATCH_JSON = _PATCH_DIR / 'PATCHES.json'
 
-_SVN_REVISION = (android_version.get_svn_revision_number())
+_SVN_REVISION = android_version.get_svn_revision_number()
 
 
 def trim_patches_json():

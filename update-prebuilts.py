@@ -368,7 +368,7 @@ def main():
         branch = output.split()[0]
 
     logger().info('Using branch: %s', branch)
-    is_testing = (branch == 'aosp-llvm-toolchain-testing')
+    is_testing = branch == 'aosp-llvm-toolchain-testing'
 
     try:
         if do_fetch:
