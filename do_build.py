@@ -1311,6 +1311,8 @@ def main():
             swig_builder=swig_builder,
             full_build=need_windows,
             build_simpleperf_readelf=need_host)
+    else:
+        win_builder, win_lldb_bins = None, None
 
     # stage2 test is on when stage2 is enabled unless --skip-tests or
     # on instrumented builds.

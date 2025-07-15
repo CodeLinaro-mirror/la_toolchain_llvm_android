@@ -126,6 +126,7 @@ def invokeForrestRun(branch: str, target: str, cl_numbers: List[str],
                      tests: List[str], tag: str) -> str:
     """Submit a build/test to forrest."""
     gcl_path = test_paths.gcl_path()
+    cluster_info = {}
     if tests:
         cluster_info = _get_device_info(target)._asdict()
 

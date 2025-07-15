@@ -5,19 +5,21 @@ max-line-length=100
 
 [MASTER]
 # tell pylint where to find import modules: paths, utils, etc.
-init-hook='import sys; sys.path.append("."); sys.path.append("../../external/toolchain-utils/llvm_tools")'
+init-hook='import sys; sys.path.append("."); sys.path.append("./src/llvm_android"); sys.path.append("../../external/toolchain-utils/llvm_tools")'
 
 [MESSAGES CONTROL]
+# Low value warnings.
 # C0111 = Missing docstring
 # C0103 = invalid name
 # W0012 = unknown-option-value
 # W0403 = Relative imports
-disable=C0103,C0111,W0012,W0403,all
+#
+# TODO: Fix the following high value warnings.
+# E0401 = Import Error
+# E0611 = no-name-in-module
+disable=C0103,C0111,W0012,W0403,E0401,E0611,C,R,W
 
 enable=f-string-without-interpolation,
-       no-member,
-       no-self-argument,
-       undefined-variable,
        unused-argument,
        unused-import,
        unused-variable,

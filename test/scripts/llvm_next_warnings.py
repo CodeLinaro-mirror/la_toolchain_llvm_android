@@ -162,6 +162,8 @@ def main():
         warnings = process_local_file(args.file)
     elif args.build:
         warnings = process_one_run(args.build, args.target)
+    else:
+        warnings = []
 
     for warning in sorted(warnings):
         print(warning.text)
