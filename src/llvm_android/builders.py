@@ -38,7 +38,7 @@ class SanitizerMapFileBuilder(base_builders.Builder):
         self._build_sanitizer_map_file('asan', arch, lib_dir)
         self._build_sanitizer_map_file('ubsan_standalone', arch, lib_dir)
         if super()._is_64bit():
-           self._build_sanitizer_map_file('tsan', arch, lib_dir)
+            self._build_sanitizer_map_file('tsan', arch, lib_dir)
 
         if arch == hosts.Arch.AARCH64:
             self._build_sanitizer_map_file('hwasan', arch, lib_dir)

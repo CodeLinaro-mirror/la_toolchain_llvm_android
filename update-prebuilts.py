@@ -145,39 +145,39 @@ def validity_check(host, install_dir, clang_version_major):
     # Make sure the official toolchain (non llvm-next) is built with PGO
     # profiles.
     if host == 'linux-x86':
-      realClangPath = os.path.join(install_dir, 'bin', 'clang-' + clang_version_major)
-      strings = utils.check_output([realClangPath, '--version'])
-      llvm_next = strings.find('ANDROID_LLVM_NEXT') != -1
+        realClangPath = os.path.join(install_dir, 'bin', 'clang-' + clang_version_major)
+        strings = utils.check_output([realClangPath, '--version'])
+        llvm_next = strings.find('ANDROID_LLVM_NEXT') != -1
 
-      if not llvm_next:
-        has_pgo = ('+pgo' in strings) and ('-pgo' not in strings)
-        if not has_pgo:
-          logger().error('The Clang binary is not built with PGO profiles.')
-          return False
-        has_bolt = ('+bolt' in strings) and ('-bolt' not in strings)
-        if not has_bolt:
-          logger().error('The Clang binary is not built with BOLT profiles.')
-          return False
-        has_lto = ('+lto' in strings) and ('-lto' not in strings)
-        if not has_lto:
-          logger().error('The Clang binary is not built with LTO.')
-          return False
-        has_mlgo = ('+mlgo' in strings) and ('-mlgo' not in strings)
-        if not has_mlgo:
-          logger().error('The Clang binary is not built with MLGO support.')
-          return False
+        if not llvm_next:
+            has_pgo = ('+pgo' in strings) and ('-pgo' not in strings)
+            if not has_pgo:
+                logger().error('The Clang binary is not built with PGO profiles.')
+                return False
+            has_bolt = ('+bolt' in strings) and ('-bolt' not in strings)
+            if not has_bolt:
+                logger().error('The Clang binary is not built with BOLT profiles.')
+                return False
+            has_lto = ('+lto' in strings) and ('-lto' not in strings)
+            if not has_lto:
+                logger().error('The Clang binary is not built with LTO.')
+                return False
+            has_mlgo = ('+mlgo' in strings) and ('-mlgo' not in strings)
+            if not has_mlgo:
+                logger().error('The Clang binary is not built with MLGO support.')
+                return False
 
     # Check that all the files listed in remote_toolchain_inputs are valid
     if host == 'linux-x86':
-      with open(os.path.join(install_dir, 'bin', 'remote_toolchain_inputs')) as inputs_file:
-        files = [line.strip() for line in inputs_file.readlines()]
-        fail = False
-        for f in files:
-          if not os.path.exists(os.path.join(install_dir, 'bin', f)):
-            logger().error(f'remote_toolchain_inputs malformed, {f} does not exist')
-            fail = True
-        if fail:
-          return False
+        with open(os.path.join(install_dir, 'bin', 'remote_toolchain_inputs')) as inputs_file:
+            files = [line.strip() for line in inputs_file.readlines()]
+            fail = False
+            for f in files:
+                if not os.path.exists(os.path.join(install_dir, 'bin', f)):
+                    logger().error(f'remote_toolchain_inputs malformed, {f} does not exist')
+                    fail = True
+            if fail:
+                return False
 
     return True
 

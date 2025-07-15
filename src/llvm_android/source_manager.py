@@ -54,9 +54,9 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
 
     patch_dir = os.getcwd()
     if git_am:
-      patch_manager_cmd.append('--git_am')
-      """Run git am in the source directory"""
-      patch_dir=source_dir
+        patch_manager_cmd.append('--git_am')
+        """Run git am in the source directory"""
+        patch_dir=source_dir
 
     return utils.check_output(patch_manager_cmd, cwd=patch_dir)
 
@@ -173,24 +173,24 @@ def setup_temp_llvm_project(tmp_source_dir, git_am, llvm_rev) -> None:
         # Note: Darwin builds don't copy symlinks with -r.  Use -R instead.
         reflink = '--reflink=auto' if hosts.build_host().is_linux else '-c'
         try:
-          cmd = ['cp', '-Rf', reflink, copy_from, tmp_source_dir]
-          subprocess.check_call(cmd)
+            cmd = ['cp', '-Rf', reflink, copy_from, tmp_source_dir]
+            subprocess.check_call(cmd)
         except subprocess.CalledProcessError:
-          # Fallback to normal copy.
-          cmd = ['cp', '-Rf', copy_from, tmp_source_dir]
-          subprocess.check_call(cmd)
+            # Fallback to normal copy.
+            cmd = ['cp', '-Rf', copy_from, tmp_source_dir]
+            subprocess.check_call(cmd)
 
         if git_am:
-          # To avoid clobbering the source tree's git objects, remove
-          # out/llvm-project/.git and copy .repo/projects/toolchain/llvm-project.git there
-          tmp_out_git_dir = tmp_source_dir / '.git'
-          copy_from_git = os.path.abspath(os.path.join(tmp_source_dir, os.readlink(tmp_out_git_dir)))
+            # To avoid clobbering the source tree's git objects, remove
+            # out/llvm-project/.git and copy .repo/projects/toolchain/llvm-project.git there
+            tmp_out_git_dir = tmp_source_dir / '.git'
+            copy_from_git = os.path.abspath(os.path.join(tmp_source_dir, os.readlink(tmp_out_git_dir)))
 
-          cmd = ['rm', '-rf', tmp_out_git_dir]
-          subprocess.check_call(cmd)
+            cmd = ['rm', '-rf', tmp_out_git_dir]
+            subprocess.check_call(cmd)
 
-          cmd = ['cp', '-Rf', '-L', copy_from_git, tmp_out_git_dir]
-          subprocess.check_call(cmd)
+            cmd = ['cp', '-Rf', '-L', copy_from_git, tmp_out_git_dir]
+            subprocess.check_call(cmd)
     else:
         logger().info(f'Fetching {llvm_rev} from https://github.com/llvm/llvm-project.git')
         if not os.path.exists(tmp_source_dir):
@@ -225,13 +225,13 @@ def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continu
     svn_version = android_version.get_svn_revision_number()
 
     if not skip_apply_patches:
-      failure_mode = 'continue' if continue_on_patch_errors else 'fail'
-      patch_output = apply_patches(tmp_source_dir, svn_version, patch_json,
-                                   patch_dir, git_am, failure_mode)
-      logger().info(patch_output)
-      pi = get_source_info(patch_output)
-      write_source_info(pi)
-      ret = ToolchainError(ToolchainErrorCode.PATCH_ERROR, str(pi.failed_patches))
+        failure_mode = 'continue' if continue_on_patch_errors else 'fail'
+        patch_output = apply_patches(tmp_source_dir, svn_version, patch_json,
+                                     patch_dir, git_am, failure_mode)
+        logger().info(patch_output)
+        pi = get_source_info(patch_output)
+        write_source_info(pi)
+        ret = ToolchainError(ToolchainErrorCode.PATCH_ERROR, str(pi.failed_patches))
 
     # Copy tmp_source_dir to source_dir if they are different.  This avoids
     # invalidating prior build outputs.

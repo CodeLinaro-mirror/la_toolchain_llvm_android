@@ -1091,9 +1091,9 @@ def preset(target, preset_name):
     elif target.startswith("windows"):
         match preset_name.upper():
             case "RELEASE":
-              return [True, True, False, False]
+                return [True, True, False, False]
             case "FAST":
-              return [False, False, False, False]
+                return [False, False, False, False]
     raise ValueError(f"Unknown preset {preset_name} for {target}")
 
 def main():
@@ -1135,7 +1135,7 @@ def main():
     preset_mlgo = False
     preset_bolt = False
     if args.preset:
-      preset_pgo, preset_lto, preset_mlgo, preset_bolt = preset(hosts.build_host().value, args.preset)
+        preset_pgo, preset_lto, preset_mlgo, preset_bolt = preset(hosts.build_host().value, args.preset)
 
     pgo = (args.pgo or preset_pgo) and not args.no_pgo
     lto = (args.lto or preset_lto) and not args.no_lto
@@ -1320,7 +1320,7 @@ def main():
             BuilderRegistry.should_build('stage2') and \
             (not args.build_instrumented)
     if need_tests:
-       stage2.test()
+        stage2.test()
 
     # Instrument with llvm-bolt. Must be the last build step to prevent other
     # build steps generating BOLT profiles.
