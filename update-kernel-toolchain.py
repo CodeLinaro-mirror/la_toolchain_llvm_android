@@ -210,7 +210,7 @@ Bug: %s
         remote = subprocess.check_output(["git", "--no-pager", "remote"],
                                          cwd=self.kernel_dir).decode("utf-8").strip()
         for project in ET.parse(xml_path).iter("project"):
-            if (project.get("path") == self.kernel_relpath):
+            if project.get("path") == self.kernel_relpath:
                 command = "git push %s HEAD:refs/for/%s" % (
                         remote, project.get("revision"))
                 if self.wip:
