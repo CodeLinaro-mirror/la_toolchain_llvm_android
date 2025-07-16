@@ -802,20 +802,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Revert [Driver] Allow target override containing . in executable name"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-Driver-Allow-target-override-containing-.-in-executable-name-v2.patch",
-        "version_range": {
-            "from": 521684,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[compiler-rt] Allow finding LLVMConfig if CMAKE_FIND_ROOT_PATH_MODE_PACKAGE is set to ONLY"
         },
         "platforms": [
