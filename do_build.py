@@ -761,6 +761,46 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                         visibility = ["//visibility:public"],
                     )
 
+                    filegroup(
+                        name = "android_aarch64_binaries",
+                        srcs = glob([
+                            "lib/**/*-aarch64-android*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "android_arm_binaries",
+                        srcs = glob([
+                            "lib/**/*-arm-android*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "android_riscv64_binaries",
+                        srcs = glob([
+                            "lib/**/*-riscv64-android*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
+                    filegroup(
+                        name = "android_x86_64_binaries",
+                        srcs = glob([
+                            "lib/**/*-x86_64-android*",
+                        ]) + [
+                            ":common_binaries",
+                        ],
+                        visibility = ["//visibility:public"],
+                    )
+
                     # Special python3 for u-boot.
                     py_runtime(
                         name = "python3",
