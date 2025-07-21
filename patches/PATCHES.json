@@ -718,6 +718,62 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] Fix nondeterminism in MemberPointerType (#137910)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0764f65a7fb06703610b33a86ca79025fa4050a4.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574242
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Preserve CXXParenListInitExpr in TreeTransform. (#138518)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/13926e149081ca2771bdea7c08c07d92d87f7818.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574256
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [C] Handle comma operator for implicit int->enum conversions (#138752)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b59ab701e94cce455a53358cbe5082a3efb58fbf.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574501
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc][bazel] Re-enable memcpy prefetching on x86. (#138945)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/98d26b8f67e6abdac24591138f07dc34e7f0e36e.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574609
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [HWASan] fix missing BTI attribute on personality function thunks (#139138)"
         },
         "platforms": [
@@ -732,6 +788,62 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [C] Fix a false-positive with tentative defn compat (#139738)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e3f87e15910a5f1c5552fc3ef57e7dda3f68901a.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 575291
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [CodeGenPrepare] Make sure instruction get from SunkAddrs is before MemoryInst (#139303)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/59c6d70ed8120b8864e5f796e2bf3de5518a0ef0.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 575589
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Fix an assertion in the resolution of perfect matches (#140073)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/090f46d8d246762401c41c5486dde299382d6c90.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 575615
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Fix a regression introduced by #140073 (#140288)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/efa28338d858e1ea2bf705d50a0404bc602c8fe1.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 575735
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64][SME] Fix accessing the emergency spill slot with hazard padding (#142190)"
         },
         "platforms": [
@@ -741,6 +853,20 @@
         "version_range": {
             "from": 563880,
             "until": 577444
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Fix an error introduced in #138518 (#142988)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f53216793e15588d65601196b7a0625f73c12cea.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 577943
         }
     },
     {
