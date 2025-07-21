@@ -718,6 +718,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][SME] Fix accessing the emergency spill slot with hazard padding (#142190)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b5cf03033251a642b184b2e0ea6bdac171c17702.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 577444
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ELF,RISCV] Fix oscillation due to call relaxation"
         },
         "platforms": [
@@ -741,6 +755,20 @@
         "version_range": {
             "from": 563880,
             "until": 578705
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64][SME] Fix restoring callee-saves from FP with hazard padding (#143371)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d8e8ab79773f739c602c5869f80c6c5b5962c558.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 579344
         }
     },
     {
