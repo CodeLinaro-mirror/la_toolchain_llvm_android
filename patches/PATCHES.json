@@ -774,20 +774,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] Remove delayed typo expressions (#143423)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/9eef4d1c5fa6b1bcbbe675c14ca8301d5d346f7b.patch",
-        "version_range": {
-            "from": 563880,
-            "until": 578806
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[UPSTREAM] [GlobalOpt] Revert global widening transform (#144652)"
         },
         "platforms": [
