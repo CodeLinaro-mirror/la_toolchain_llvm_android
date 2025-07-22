@@ -1040,20 +1040,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Revert [DAG] visitFREEZE - always allow freezing multiple operands (#145939)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-DAG-visitFREEZE-always-allow-freezing-multipl.patch",
-        "version_range": {
-            "from": 582027,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "Fix for x86 ndk sysroot define being mixed with parameter for i686 lldb build"
         },
         "platforms": [
