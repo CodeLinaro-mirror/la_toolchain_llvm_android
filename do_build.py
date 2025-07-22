@@ -247,13 +247,10 @@ def install_wrappers(llvm_install_path: Path, llvm_next=False) -> None:
     bin_path = llvm_install_path / 'bin'
     clang_path = bin_path / 'clang'
     clang_real_path = bin_path / 'clang-real'
-    clang_real_extra_path = bin_path / 'clang.real'
     clangxx_path = bin_path / 'clang++'
     clangxx_real_path = bin_path / 'clang++-real'
-    clangxx_real_extra_path = bin_path / 'clang++.real'
     clang_tidy_path = bin_path / 'clang-tidy'
     clang_tidy_real_path = bin_path / 'clang-tidy-real'
-    clang_tidy_real_extra_path = bin_path / 'clang-tidy.real'
 
     # Rename clang and clang++ to clang-real and clang++-real.
     # clang and clang-tidy may already be moved by this script if we use a
@@ -269,11 +266,6 @@ def install_wrappers(llvm_install_path: Path, llvm_next=False) -> None:
     clang_tidy_path.unlink(missing_ok=True)
     clangxx_real_path.unlink(missing_ok=True)
     clangxx_real_path.symlink_to('clang-real')
-
-    # Extra parts for now
-    clang_real_extra_path.symlink_to('clang-real')
-    clangxx_real_extra_path.symlink_to('clang-real')
-    clang_tidy_real_extra_path.symlink_to('clang-tidy-real')
 
     shutil.copy2(wrapper_path, clang_path)
     shutil.copy2(wrapper_path, clangxx_path)
@@ -828,12 +820,9 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         with (install_dir / 'bin' / 'remote_toolchain_inputs').open('w') as inputs_file:
             dependencies = ('clang\n'
                             'clang++\n'
-                            'clang.real\n'
-                            'clang++.real\n'
                             'clang-real\n'
                             'clang++-real\n'
                             'clang-tidy\n'
-                            'clang-tidy.real\n'
                             'clang-tidy-real\n'
                             '../lib/libc++.so\n'
                             'lld\n'
