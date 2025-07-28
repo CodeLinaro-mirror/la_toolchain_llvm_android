@@ -41,7 +41,7 @@ __doc__ = (
     " runtime)."
 )
 
-example_usage = f"""
+example_usage = """
 Examples:
     python %(prog)s -a build.trace.a.1 -a build.trace.a.2 -b build.trace.b.1 -b build.trace.b.2 --ie .o --ie .so -s 60 -o ./a-b-build.html
 """
@@ -778,7 +778,7 @@ def get_bar_chart(
         models.HoverTool(
             tooltips=[
                 ("Build Unit", "@build_unit_names"),
-                (f"Time (s)", "@time_s{0.2f} ± @moe{0.2f}"),
+                ("Time (s)", "@time_s{0.2f} ± @moe{0.2f}"),
                 ("Confidence Interval", "(@ci_lower{0.2f} - @ci_upper{0.2f})"),
             ],
             renderers=[bar_glyph],
