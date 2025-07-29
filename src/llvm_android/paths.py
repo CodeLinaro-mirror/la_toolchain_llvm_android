@@ -39,6 +39,8 @@ CLANG_PREBUILT_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host' / hosts.build_host(
 CLANG_PREBUILT_LIBCXX_HEADERS: Path = CLANG_PREBUILT_DIR / 'include' / 'c++' / 'v1'
 WINDOWS_CLANG_PREBUILT_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host' / 'windows-x86'
                                     / constants.CLANG_PREBUILT_VERSION)
+CLANG_PREBUILT_LINUX_KLEAF_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host'
+                                        / 'linux-x86' / 'kleaf')
 
 
 BIONIC_HEADERS: Path = ANDROID_DIR / 'bionic' / 'libc' / 'include'
