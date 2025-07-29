@@ -23,7 +23,6 @@ from pathlib import Path
 import os
 import shutil
 import sys
-import textwrap
 from typing import List, Optional, Set
 import re
 
@@ -685,136 +684,9 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     if host.is_linux:
 
         # Add BUILD.bazel file.
-        with (install_dir / 'BUILD.bazel').open('w') as bazel_file:
-            bazel_file.write(
-                textwrap.dedent("""\
-                    load("@rules_python//python:defs.bzl", "py_runtime")
-
-                    package(default_visibility = ["//visibility:private"])
-
-                    filegroup(
-                        name = "common_binaries",
-                        srcs = glob([
-                            "bin/*",
-                            "lib/*",
-                        ]),
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "common_includes",
-                        srcs = glob([
-                            "lib/clang/*/include/**",
-                            "include/c++/**",
-                        ]),
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "glibc_binaries",
-                        srcs = glob([
-                            "lib/x86_64-unknown-linux-gnu/*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "glibc_includes",
-                        srcs = glob([
-                            "include/x86_64-unknown-linux-gnu/c++/**",
-                        ]) + [
-                            ":common_includes",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "musl_binaries",
-                        srcs = glob([
-                            "lib/**/x86_64-unknown-linux-musl/*",
-                            "musl/lib/**/x86_64-unknown-linux-musl/*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "musl_includes",
-                        srcs = glob([
-                            "lib/clang/*/include/**",
-                            "include/c++/**",
-                            "include/x86_64-unknown-linux-musl/c++/**",
-                        ]) + [
-                            ":common_includes",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "android_aarch64_binaries",
-                        srcs = glob([
-                            "lib/**/*-aarch64-android*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "android_arm_binaries",
-                        srcs = glob([
-                            "lib/**/*-arm-android*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "android_riscv64_binaries",
-                        srcs = glob([
-                            "lib/**/*-riscv64-android*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    filegroup(
-                        name = "android_x86_64_binaries",
-                        srcs = glob([
-                            "lib/**/*-x86_64-android*",
-                        ]) + [
-                            ":common_binaries",
-                        ],
-                        visibility = ["//visibility:public"],
-                    )
-
-                    # Special python3 for u-boot.
-                    py_runtime(
-                        name = "python3",
-                        files = glob(
-                            ["python3/**"],
-                            exclude = [
-                                "**/site-packages/**",
-                            ],
-                        ),
-                        interpreter = "python3/bin/python3",
-                        python_version = "PY3",
-                        visibility = ["//u-boot:__subpackages__"],
-                    )
-
-                    exports_files([
-                        "bin/clang",
-                        "bin/clang++",
-                        "bin/llvm-ar",
-                        "bin/llvm-objcopy",
-                        "bin/llvm-strip",
-                    ])
-                    """))
+        shutil.copyfile(
+            paths.CLANG_PREBUILT_LINUX_KLEAF_DIR / 'template_BUILD.bazel',
+            install_dir / 'BUILD.bazel')
 
         # Create RBE input files.
         with (install_dir / 'bin' / 'remote_toolchain_inputs').open('w') as inputs_file:
