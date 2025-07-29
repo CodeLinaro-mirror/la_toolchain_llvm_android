@@ -21,6 +21,7 @@ disable=C0103,C0111,W0012,W0403,E0401,E0611,C,R,W
 
 enable=bad-indentation,
        f-string-without-interpolation,
+       pointless-string-statement,
        superfluous-parens,
        unused-argument,
        unused-import,

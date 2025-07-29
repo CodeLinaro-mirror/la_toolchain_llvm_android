@@ -55,7 +55,7 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
     patch_dir = os.getcwd()
     if git_am:
         patch_manager_cmd.append('--git_am')
-        """Run git am in the source directory"""
+        # Run git am in the source directory
         patch_dir=source_dir
 
     return utils.check_output(patch_manager_cmd, cwd=patch_dir)
