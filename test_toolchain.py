@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from datetime import datetime
+import enum
 import sys
 from typing import Any, Dict
 from pathlib import Path
@@ -277,6 +279,231 @@ class Dut:
 
         raise Dut.DutError(
             "Device did not come back online after rebooting. Not waiting any longer."
+        )
+
+
+class TestType(enum.Enum):
+    """
+    Enum of supported tests/benchamrks.
+    """
+
+    CTS_BIONIC = "CTS_BIONIC"
+    CTS_LIBCORE = "CTS_LIBCORE"
+    GEEKBENCH = "GEEKBENCH"
+    BENCH_BIONIC = "BENCH_BIONIC"
+    BENCH_LIBCORE = "BENCH_LIBCORE"
+
+
+# Test type groupings
+CTS = set([TestType.CTS_BIONIC, TestType.CTS_LIBCORE])
+NATIVE_ANDROID_BENCHMARKS = set(
+    [
+        TestType.BENCH_BIONIC,
+        TestType.BENCH_LIBCORE,
+    ]
+)
+
+
+class TestToolchainError(Exception):
+    pass
+
+
+TMP_RESULTS_DIR = Path("/tmp/toolchain-test-results-raw")
+
+
+class TestRunner:
+    """
+    Implementations for executing each supported test type.
+    - Can expect that each method may throw an exception.
+    """
+
+    @staticmethod
+    def run_cts(
+        dut: Dut,
+        test_type: TestType,
+        package: str,
+    ):
+        if test_type not in CTS:
+            raise TestToolchainError(
+                f"The provided test {test_type} is not a supported CTS test."
+            )
+        # May want to output results as they become available.
+        out = utils.capture_output(
+            ["atest", "-s", dut.adb_serial, package],
+            cwd=dut.android_target.android_root.resolve(),
+            env=dut.android_target.env,
+        )
+        # Unideal, but cannot find another way to set or find outputted result file.
+        results_file = Path(out.splitlines()[0].split(" ")[-1]) / "test_result"
+
+    @staticmethod
+    def run_bionic_cts(dut: Dut):
+        TestRunner.run_cts(dut, TestType.CTS_BIONIC, "CtsBionicTestCases")
+
+    @staticmethod
+    def run_libcore_cts(dut: Dut):
+        TestRunner.run_cts(dut, TestType.CTS_LIBCORE, "CtsLibcoreTestCases")
+
+    @staticmethod
+    def run_geekbench(dut: Dut, bin_dir_path: Path):
+        abi = dut.get_abi()
+        match abi:
+            case "x86_64":
+                exe_name = "geekbench_x86_64"
+            case "arm64-v8a":
+                exe_name = "geekbench_aarch64"
+            case _:
+                raise TestToolchainError(
+                    f"Geekbench is not supported for device's ABI {abi}."
+                )
+        geekbench_files = [
+            bin_dir_path / "geekbench.plar",
+            bin_dir_path / "geekbench-workload.plar",
+            bin_dir_path / exe_name,
+        ]
+        for file in geekbench_files:
+            if not file.exists():
+                raise TestToolchainError(
+                    "Could not find required geekbench binaries (specifically,"
+                    f" {file} could not be found)."
+                )
+        on_device_bin_dir_path = Path("/data/local/tmp/geekbench")
+        results_file_name = f'{TestType.GEEKBENCH.name}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.json'
+        on_device_results_path = Path("/data/local/tmp") / results_file_name
+
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "shell",
+                "mkdir",
+                "-p",
+                on_device_bin_dir_path,
+            ]
+        )
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "push",
+                *[path.resolve() for path in geekbench_files],
+                on_device_bin_dir_path,
+            ],
+        )
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "shell",
+                "chmod",
+                "u+x",
+                on_device_bin_dir_path / exe_name,
+            ],
+        )
+        utils.subprocess_run(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "shell",
+                "--",
+                on_device_bin_dir_path / exe_name,
+                "--no-upload",
+                "--save",
+                on_device_results_path,
+            ],
+        )
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "pull",
+                on_device_results_path,
+                TMP_RESULTS_DIR.resolve(),
+            ]
+        )
+        utils.check_call(
+            [
+                "adb",
+                "shell",
+                "rm",
+                "-rf",
+                on_device_bin_dir_path,
+                on_device_results_path,
+            ]
+        )
+
+    @staticmethod
+    def run_native_android_benchmark(
+        dut: Dut,
+        test_type: TestType,
+        module: str,
+        on_device_bin: Path,
+    ):
+        if test_type not in NATIVE_ANDROID_BENCHMARKS:
+            raise TestToolchainError(
+                f"The provided test {test_type} is not a supported native Android"
+                " benchmark."
+            )
+        utils.check_call(
+            ["mmma", module],
+            cwd=dut.android_target.android_root.resolve(),
+            env=dut.android_target.env,
+        )
+        utils.check_call(
+            ["adb", "-s", dut.adb_serial, "sync", "data"],
+            cwd=dut.android_target.android_root.resolve(),
+            env=dut.android_target.env,
+        )
+        results_file_name = (
+            f'{test_type.name}-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}.json'
+        )
+        on_device_results_path = Path("/data/local/tmp") / results_file_name
+        utils.subprocess_run(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "shell",
+                on_device_bin,
+                "--",
+                f"--benchmark_out={on_device_results_path}",
+                "--benchmark_out_format=json",
+            ],
+        )
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "pull",
+                on_device_results_path,
+                TMP_RESULTS_DIR.resolve(),
+            ]
+        )
+
+    @staticmethod
+    def run_bionic_benchmarks(dut: Dut):
+        TestRunner.run_native_android_benchmark(
+            dut,
+            TestType.BENCH_BIONIC,
+            "bionic/benchmarks",
+            Path("/data/benchmarktest64/bionic-benchmarks/bionic-benchmarks"),
+        )
+
+    @staticmethod
+    def run_libcore_benchmarks(
+        dut: Dut,
+    ):
+        TestRunner.run_native_android_benchmark(
+            dut,
+            TestType.BENCH_LIBCORE,
+            "libcore/",
+            Path("/data/benchmarktest64/libjavacore-benchmarks/libjavacore-benchmarks"),
         )
 
 
