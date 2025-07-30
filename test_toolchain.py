@@ -331,6 +331,114 @@ class Dut:
         )
 
 
+class Lab:
+    """
+    Abstract class for a lab.
+    It can be expected that all methods could raise exceptions.
+    """
+
+    class LabError(Exception):
+        pass
+
+    DEFAULT_LEASE_TIME_MIN = 240
+
+    @staticmethod
+    def lease_by_host_name(host_name: str, time_min: int):
+        raise NotImplementedError("Subclass must implement abstract method.")
+
+    @staticmethod
+    def lease_by_board_type(board_type: str, time_min: int) -> str:
+        """Returns host name of leased device."""
+        raise NotImplementedError("Subclass must implement abstract method.")
+
+    @staticmethod
+    def release(host_name: str):
+        raise NotImplementedError("Subclass must implement abstract method.")
+
+    @staticmethod
+    def release_all():
+        raise NotImplementedError("Subclass must implement abstract method.")
+
+    @staticmethod
+    def get_board_type(host_name: str):
+        raise NotImplementedError("Subclass must implement abstract method.")
+
+
+class Swarming(Lab):
+    """
+    Lab implementation for ChromeOS Swarming. Interaction achieved through the Crosfleet CLI.
+    """
+
+    class CrosfleetDutInfo:
+        def __init__(self, host_name: str | None, board_type: str | None):
+            self.host_name = host_name
+            self.board_type = board_type
+
+        @classmethod
+        def from_info_cmd(cls, host_name: str) -> "Swarming.CrosfleetDutInfo":
+            board_type: str | None = None
+            for line in utils.check_output(
+                ["crosfleet", "dut", "info", host_name]
+            ).splitlines():
+                if line is None or "=" not in line:
+                    continue
+                (key, _, value) = line.partition("=")
+                if key == "BOARD":
+                    board_type = value.strip()
+            return cls(host_name, board_type)
+
+    @staticmethod
+    def lease_by_host_name(host_name: str, time_min: int):
+        utils.check_call(
+            [
+                "crosfleet",
+                "dut",
+                "lease",
+                "--host",
+                host_name,
+                "--minutes",
+                str(time_min),
+            ]
+        )
+
+    @staticmethod
+    def lease_by_board_type(board_type: str, time_min: int) -> str:
+        host_name = (
+            utils.check_output(
+                [
+                    "crosfleet",
+                    "dut",
+                    "lease",
+                    "-dims",
+                    f"version_info_os_type=ANDROID,dut_state=ready,label-board={board_type},label-pool=DUT_POOL_QUOTA",
+                    "--minutes",
+                    str(time_min),
+                ],
+            )
+            .splitlines()[0]
+            .split()[1]
+        )
+        if host_name is None:
+            raise Lab.LabError(
+                "The device could not be leased using the provided board type"
+                f" {board_type}."
+            )
+        return host_name
+
+    @staticmethod
+    def release(host_name: str):
+        # This command sometimes hangs and causes an error. Unsure of the cause.
+        utils.subprocess_run(["crosfleet", "dut", "abandon", host_name])
+
+    @staticmethod
+    def release_all():
+        utils.subprocess_run(["crosfleet", "dut", "abandon"])
+
+    @staticmethod
+    def get_board_type(host_name: str):
+        return Swarming.CrosfleetDutInfo.from_info_cmd(host_name).board_type
+
+
 class TestType(enum.Enum):
     """
     Enum of supported tests/benchamrks.
