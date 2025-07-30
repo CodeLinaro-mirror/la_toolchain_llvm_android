@@ -282,6 +282,54 @@ class Dut:
             "Device did not come back online after rebooting. Not waiting any longer."
         )
 
+    def prep_for_test(self):
+        """
+        Prepares a device for testing.
+        - Reboots device (clears RAM & caches, closes open files, kills lingering processes, etc.).
+        - Roots device (needed to run some commands of interest).
+        - Push and run device-preparation shell script on device (sets certain Android settings, governers, etc.).
+        May raise exception.
+        """
+        if self.adb_serial is None:
+            raise Dut.DutError(
+                "Could not prepare device for test because it is not available over"
+                " ADB."
+            )
+
+        self.reboot()
+        self.root_adb()
+
+        script_path = Path("./prep_dut_for_test.sh")
+        script_on_device_path = Path(f"/data/local/tmp/{script_path.name}")
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                self.adb_serial,
+                "push",
+                script_path.resolve(),
+                script_on_device_path.parent,
+            ],
+        )
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                self.adb_serial,
+                "shell",
+                "--",
+                "chmod",
+                "+x",
+                script_on_device_path,
+                "&&",
+                "sh",
+                script_on_device_path,
+                "&&",
+                "rm",
+                script_on_device_path,
+            ],
+        )
+
 
 class TestType(enum.Enum):
     """
