@@ -20,6 +20,7 @@ from typing import Any, Dict
 from pathlib import Path
 import time
 import subprocess
+import json
 
 import context  # pylint: disable=unused-import
 from llvm_android import utils
@@ -304,6 +305,22 @@ NATIVE_ANDROID_BENCHMARKS = set(
 )
 
 
+class TestResult:
+    """
+    A class for recording arbitrary test results
+    """
+
+    def __init__(
+        self,
+        test_type: TestType,
+        data: Dict[str, Any],
+        data_formatted: Dict[str, str] | None = None,
+    ):
+        self.test_type = test_type
+        self.data = data
+        self.data_formatted = data_formatted
+
+
 class TestToolchainError(Exception):
     pass
 
@@ -314,6 +331,7 @@ TMP_RESULTS_DIR = Path("/tmp/toolchain-test-results-raw")
 class TestRunner:
     """
     Implementations for executing each supported test type.
+    - Each method should return a TestResult object to record results.
     - Can expect that each method may throw an exception.
     """
 
@@ -322,7 +340,7 @@ class TestRunner:
         dut: Dut,
         test_type: TestType,
         package: str,
-    ):
+    ) -> TestResult:
         if test_type not in CTS:
             raise TestToolchainError(
                 f"The provided test {test_type} is not a supported CTS test."
@@ -335,17 +353,20 @@ class TestRunner:
         )
         # Unideal, but cannot find another way to set or find outputted result file.
         results_file = Path(out.splitlines()[0].split(" ")[-1]) / "test_result"
+        with results_file.open() as f:
+            data = json.load(f)
+        return TestResult(test_type, data)
 
     @staticmethod
-    def run_bionic_cts(dut: Dut):
-        TestRunner.run_cts(dut, TestType.CTS_BIONIC, "CtsBionicTestCases")
+    def run_bionic_cts(dut: Dut) -> TestResult:
+        return TestRunner.run_cts(dut, TestType.CTS_BIONIC, "CtsBionicTestCases")
 
     @staticmethod
-    def run_libcore_cts(dut: Dut):
-        TestRunner.run_cts(dut, TestType.CTS_LIBCORE, "CtsLibcoreTestCases")
+    def run_libcore_cts(dut: Dut) -> TestResult:
+        return TestRunner.run_cts(dut, TestType.CTS_LIBCORE, "CtsLibcoreTestCases")
 
     @staticmethod
-    def run_geekbench(dut: Dut, bin_dir_path: Path):
+    def run_geekbench(dut: Dut, bin_dir_path: Path) -> TestResult:
         abi = dut.get_abi()
         match abi:
             case "x86_64":
@@ -437,13 +458,25 @@ class TestRunner:
             ]
         )
 
+        with (TMP_RESULTS_DIR / results_file_name).open() as f:
+            data = json.load(f)
+        data_formatted: Dict[str, str] = {}
+        data_formatted["multicore"] = data["multicore_score"]
+        data_formatted["single"] = data["score"]
+        for section in data["sections"]:
+            section_name = section["name"]
+            for workload in section["workloads"]:
+                data_formatted[f"{section_name} {workload['name']}"] = workload["score"]
+
+        return TestResult(TestType.GEEKBENCH, data, data_formatted)
+
     @staticmethod
     def run_native_android_benchmark(
         dut: Dut,
         test_type: TestType,
         module: str,
         on_device_bin: Path,
-    ):
+    ) -> TestResult:
         if test_type not in NATIVE_ANDROID_BENCHMARKS:
             raise TestToolchainError(
                 f"The provided test {test_type} is not a supported native Android"
@@ -485,10 +518,16 @@ class TestRunner:
                 TMP_RESULTS_DIR.resolve(),
             ]
         )
+        with (TMP_RESULTS_DIR / results_file_name).open() as f:
+            data = json.load(f)
+        data_formatted: Dict[str, Any] = {}
+        for benchmark in data["benchmarks"]:
+            data_formatted[benchmark["name"]] = benchmark["real_time"]
+        return TestResult(test_type, data, data_formatted)
 
     @staticmethod
-    def run_bionic_benchmarks(dut: Dut):
-        TestRunner.run_native_android_benchmark(
+    def run_bionic_benchmarks(dut: Dut) -> TestResult:
+        return TestRunner.run_native_android_benchmark(
             dut,
             TestType.BENCH_BIONIC,
             "bionic/benchmarks",
@@ -498,8 +537,8 @@ class TestRunner:
     @staticmethod
     def run_libcore_benchmarks(
         dut: Dut,
-    ):
-        TestRunner.run_native_android_benchmark(
+    ) -> TestResult:
+        return TestRunner.run_native_android_benchmark(
             dut,
             TestType.BENCH_LIBCORE,
             "libcore/",

@@ -44,6 +44,9 @@ def subprocess_run(cmd, *args, **kwargs):
         return None
     return subprocess.run(cmd, *args, **kwargs, text=True)
 
+def capture_output(cmd, *args, **kwargs):
+    """subprocess capture output with logging."""
+    return subprocess_run(cmd, *args, **kwargs, capture_output=True).stdout
 
 def unchecked_call(cmd, *args, **kwargs):
     """subprocess.call with logging."""
