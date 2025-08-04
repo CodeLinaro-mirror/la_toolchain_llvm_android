@@ -207,3 +207,26 @@ def check_tools(use_sha: bool):
             file=sys.stderr,
         )
         sys.exit(1)
+
+def prepare_env(android_root: Path, android_target: str) -> Dict[str, str]:
+    try:
+        env_out = check_output(
+            [
+                "bash",
+                "-c",
+                ". ./build/envsetup.sh;lunch " + android_target + " >/dev/null && env",
+            ],
+            cwd=android_root.resolve(),
+        )
+    except subprocess.CalledProcessError:
+        raise RuntimeError("Failed to lunch " + android_target)
+
+    env: Dict[str, str] = {}
+    for line in env_out.splitlines():
+        if "=" not in line:
+            continue
+        (key, _, value) = line.partition("=")
+        value = value.strip()
+        env[key] = value
+
+    return env

@@ -21,7 +21,6 @@ import sys
 from typing import Any, Dict, List
 from pathlib import Path
 import time
-import subprocess
 import argparse
 import json
 import yaml
@@ -107,29 +106,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def prepare_env(android_root_path: Path, android_target: str) -> Dict[str, str]:
-    # TODO(tynasello), this logic exists in test_compiler. Can factor out into utils module.
-    env: Dict[str, str] = {}
-    try:
-        env_out = utils.check_output(
-            [
-                "bash",
-                "-c",
-                f". ./build/envsetup.sh;lunch {android_target} >/dev/null;env",
-            ],
-            cwd=android_root_path.resolve(),
-        )
-    except subprocess.CalledProcessError:
-        raise RuntimeError("Failed to lunch " + android_target)
-    for line in env_out.splitlines():
-        if not line:
-            continue
-        (key, _, value) = line.partition("=")
-        value = value.strip()
-        env[key] = value
-    return env
-
-
 class AndroidTarget:
     """
     A class representing an Android build environment.
@@ -139,7 +115,7 @@ class AndroidTarget:
     def __init__(self, target: str, android_root: Path):
         self.target = target
         self.android_root = android_root
-        self.env = prepare_env(android_root, self.target)
+        self.env = utils.prepare_env(android_root, self.target)
 
     def get_board_type(self) -> str:
         # Additional edge cases may be needed here

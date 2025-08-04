@@ -24,7 +24,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-from typing import Dict, List, Optional, Set
+from typing import List, Optional, Set
 
 import context  # pylint: disable=unused-import
 from llvm_android import hosts, paths, utils, version
@@ -233,24 +233,8 @@ def build_target(android_base: Path, clang_version: version.Version,
                  max_jobs: int, with_tidy: bool, no_mlgo: bool,
                  profiler: Optional[ProfileHandler]=None) -> None:
     jobs = '-j{}'.format(max(1, min(max_jobs, multiprocessing.cpu_count())))
-    try:
-        env_out = utils.check_output(
-            [
-                'bash', '-c', '. ./build/envsetup.sh;'
-                'lunch ' + target + ' >/dev/null && env'
-            ],
-            cwd=android_base
-        )
-    except subprocess.CalledProcessError:
-        raise RuntimeError('Failed to lunch ' + target)
 
-    env: Dict[str, str] = {}
-    for line in env_out.splitlines():
-        if not line:
-            continue
-        (key, _, value) = line.partition('=')
-        value = value.strip()
-        env[key] = value
+    env = utils.prepare_env(android_base, target)
 
     # Set ALLOW_NINJA_ENV so that soong propagates environment variables to
     # Ninja.  We use it for disabling warnings in the compiler wrapper and for
