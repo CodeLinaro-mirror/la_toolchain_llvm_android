@@ -1184,7 +1184,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
         # Testing on-device
         TEST_PARAMS = f"executor={paths.LLVM_PATH}/libcxx/utils/adb_run.py;target_triple={self._config.base_llvm_triple}33"
-        defines['LLVM_LIT_ARGS'] = "-sv --xunit-xml-output test-results.xml --filter-out \"(permissions.pass.cpp|print.file.pass.cpp|println.file.pass.cpp|vprint_nonunicode.file.pass.cpp|vprint_unicode.file.pass.cpp)\""
+        defines['LLVM_LIT_ARGS'] = "-sv -o test-results.json --xunit-xml-output test-results.xml --filter-out \"(permissions.pass.cpp|print.file.pass.cpp|println.file.pass.cpp|vprint_nonunicode.file.pass.cpp|vprint_unicode.file.pass.cpp)\""
         defines['LIBCXX_TEST_PARAMS'] = TEST_PARAMS
         defines['LIBCXXABI_TEST_PARAMS'] = TEST_PARAMS
 

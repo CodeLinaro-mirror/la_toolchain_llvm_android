@@ -503,6 +503,7 @@ class TestType(enum.Enum):
 
     CTS_BIONIC = "CTS_BIONIC"
     CTS_LIBCORE = "CTS_LIBCORE"
+    LIBCXX = "LIBCXX"
     GEEKBENCH = "GEEKBENCH"
     BENCH_BIONIC = "BENCH_BIONIC"
     BENCH_LIBCORE = "BENCH_LIBCORE"
@@ -577,6 +578,46 @@ class TestRunner:
     @staticmethod
     def run_libcore_cts(dut: Dut) -> TestResult:
         return TestRunner.run_cts(dut, TestType.CTS_LIBCORE, "CtsLibcoreTestCases")
+
+    @staticmethod
+    def run_libcxx(dut: Dut) -> TestResult:
+        abi = dut.get_abi()
+        match abi:
+            case "x86_64":
+                target = "x86_64"
+            case "x86":
+                target = "i386"
+            case "arm64-v8a":
+                target = "aarch64"
+            case "armeabi-v7a" | "armeabi":
+                target = "arm"
+            case "riscv64":
+                target = "riscv64"
+            case _:
+                raise TestToolchainError(
+                    f"Libcxx testing is not supported for device's ABI {abi}."
+                )
+        libcxx_out_dir = utils.paths.OUT_DIR / f"lib/device-libcxx-{target}"
+        utils.check_call(
+            [
+                "adb",
+                "-s",
+                dut.adb_serial,
+                "push",
+                f"{libcxx_out_dir}/lib/libc++.so",
+                "/data/local/tmp/libc++/libc++.so",
+            ],
+        )
+        utils.subprocess_run(["ninja", "check-cxx", "check-cxxabi"], cwd=libcxx_out_dir)
+        data: Dict[str, Any] = {}
+        filenames = [
+            libcxx_out_dir / "libcxx/test/test-results.json",
+            libcxx_out_dir / "libcxxabi/test/test-results.json",
+        ]
+        for filename in filenames:
+            with open(filename, encoding="utf-8") as f:
+                data[str(filename)] = json.load(f)
+        return TestResult(TestType.LIBCXX, data)
 
     @staticmethod
     def run_geekbench(dut: Dut, bin_dir_path: Path) -> TestResult:
@@ -1018,6 +1059,8 @@ def _run_test_on_device(
             results = TestRunner.run_bionic_cts(dut)
         case TestType.CTS_LIBCORE:
             results = TestRunner.run_libcore_cts(dut)
+        case TestType.LIBCXX:
+            results = TestRunner.run_libcxx(dut)
         case TestType.GEEKBENCH:
             results = TestRunner.run_geekbench(
                 dut, test_config.test_specific["bin_dir"]
