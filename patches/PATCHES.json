@@ -984,6 +984,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Ensure the LR is preserved if we must call __arm_get_current_vg (#145760)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/af7166a3f126ce4e4d2a05eccc1358bd0427cf0f.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 580344
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [GlobalOpt] Revert global widening transform (#144652)"
         },
         "platforms": [
