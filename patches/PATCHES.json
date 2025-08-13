@@ -732,6 +732,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Fix padding calculation for function reference types (#142125)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/769c42f4a552a75c8c38870ddc1b50d2ea874e4e.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 577632
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [ELF,RISCV] Fix oscillation due to call relaxation"
         },
         "platforms": [
