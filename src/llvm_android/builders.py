@@ -105,10 +105,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
         defines['LLVM_BUILD_TOOLS'] = 'ON'
 
         # Do not build compiler-rt for Darwin.  We don't ship host (or any
-        # prebuilt) runtimes for Darwin anyway.  Attempting to build these will
-        # fail compilation of lib/builtins/atomic_*.c that only get built for
-        # Darwin and fail compilation due to us using the bionic version of
-        # stdatomic.h.
+        # prebuilt) runtimes for Darwin anyway.
         if self._config.target_os.is_darwin:
             defines['LLVM_BUILD_EXTERNAL_COMPILER_RT'] = 'ON'
 
@@ -247,10 +244,7 @@ class Stage2Builder(base_builders.LLVMBuilder):
             defines['LLVM_PROFDATA_FILE'] = str(self.profdata_file)
 
         # Do not build compiler-rt for Darwin.  We don't ship host (or any
-        # prebuilt) runtimes for Darwin anyway.  Attempting to build these will
-        # fail compilation of lib/builtins/atomic_*.c that only get built for
-        # Darwin and fail compilation due to us using the bionic version of
-        # stdatomic.h.
+        # prebuilt) runtimes for Darwin anyway.
         if self._config.target_os.is_darwin:
             defines['LLVM_BUILD_EXTERNAL_COMPILER_RT'] = 'ON'
 
