@@ -35,15 +35,15 @@ from bokeh.models import ranges
 __doc__ = (
     "This program can be used to better discover and document improvements and"
     " regressions in Android build performance. Build metrics are gathered from"
-    " Soong-generated build trace files. This script can be run within a"
-    " virtual environment (must install dependencies above), or copied over and"
-    " run in Colab (dependencies should already be installed in a Borg"
-    " runtime)."
+    " Soong-generated build trace files. This script can be run within a virtual"
+    " environment (must install dependencies above), or copied over and run in Colab"
+    " (dependencies should already be installed in a Borg runtime). Results are written"
+    " to build-a-b-comparison.{json, html}, and {build-a, build-b}.json"
 )
 
 example_usage = """
 Examples:
-    python %(prog)s -a build.trace.a.1 -a build.trace.a.2 -b build.trace.b.1 -b build.trace.b.2 --ie .o --ie .so -s 60 -o ./a-b-build.html
+    python %(prog)s -a build.trace.a.1 -a build.trace.a.2 -b build.trace.b.1 -b build.trace.b.2 --ie .o --ie .so -s 60
 """
 
 
@@ -74,19 +74,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "-o",
-        "--output_file_path",
-        default=Path(__file__).resolve().with_suffix(".html"),
+        "--output-dir-path",
+        default=Path(__file__).parent.resolve(),
         help=(
-            "Path to output analysis to. Defaults to"
-            f' {Path(__file__).resolve().with_suffix(".html")}'
+            "Directory path to output analysis to. Defaults to"
+            f" {Path(__file__).parent.resolve()}"
         ),
     )
     parser.add_argument(
         "-g",
         "--group-by",
-        choices=[Target.NAME_KEY, Target.MODULE_NAME_KEY],
+        choices=[
+            Target.NAME_KEY,
+            Target.MODULE_NAME_KEY,
+            Target.MODULE_TYPE_KEY,
+            Target.RULE_NAME_KEY,
+            Target.EXTENSION_KEY,
+        ],
         default=Target.NAME_KEY,
-        help=f"How to group target data into build units. Default is {Target.NAME_KEY}.",
+        help=(
+            f"How to group target data into build units. Default is {Target.NAME_KEY}."
+        ),
     )
     parser.add_argument(
         "--include-module-names",
@@ -149,7 +157,7 @@ def parse_args() -> argparse.Namespace:
         "--remove-lower-than-s",
         help=(
             "Remove all build units (either targets or modules based on -g argument)"
-            " with build time lower than this value"
+            " with build time lower than this value (s)"
         ),
     )
 
@@ -445,9 +453,9 @@ def get_k_largest_relative_diffs(
     suffix_a: str,
     df_b: pd.DataFrame,
     suffix_b: str,
-    k: int,
     merge_on_key: str,
     value_key: str,
+    k: int | None = None,
 ) -> pd.DataFrame:
     """
     Merges two DataFrames and returns the top K entries with the largest
@@ -458,11 +466,11 @@ def get_k_largest_relative_diffs(
         suffix_a: The suffix to append to column names from df_a after merging.
         df_b: The second DataFrame.
         suffix_b: The suffix to append to column names from df_b after merging.
-        k: The number of top relative differences to return.
         merge_on_key: The column name to merge the two DataFrames on.
             (e.g., BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY).
         value_key: The column name containing the values to compare for differences.
             (e.g., Target.TIME_S_KEY).
+        k: The number of top relative differences to return. None means return all.
 
     Returns:
         A DataFrame containing the top K entries with the largest relative
@@ -489,7 +497,8 @@ def get_k_largest_relative_diffs(
     )
 
     df.drop(columns=["abs_diff", "avg_time"], inplace=True)
-    df = df.nlargest(k, "rel_diff")
+    if k is not None:
+        df = df.nlargest(k, "rel_diff")
     df.sort_values(by="rel_diff", ascending=False, inplace=True)
     df.drop(columns=["rel_diff"], inplace=True)
 
@@ -544,9 +553,9 @@ def get_bar_chart_comparison(
         build_a.name,
         b_agg_df,
         build_b.name,
-        limit,
         BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
         Target.TIME_S_KEY,
+        limit,
     )
 
     if a_agg_df.empty or b_agg_df.empty:
@@ -578,7 +587,7 @@ def get_bar_chart_comparison(
 
     fig = plotting.figure(
         x_range=build_unit_names,
-        y_range=ranges.Range1d(0, max(max(data["a"]), max(data["b"])) * 1.5),
+        y_range=ranges.Range1d(0, max(max(data["a"]), max(data["b"])) * 1.1),
         title=(
             f"Build Time Comparison\nGrouped by {filters.group_by}\n{limit} largest"
             " relative differences shown"
@@ -702,6 +711,8 @@ def get_bar_chart(
         Target.TIME_S_KEY,
     )
 
+    total_time_s = merged_df[Target.TIME_S_KEY].sum()
+
     k_largest_units_df = merged_df.nlargest(limit, Target.TIME_S_KEY).sort_values(
         by=Target.TIME_S_KEY, ascending=False
     )
@@ -722,9 +733,10 @@ def get_bar_chart(
 
     fig = plotting.figure(
         x_range=build_unit_names,
-        y_range=ranges.Range1d(0, max(data["time_s"]) * 1.5),
+        y_range=ranges.Range1d(0, max(data["time_s"]) * 1.1),
         title=(
-            f"Largest Build Times for Build {build.name} ({build.desc})\nGrouped by"
+            f"Largest Build Times for Build {build.name} ({build.desc})\nTotal build"
+            f" time (min): {total_time_s/60:.2f}\nGrouped by"
             f" {filters.group_by}\n{limit} largest build times shown"
         ),
         width=FIGURE_WIDTH,
@@ -788,37 +800,94 @@ def get_bar_chart(
     return fig
 
 
+def write_builds_to_json(
+    build_a: BuildConfiguration,
+    build_b: BuildConfiguration,
+    filters: Filters,
+    output_dir: Path,
+    confidence_lvl: float = 0.95,
+):
+    """
+    Writes filtered and sorted build configuration data/comparisons to JSON
+    files in the provided output directory.
+    A file is created for build a, build b, and an a-b comparison.
+    """
+
+    a_filtered_build_trace_dfs = build_a.get_filtered_build_trace_dfs(filters)
+    b_filtered_build_trace_dfs = build_b.get_filtered_build_trace_dfs(filters)
+    if a_filtered_build_trace_dfs is None or b_filtered_build_trace_dfs is None:
+        return
+
+    a_agg_df = aggregate_dfs(
+        a_filtered_build_trace_dfs,
+        confidence_lvl,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+    b_agg_df = aggregate_dfs(
+        b_filtered_build_trace_dfs,
+        confidence_lvl,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+    merged_df = get_k_largest_relative_diffs(
+        a_agg_df,
+        build_a.name,
+        b_agg_df,
+        build_b.name,
+        BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY,
+        Target.TIME_S_KEY,
+    )
+
+    for name, df, sort_by in [
+        (build_a.name, a_agg_df, Target.TIME_S_KEY),
+        (build_b.name, b_agg_df, Target.TIME_S_KEY),
+        (f"{build_a.name}-{build_b.name}-comparison", merged_df, None),
+    ]:
+        if df.empty:
+            continue
+        df.rename(
+            columns={BuildConfiguration.GENERIC_BUILD_UNIT_NAME_KEY: filters.group_by},
+            inplace=True,
+        )
+        if sort_by is not None:
+            df = df.sort_values(by=Target.TIME_S_KEY, ascending=False)
+        df.to_json(output_dir / f"build-{name}.json", orient="records", indent=4)
+
+
 def compare_android_build_configurations(
-    paths_a: List[Path], paths_b: List[Path], output_file_path: Path, filters: Filters
+    paths_a: List[Path], paths_b: List[Path], output_dir: Path, filters: Filters
 ):
     """
     Compares build performance of two Android build configurations, given two
     sets of Soong-generated build trace files (one for each build
     configuration).
 
-    Generates an HTML report containing various build time visualizations. All
-    generated charts are written to a single HTML file at the specified output
-    path.
+    Generates a report containing various build time data/visualizations. All
+    generated logs/charts are written to the specified output directory.
     """
 
     build_a = BuildConfiguration.from_soong_traces("a", paths_a)
     build_b = BuildConfiguration.from_soong_traces("b", paths_b)
 
-    bar = get_bar_chart_comparison(build_a, build_b, filters)
-    spacer1 = models.Div(text="", width=1, height=60)
-    bar_a = get_bar_chart(build_a, filters)
-    spacer2 = models.Div(text="", width=1, height=60)
-    bar_b = get_bar_chart(build_b, filters)
-
-    plotting.output_file(output_file_path)
+    plotting.output_file(
+        output_dir / f"build-{build_a.name}-{build_b.name}-comparison.html"
+    )
     plotting.save(
         layouts.column(
-            bar,
-            spacer1,
-            bar_a,
-            spacer2,
-            bar_b,
+            get_bar_chart_comparison(build_a, build_b, filters),
+            models.Div(text="", width=1, height=60),
+            get_bar_chart(build_a, filters),
+            models.Div(text="", width=1, height=60),
+            get_bar_chart(build_b, filters),
         )
+    )
+
+    write_builds_to_json(
+        build_a,
+        build_b,
+        filters,
+        output_dir,
     )
 
 
@@ -852,9 +921,11 @@ def main():
         ),
     )
 
-    compare_android_build_configurations(
-        paths_a, paths_b, Path(args.output_file_path), filters
-    )
+    output_dir = Path(args.output_dir_path).expanduser()
+    if not output_dir.exists() or not output_dir.is_dir():
+        raise ValueError("Provided output directory path could not be found.")
+
+    compare_android_build_configurations(paths_a, paths_b, output_dir, filters)
 
 
 if __name__ == "__main__":
