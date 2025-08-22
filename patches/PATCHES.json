@@ -788,20 +788,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] [libc++] Fix padding calculation for function reference types (#142125)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "cherry/769c42f4a552a75c8c38870ddc1b50d2ea874e4e.patch",
-        "version_range": {
-            "from": 563880,
-            "until": 577632
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[UPSTREAM] Revert \"[lld] Merge equivalent symbols found during ICF (#134342)\""
         },
         "platforms": [
@@ -914,6 +900,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Fix padding calculation for function reference types (#142125)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/769c42f4a552a75c8c38870ddc1b50d2ea874e4e.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 577632
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Fix an error introduced in #138518 (#142988)"
         },
         "platforms": [
@@ -1021,6 +1021,20 @@
         "version_range": {
             "from": 574158,
             "until": 580792
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] ThinLTOBitcodeWriter: Emit __cfi_check to full LTO part of bitcode file."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ff85dbdf6b399eac7bffa13e579f0f5e6edac3c0.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 587473
         }
     },
     {
