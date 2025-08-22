@@ -802,6 +802,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ThinLTOBitcodeWriter: Emit __cfi_check to full LTO part of bitcode file."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ff85dbdf6b399eac7bffa13e579f0f5e6edac3c0.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 587473
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
