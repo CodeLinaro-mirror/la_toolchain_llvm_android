@@ -816,6 +816,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Add tests for the ABI break introduced by switching to _LIBCPP_COMPRESSED_PAIR (#154559)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2a83cf5d0e592890f74c5d5ff4a30ae4cf54b61b.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 587558
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Fix ABI break introduced by switching to _LIBCPP_COMPRESSED_PAIR (#154686)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f5e687d7bf49cd9fe38ba7acdeb52d4f30468dee.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 587656
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [clang] Remove hasValue() check in `RecordExprEvaluator::VisitCXXConstructExpr()` (#154610)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8b3d4bdf8bade1d1faa8ff3fcbdda7060f8b46d8.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 587658
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
