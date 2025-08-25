@@ -613,18 +613,6 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         for lib in toolchain_builder.libzstd.link_libraries:
             shutil.copy2(lib, lib_dir)
 
-    # Next, we copy over stdatomic.h and bits/stdatomic.h from bionic.
-    libc_include_path = paths.NDK_BASE / 'toolchains' / 'llvm' / 'prebuilt' / \
-            'linux-x86_64' / 'sysroot' / 'usr' / 'include'
-    header_path = lib_dir / 'clang' / version.major_version() / 'include'
-
-    shutil.copy2(libc_include_path / 'stdatomic.h', header_path)
-
-    bits_install_path = header_path / 'bits'
-    bits_install_path.mkdir(parents=True, exist_ok=True)
-    bits_stdatomic_path = libc_include_path / 'bits' / 'stdatomic.h'
-    shutil.copy2(bits_stdatomic_path, bits_install_path)
-
     # Install license files as NOTICE in the toolchain install dir.
     install_license_files(install_dir)
 
