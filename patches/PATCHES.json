@@ -718,6 +718,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] Remove hasValue() check in `RecordExprEvaluator::VisitCXXConstructExpr()` (#154610)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8b3d4bdf8bade1d1faa8ff3fcbdda7060f8b46d8.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 574158
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [clang] Fix nondeterminism in MemberPointerType (#137910)"
         },
         "platforms": [
@@ -1073,9 +1087,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/8b3d4bdf8bade1d1faa8ff3fcbdda7060f8b46d8.patch",
+        "rel_patch_path": "cherry/8b3d4bdf8bade1d1faa8ff3fcbdda7060f8b46d8-v2.patch",
         "version_range": {
-            "from": 563880,
+            "from": 574158,
             "until": 587658
         }
     },
