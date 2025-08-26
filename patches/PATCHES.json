@@ -1302,5 +1302,19 @@
             "from": 574158,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Disable unsigned-integer-overflow checks for std::sort"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Disable-unsigned-integer-overflow-checks-for-s.patch",
+        "version_range": {
+            "from": 574158,
+            "until": null
+        }
     }
 ]
