@@ -260,13 +260,6 @@ def update_patches(error: LastPatchError) -> PatchList:
             )
             continue
 
-        # No need to update cherry-pick patches, which are less prone to patch drift,
-        # but we still apply them for consistency
-        if patch.rel_patch_path.startswith('cherry/'):
-            logger().debug(f'Skip Cherrypick Patch: {patch.rel_patch_path}')
-            apply_patch(patch)
-            continue
-
         do_update = check_patch(patch)
         if do_update:
             logger().debug('Found a patch to update')
