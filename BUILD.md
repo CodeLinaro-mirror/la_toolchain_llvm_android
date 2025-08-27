@@ -12,18 +12,16 @@ Build Instructions
 ------------------
 
 ```
-# Googlers
 $ mkdir llvm-toolchain && cd llvm-toolchain
 
-# Use command from go/repo-init/main-llvm-toolchain for googleplex-android host
-# to create and sync the toolchain repo.
+# Googlers: Use command from go/repo-init/main-llvm-toolchain for
+# googleplex-android host to create and sync the toolchain repo.
+
+# Non-googlers: Use the repo init command below.
+$ repo init --partial-clone --no-use-superproject -b llvm-toolchain -u https://android.googlesource.com/platform/manifest
 
 $ python toolchain/llvm_android/build.py
 ```
-
-> Other users: Please wait for new instructions in light of
-> https://source.android.com/docs/whatsnew/site-updates#aosp-changes
-
 
 The built toolchain will be installed to `out/install/$HOST/clang-dev`.
 
@@ -79,14 +77,17 @@ Android (6317467 based on r365631c1) clang version 9.0.8...
 The build number for that toolchain is `6317467` and the manifest is found in
 `$TOOLCHAIN_DIR/manifest_6317467.xml`
 
-Rebuild the toolchain with that manifest:
+Rebuild the toolchain with that manifest using the instructions below:
 
 ```
-# For Googlers:
 $ mkdir llvm-toolchain && cd llvm-toolchain
 
+# For Googlers:
 # Use command from go/repo-init/main-llvm-toolchain for googleplex-android host
 # to create a toolchain repo.  No need to sync.
+
+# For non-Googlers:
+$ repo init --partial-clone --no-use-superproject -b android-latest-release -u https://android.googlesource.com/platform/manifest
 
 $ cp $TOOLCHAIN_DIR/manifest_6317467.xml .repo/manifests
 $ repo init -m manifest_6317467.xml
@@ -96,9 +97,6 @@ $ repo sync -c
 
 $ python toolchain/llvm_android/build.py
 ```
-
-> Other users: Please wait for new instructions in light of
-> https://source.android.com/docs/whatsnew/site-updates#aosp-changes
 
 Compiler Update Steps
 ---------------------
