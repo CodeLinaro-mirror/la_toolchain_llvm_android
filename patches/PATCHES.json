@@ -858,6 +858,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ThinLTOBitcodeWriter: Split modules with __cfi_check and no type metadata."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/43c85afce9c25141de79da6731b1d5f8bb2491b1.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 588422
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
