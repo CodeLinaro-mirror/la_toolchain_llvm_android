@@ -133,9 +133,9 @@ def chdir_context(directory):
         os.chdir(prev_dir)
 
 
-def prebuilt_repo_upload(host: str, topic: str, hashtag: str, is_testing: bool):
+def prebuilt_repo_upload(prebuilt_dir: Path, host: str, topic: str, hashtag: str, is_testing: bool):
     """ Upload CL in a prebuilt clang dir. """
-    prebuilt_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / host
+    prebuilt_dir = prebuilt_dir / 'clang' / 'host' / host
     if hashtag:
         hashtag = hashtag + ',' + topic
     else:

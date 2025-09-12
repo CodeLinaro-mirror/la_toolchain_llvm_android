@@ -87,6 +87,11 @@ class ArgParser(argparse.ArgumentParser):
             '--no-validity-check', action='store_true',
             help='Skip validity checks on the prebuilt binaries.')
 
+        self.add_argument(
+            '--update-in-kernel-branch-dir',
+            help="""Kernel branch directory. If given, update clang prebuilt
+                    in the kernel branch, like aosp-common-android16-6.12""")
+
         host_choices = ['darwin-x86', 'linux-x86', 'windows-x86']
         self.add_argument(
             '--host', metavar='HOST_OS',
@@ -100,6 +105,18 @@ class ArgParser(argparse.ArgumentParser):
         self.add_argument(
             '--hashtag', metavar='HASHTAGS',
             help='Extra hashtags (comma separated) during \'repo upload\'')
+
+    def parse_args(self, args=None, namespace=None) -> argparse.Namespace:
+        args = super().parse_args(args, namespace)
+        if args.update_in_kernel_branch_dir:
+            assert not args.overwrite, """Overwriting clang prebuilt in the
+                kernel branch isn't allowed in order to avoid affecting release
+                branches."""
+            assert args.skip_update_profiles, """Updating profiles should be
+                skipped when updating clang prebuilt in the kernel branch."""
+            assert args.host == 'linux-x86', """Only need linux-x86 host when
+                updating clang prebuilt in the kernel branch."""
+        return args
 
 
 def fetch_artifact(branch, target, build, pattern):
@@ -194,9 +211,10 @@ def format_bug(bug):
     return bug
 
 
-def update_clang(host, build_number, use_current_branch, download_dir, bug,
-                 manifest, overwrite, do_validity_check, is_testing):
-    prebuilt_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / host
+def update_clang(prebuilt_dir: Path, host, build_number, use_current_branch,
+                 download_dir, bug, manifest, overwrite, do_validity_check,
+                 is_testing):
+    prebuilt_dir = prebuilt_dir / 'clang' / 'host' / host
     os.chdir(prebuilt_dir)
 
     if not use_current_branch:
@@ -384,8 +402,12 @@ def main():
                 fetch_artifact(branch, 'llvm_linux', args.build, PGO_PROFILE_PATTERN)
                 fetch_artifact(branch, 'llvm_linux', args.build, BOLT_PROFILE_PATTERN)
 
+        if args.update_in_kernel_branch_dir:
+            prebuilt_dir = Path(args.update_in_kernel_branch_dir) / 'prebuilts'
+        else:
+            prebuilt_dir = paths.PREBUILTS_DIR
         for host in hosts:
-            update_clang(host, args.build, args.use_current_branch,
+            update_clang(prebuilt_dir, host, args.build, args.use_current_branch,
                          download_dir, args.bug, manifest, args.overwrite,
                          not args.no_validity_check, is_testing)
 
@@ -398,7 +420,7 @@ def main():
                 topic = topic.replace('prebuilt', 'testing-prebuilt')
 
             for host in hosts:
-                utils.prebuilt_repo_upload(host, topic, args.hashtag, is_testing)
+                utils.prebuilt_repo_upload(prebuilt_dir, host, topic, args.hashtag, is_testing)
     finally:
         if do_cleanup:
             shutil.rmtree(download_dir)

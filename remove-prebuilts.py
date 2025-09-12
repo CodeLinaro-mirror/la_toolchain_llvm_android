@@ -77,7 +77,8 @@ def main():
 
     if args.repo_upload:
         for host in hosts:
-            utils.prebuilt_repo_upload(host, f'remove-clang-{args.version}', None, False)
+            utils.prebuilt_repo_upload(paths.PREBUILTS_DIR, host, f'remove-clang-{args.version}',
+                                       None, False)
     return 0
 
 
