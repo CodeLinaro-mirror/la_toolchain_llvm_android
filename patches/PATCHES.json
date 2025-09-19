@@ -858,6 +858,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Restrict .variant_pcs directive to ELF targets (#138924)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3aaf44f95de24339d73c0093576a4a3cc42404ad.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 575668
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Clang] Fix a regression introduced by #140073 (#140288)"
         },
         "platforms": [
