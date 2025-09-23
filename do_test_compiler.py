@@ -261,7 +261,7 @@ def build_target(android_base: Path, clang_version: version.Version,
         env['LLD_IN_TEST'] = '1'
         # Build only a subset of targets and collect profiles
         env['CLANG_ANALYZER_CHECKS'] = '1'
-        modules = ['libart', 'libc', 'adb-tidy']
+        modules = ['libart', 'libc']
 
         # Set the environment variable specifying where the profile file gets
         # written.
