@@ -1750,5 +1750,33 @@
             "from": 593406,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "LFI Support Patch for r574158"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "LFI_Support-Patch-2d287f.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574159
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "LFI Support Patch for r584948"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "LFI_Support-Patch-6d4a09.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 584949
+        }
     }
 ]
