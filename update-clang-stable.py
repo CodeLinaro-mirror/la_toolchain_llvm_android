@@ -51,13 +51,13 @@ class ClangStableBuilder:
         self.version = version
         self.clang_dir = prebuilt_dir / ('clang-' + version)
         self.stable_dir = prebuilt_dir / 'clang-stable'
+        self.is_linux = prebuilt_dir.name == "linux-x86"
 
     def build(self):
         shutil.rmtree(self.stable_dir)
         self.stable_dir.mkdir()
         (self.stable_dir / 'bin').mkdir()
         (self.stable_dir / 'lib').mkdir()
-        (self.stable_dir / 'lib' / 'x86_64-unknown-linux-gnu').mkdir()
         (self.stable_dir / 'share').mkdir()
 
         self.copy_file(self.clang_dir / 'bin' / 'clang-format', self.stable_dir / 'bin')
@@ -65,9 +65,15 @@ class ClangStableBuilder:
 
         self.copy_files((self.clang_dir / 'lib').glob('libclang.*'), self.stable_dir / 'lib')
         self.copy_dir(self.clang_dir / 'lib' / 'python3', self.stable_dir / 'lib')
-        self.copy_files((self.clang_dir / 'lib' / 'x86_64-unknown-linux-gnu').glob('libc++*'),
-                        self.stable_dir / 'lib' / 'x86_64-unknown-linux-gnu')
         self.copy_dir(self.clang_dir / 'share' / 'clang', self.stable_dir / 'share')
+
+        if self.is_linux:
+            (self.stable_dir / 'lib' / 'x86_64-unknown-linux-gnu').mkdir()
+            self.copy_files((self.clang_dir / 'lib' / 'x86_64-unknown-linux-gnu').glob('libc++*'),
+                            self.stable_dir / 'lib' / 'x86_64-unknown-linux-gnu')
+        else:
+            self.copy_files((self.clang_dir / 'lib' ).glob('libc++*'),
+                            self.stable_dir / 'lib' )
 
         (self.stable_dir / 'README.md').write_text(
             f'All contents in clang-stable are copies of clang-{self.version}.')
@@ -98,7 +104,10 @@ def update_clang_stable(prebuilt_dir: Path, version: str, use_cbr: bool):
 
     builder = ClangStableBuilder(prebuilt_dir, version)
     builder.build()
-    builder.test()
+    # The darwin prebuilt cannot run on linux machine so
+    # just skip the test for it.
+    if builder.is_linux:
+        builder.test()
 
 
 def do_commit(prebuilt_dir: Path, version: str, bug_id: Optional[str]):
@@ -121,9 +130,15 @@ def main():
     use_cbr = args.use_current_branch
     version = args.version
 
-    prebuilt_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / 'linux-x86'
-    update_clang_stable(prebuilt_dir, version, use_cbr)
-    do_commit(prebuilt_dir, version, bug_id)
+    # Update clang-stable for Linux
+    prebuilt_linux_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / 'linux-x86'
+    update_clang_stable(prebuilt_linux_dir, version, use_cbr)
+    do_commit(prebuilt_linux_dir, version, bug_id)
+
+    # Update clang-stable for Darwin
+    prebuilt_darwin_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / 'darwin-x86'
+    update_clang_stable(prebuilt_darwin_dir, version, use_cbr)
+    do_commit(prebuilt_darwin_dir, version, bug_id)
 
 
 if __name__ == '__main__':
