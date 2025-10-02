@@ -164,43 +164,19 @@ def add_header_links(stage: str, host_config: configs.Config):
     dst.symlink_to(src)
 
 def add_lib_links(stage: str, host_config: configs.Config):
-    # FIXME: b/245395722. When all dependent scripts and .bp rules are changed
-    # to use the new lib names and location. These lib links won't be necessary.
-    # Libraries in ./stage2-install/lib/clang/*/lib/linux/*-x86_64.* are now
-    # built into ./stage2-install/lib/clang/*/lib/x86_64-unknown-linux-gnu/*.*
-    # Add symbolic links from linux/*-x86_64.* to ../x86_64-unknown-linux-gnu/*.*
-    # b/245614328, stage1-install/lib has the same issue.
     llvm_triple = host_config.llvm_triple
-    arch = llvm_triple.split('-')[0]
-    srcglob = f'{paths.OUT_DIR}/{stage}-install/lib/clang/*/lib/{llvm_triple}/*.*'
-    for file in glob.glob(srcglob):
-        dirname = os.path.dirname(file)
-        filename = os.path.basename(file)
-        suffix = Path(file).suffix
-        stem = Path(file).stem
-        # If suffix is '.syms', the real suffix is '.a.syms'.
-        if suffix == '.syms':
-            suffix1 = Path(stem).suffix
-            stem = Path(stem).stem
-            suffix = suffix1 + suffix
-
-        dst_dir = Path(dirname) / '..' / 'linux'
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        dst = dst_dir / (stem + '-' + arch + suffix)
-        src = f'../{llvm_triple}/{filename}'
-        dst.unlink(missing_ok=True)
-        dst.symlink_to(src)
-
-    if host_config.target_os.is_linux and not host_config.is_32_bit:
-        # Add symbolic links from lib/* to lib/x86_64-unknown-linux-gnu/*.  These
-        # symlinks are needed for 64-bit and not 32-bit
-        srcglob = f'{paths.OUT_DIR}/{stage}-install/lib/{llvm_triple}/*'
-        for file in glob.glob(srcglob):
-            filename = os.path.basename(file)
-            src = f'{llvm_triple}/{filename}'
-            dst = paths.OUT_DIR / f'{stage}-install/lib' / filename
-            dst.unlink(missing_ok=True)
-            dst.symlink_to(src)
+    if host_config.target_os.is_linux:
+        # TODO: b/449184585 - Create symlinks from i386-unknown-linux-gnu/* to
+        # i686-unknown-linux-gnu/*. Once inconsistencies between directory/file
+        # names pertaining to architectures have been resolved in the prebuilts
+        # directory, this symlink creation can be removed.
+        dst_llvm_triple = llvm_triple.replace('i386', 'i686')
+        srcglob = f'{paths.OUT_DIR}/{stage}-install/lib/clang/*/lib/{llvm_triple}'
+        for src_dir in glob.glob(srcglob):
+            dst_dir = Path(src_dir) / '..' / dst_llvm_triple
+            if dst_dir.exists():
+                shutil.rmtree(dst_dir)
+            dst_dir.symlink_to(llvm_triple)
 
 
 def build_runtimes(build_lldb_server: bool,
@@ -216,7 +192,6 @@ def build_runtimes(build_lldb_server: bool,
     builders.TsanBuilder().build()
     # Build musl runtimes and 32-bit glibc for Linux
     if hosts.build_host().is_linux:
-        add_lib_links(stage, host_config)
         add_lib_links(stage, host_32bit_config)
         add_header_links(stage, host_config)
         builders.MuslHostRuntimeBuilder().build()
@@ -364,15 +339,6 @@ def bolt_instrument(toolchain_builder: LLVMBuilder):
     # Need to create the profile output directory for BOLT.
     # TODO: Let BOLT instrumented library to create it on itself.
     os.makedirs(clang_afdo_path, exist_ok=True)
-
-
-def verify_symlink_exists(link_path: Path, target: Path):
-    if not link_path.exists():
-        raise RuntimeError(f'{link_path} does not exist')
-    if not link_path.is_symlink():
-        raise RuntimeError(f'{link_path} exists but is not a symlink')
-    if link_path.readlink() != target:
-        raise RuntimeError(f'{link_path} points to {link_path.readlink()}, expected {target}')
 
 
 def verify_file_exists(lib_dir: Path, name: str):
@@ -594,12 +560,12 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     # Check necessary lib files exist.
     for necessary_lib_file in necessary_lib_files:
         if necessary_lib_file.startswith('libc++') and (host.is_linux or host.is_windows):
-            verify_file_exists(lib_dir, necessary_lib_file)
+            if not host.is_linux:
+                verify_file_exists(lib_dir, necessary_lib_file)
             if necessary_lib_file.endswith('.a'):
                 verify_file_exists(lib_dir / 'i686-w64-windows-gnu', necessary_lib_file)
                 verify_file_exists(lib_dir / 'x86_64-w64-windows-gnu', necessary_lib_file)
             if host.is_linux:
-                verify_symlink_exists(lib_dir / necessary_lib_file, Path(triple64) / necessary_lib_file)
                 verify_file_exists(lib_dir / triple32, necessary_lib_file)
                 verify_file_exists(lib_dir / triple64, necessary_lib_file)
         elif necessary_lib_file == 'libsimpleperf_readelf.a' and host.is_linux:
