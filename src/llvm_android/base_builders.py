@@ -744,7 +744,9 @@ class LLVMBuilder(LLVMBaseBuilder):
         defines['LLVM_TARGETS_TO_BUILD'] = ';'.join(sorted(self.llvm_targets))
         if isinstance(self._config, configs.MSVCConfig):
             defines['LLVM_BUILD_LLVM_C_DYLIB'] = 'OFF'
-        else:
+        # We don't need to release libLLVM.dll on Windows. And building llvm dylib on Windows
+        # makes error in b/447215556.
+        elif self._config.target_os.is_darwin or self._config.target_os.is_linux:
             defines['LLVM_BUILD_LLVM_DYLIB'] = 'ON'
 
         if self.build_tags:
@@ -922,7 +924,8 @@ class LLVMBuilder(LLVMBaseBuilder):
             cxx_triples = [triple for triple in sorted(self.runtimes_triples) if 'linux-musl' not in triple]
             checks = ['check-clang', 'check-llvm', 'check-clang-tools'] + ['check-cxx-' + triple for triple in cxx_triples]
             # clangd tests fail intermittently. https://github.com/llvm/llvm-project/issues/64964
-            check_env = {'LIT_FILTER_OUT': 'clangd'}
+            # sys_info.zdump.pass.cpp fails on glinux, b/448145616.
+            check_env = {'LIT_FILTER_OUT': 'clangd|sys_info.zdump.pass.cpp'}
             if hosts.build_host().is_darwin:
                 # b/298489611, b/326166097
                 check_env = {'LIT_FILTER_OUT': 'clangd|clang-tidy|xpc|tools\/lto|LineEditor|Interpreter|ClangIncludeCleaner|ClangPseudo'}
