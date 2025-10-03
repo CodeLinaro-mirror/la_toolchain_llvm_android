@@ -1139,8 +1139,8 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
         defines['LIBCXXABI_ENABLE_SHARED'] = 'OFF'
         defines['LIBCXXABI_USE_LLVM_UNWINDER'] = 'OFF'
+        defines['LIBCXXABI_NON_DEMANGLING_TERMINATE'] = 'ON'
         if self._config.platform:
-            defines['LIBCXXABI_NON_DEMANGLING_TERMINATE'] = 'ON'
             defines['LIBCXXABI_STATIC_DEMANGLE_LIBRARY'] = 'ON'
 
         if self._is_noexcept:
