@@ -1072,6 +1072,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
     def cflags(self) -> list[str]:
         result = super().cflags
         result.extend(('-fdebug-info-for-profiling',
+                       '-fstack-protector-strong',
                        '-mllvm', '-enable-fs-discriminator=true',
                        # TODO(b/266595187): Remove the following feature once it is
                        # enabled in LLVM by default.
