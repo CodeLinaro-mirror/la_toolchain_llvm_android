@@ -165,7 +165,7 @@ def add_header_links(stage: str, host_config: configs.Config):
 
 def add_lib_links(stage: str, host_config: configs.Config):
     llvm_triple = host_config.llvm_triple
-    if host_config.target_os.is_linux:
+    if llvm_triple == 'i386-unknown-linux-gnu':
         # TODO: b/449184585 - Create symlinks from i386-unknown-linux-gnu/* to
         # i686-unknown-linux-gnu/*. Once inconsistencies between directory/file
         # names pertaining to architectures have been resolved in the prebuilts
