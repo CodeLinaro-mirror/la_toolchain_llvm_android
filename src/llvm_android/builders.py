@@ -25,7 +25,7 @@ import shutil
 import tempfile
 import textwrap
 
-from llvm_android import (base_builders, configs, constants, hosts, mapfile, paths, timer, utils)
+from llvm_android import (base_builders, configs, constants, hosts, mapfile, paths, lfi_sysroot_helpers, timer, utils)
 
 class SanitizerMapFileBuilder(base_builders.Builder):
     name: str = 'sanitizer-mapfile'
@@ -311,6 +311,9 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
         riscv64 = configs.AndroidRiscv64Config()
         riscv64.platform = True
         result.append(riscv64)
+        # LFI only uses platform config
+        if self.build_lfi:
+            result.extend(configs.android_lfi_configs())
         result.append(configs.BaremetalAArch64Config())
         result.append(configs.BaremetalArmv6MConfig())
         result.append(configs.BaremetalArmv8MBaseConfig())
@@ -361,20 +364,29 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
         if not isinstance(self._config, configs.BaremetalArmv6MConfig):
             defines['COMPILER_RT_EXCLUDE_ATOMIC_BUILTIN'] = 'OFF'
         defines['COMPILER_RT_OS_DIR'] = self._config.target_os.crt_dir
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            defines["LLVM_ENABLE_PER_TARGET_RUNTIME_DIR"] = 'ON'
         return defines
 
     @property
     def cflags(self) -> List[str]:
         cflags = super().cflags
+        # Avoid LSE instructions for LFI's minimal libc
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            cflags.append('-mno-outline-atomics')
         if self.enable_execute_only_memory():
             # We are not using compiler-rt/CMakeLists.txt. So manually add the macro.
             cflags.append('-DCOMPILER_RT_EXECUTE_ONLY_CODE')
         return cflags
 
     def install_config(self) -> None:
+        arch = self._config.target_arch
+        # Install LFI builtins to its own directory under lib using ninja install
+        if arch == hosts.Arch.AARCH64_LFI:
+            super().install_config()
+            return
         # Copy the library into the toolchain resource directory (lib/linux) and
         # runtimes_ndk_cxx.
-        arch = self._config.target_arch
         sarch = 'i686' if arch == hosts.Arch.I386 else arch.value
         if isinstance(self._config, configs.LinuxMuslConfig) and arch == hosts.Arch.ARM:
             sarch = 'armhf'
@@ -421,10 +433,16 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
 class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
     name: str = 'compiler-rt'
     src_dir: Path = paths.LLVM_PATH / 'compiler-rt'
-    config_list: List[configs.Config] = (
-        configs.android_configs(platform=True) +
-        configs.android_configs(platform=False)
-    )
+
+    @property
+    def config_list(self) -> List[configs.Config]:
+        result = (
+            configs.android_configs(platform=True) +
+            configs.android_configs(platform=False)
+        )
+        if self.build_lfi:
+            result.extend(configs.android_lfi_configs())
+        return result
 
     @property
     def install_dir(self) -> Path:
@@ -460,7 +478,8 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
         # personality routine warnings caused by r309226.
         # defines['COMPILER_RT_ENABLE_WERROR'] = 'ON'
         defines['COMPILER_RT_TEST_COMPILER_CFLAGS'] = defines['CMAKE_C_FLAGS']
-        defines['COMPILER_RT_DEFAULT_TARGET_TRIPLE'] = self._config.llvm_triple
+        if self._config.target_arch != hosts.Arch.AARCH64_LFI:
+            defines['COMPILER_RT_DEFAULT_TARGET_TRIPLE'] = self._config.llvm_triple
         defines['COMPILER_RT_INCLUDE_TESTS'] = 'OFF'
         defines['SANITIZER_CXX_ABI'] = 'libcxxabi'
         # With CMAKE_SYSTEM_NAME='Android', compiler-rt will be installed to
@@ -479,15 +498,41 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
         # early.
         defines['SANITIZER_COMMON_LINK_FLAGS'] = '-Wl,-z,defs'
         defines['COMPILER_RT_HWASAN_WITH_INTERCEPTORS'] = 'OFF'
+        # We just need minimal UBSAN currently for LFI so we can ignore other
+        # compiler-rt runtimes for now
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            defines['COMPILER_RT_SANITIZERS_TO_BUILD'] = 'ubsan_minimal'
+            defines["LLVM_ENABLE_PER_TARGET_RUNTIME_DIR"] = 'ON'
+            defines['CMAKE_C_COMPILER_TARGET'] = self._config.llvm_triple
+            defines['CMAKE_CXX_COMPILER_TARGET'] = self._config.llvm_triple
+            defines['COMPILER_RT_DEFAULT_TARGET_ONLY'] = 'TRUE'
         return defines
 
     @property
     def cflags(self) -> List[str]:
         cflags = super().cflags
         cflags.append('-funwind-tables')
+        # Avoid LSE instructions for LFI's minimal libc
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            cflags.append('-mno-outline-atomics')
         return cflags
 
+
+    # Despite explicitly stating ubsan_minimal, it will try to build ubsan_standalone
+    # so we can fix this by adding specific ubsan_minimal rules to ninja projects
+    def _ninja(self, args: list[str], add_env: Optional[Dict[str, str]] = None) -> None:
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            args = ["install-ubsan-minimal"]
+
+        # Still run normal build_config
+        super()._ninja(args, add_env)
+
     def install_config(self) -> None:
+        # Skip `ninja install` because we already explicitly installed it in _ninja step
+        # to avoid building ubsan_standalone
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            return
+
         # Still run `ninja install`.
         super().install_config()
 
@@ -508,6 +553,9 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
             shutil.copytree(lib_dir, dst_dir, dirs_exist_ok=True)
 
     def install(self) -> None:
+        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
+            return
+
         # Install libfuzzer headers once for all configs.
         header_src = self.src_dir / 'lib' / 'fuzzer'
         header_dst = self.output_toolchain.path / 'prebuilt_include' / 'llvm' / 'lib' / 'Fuzzer'
@@ -597,6 +645,10 @@ class LibUnwindBuilder(base_builders.LLVMRuntimeBuilder):
             arch.extra_config = {'is_exported': True}
             result.append(arch)
 
+        # LFI only needs the platform
+        if self.build_lfi:
+            result.extend(configs.android_lfi_configs())
+
         # riscv64 needs a copy with hidden symbols for use while building
         # the runtimes, but doesn't have an NDK sysroot.  Make a copy
         # targeting the platform with hidden symbols.
@@ -670,10 +722,11 @@ class LibUnwindBuilder(base_builders.LLVMRuntimeBuilder):
                 res_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_path, res_dir / 'libunwind.a')
 
-            # Make a copy for the NDK.
-            ndk_dir = self.output_toolchain.path / 'runtimes_ndk_cxx' / arch.value
-            ndk_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src_path, ndk_dir / 'libunwind.a')
+            if arch != hosts.Arch.AARCH64_LFI:
+                # Make a copy for the NDK.
+                ndk_dir = self.output_toolchain.path / 'runtimes_ndk_cxx' / arch.value
+                ndk_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_path, ndk_dir / 'libunwind.a')
 
 
 class LibOMPBuilder(base_builders.LLVMRuntimeBuilder):
@@ -1010,6 +1063,7 @@ class DeviceSysrootsBuilder(base_builders.Builder):
                 continue
             (subdir / 'libc++.a').unlink()
             (subdir / 'libc++.so').unlink()
+
         # Verify that there aren't any extra copies somewhere else in the
         # directory hierarchy.
         verify_gone = [
@@ -1025,7 +1079,77 @@ class DeviceSysrootsBuilder(base_builders.Builder):
             for f in files:
                 if f in verify_gone:
                     raise RuntimeError('sysroot file should have been ' +
-                                       f'removed: {os.path.join(parent, f)}')
+                                    f'removed: {os.path.join(parent, f)}')
+
+
+class LFIDeviceSysrootsBuilder(DeviceSysrootsBuilder):
+    name: str = 'lfi-device-sysroots'
+    config_list: List[configs.Config] = configs.android_lfi_configs()
+
+    def _build_config(self) -> None:
+        config: configs.AndroidConfig = cast(configs.AndroidConfig, self._config)
+        sysroot = config.sysroot
+        if sysroot.exists():
+            shutil.rmtree(sysroot)
+        sysroot.mkdir(parents=True, exist_ok=True)
+
+        # Copy the NDK prebuilt's sysroot, but for the platform variant, omit
+        # the STL and android_support headers and libraries.
+        src_sysroot = paths.NDK_BASE / 'toolchains' / 'llvm' / 'prebuilt' / 'linux-x86_64' / 'sysroot'
+
+        # Copy over usr/include.
+        shutil.copytree(src_sysroot / 'usr' / 'include',
+                        sysroot / 'usr' / 'include', symlinks=True)
+
+        # Create the folder for LFI sysroot
+        src_lib = src_sysroot / 'usr' / 'lib' / 'aarch64-linux-android' / str(config.api_level)
+        dest_lib = sysroot / 'usr' / 'lib' / config.ndk_sysroot_triple / str(config.api_level)
+        dest_lib.mkdir(parents=True, exist_ok=True)
+
+        # Some libraries need crt* object files so I am just taking them from aarch64 because
+        # we will not use them for now in Android rather just get them to allow particular
+        # builds steps to be completed:
+        # Libunwind needs crtbegin_dynamic and crtend_android in the cmake checks for compiler
+        # Libc++ needs crtbegin_so and crtend_so to build libc++.so but it will not be used for
+        # compiler-rt because libc++.a is statically linked and libopus does not libc++ functions
+        # TODO: Work on building these separately and adding them separately
+        shutil.copy2(src_lib / 'crtbegin_dynamic.o', dest_lib)
+        shutil.copy2(src_lib / 'crtend_android.o', dest_lib)
+        shutil.copy2(src_lib / 'crtbegin_so.o', dest_lib)
+        shutil.copy2(src_lib / 'crtend_so.o', dest_lib)
+
+        # The runtimes will require some sysroot libraries like libc so we
+        # can create stubs for these shared libraries. They will get linked
+        # to the actual libraries during soong's build system.
+        libc_symbol_file = paths.LFI_DIR / "libc_symbols.txt"
+        libc_stubs = paths.STUBS_PATH / "libc_stubs.c"
+        libdl_symbol_file = paths.LFI_DIR / "libdl_symbols.txt"
+        libdl_stubs = paths.STUBS_PATH / "libdl_stubs.c"
+        lfi_sysroot_helpers.generate_stubs(libc_stubs, libc_symbol_file)
+        lfi_sysroot_helpers.generate_stubs(libdl_stubs, libdl_symbol_file)
+
+        # Compile the libc stubs into a shared library
+        lfi_sysroot_helpers.generate_library(libc_stubs, dest_lib / "libc.so", config)
+
+        # Compile the libdl stubs into a shared library for libunwind
+        lfi_sysroot_helpers.generate_library(libdl_stubs, dest_lib / "libdl.so", config)
+
+        # Create empty libm, libc++, libc++abi shared library for CMake Tests
+        # to check if compiler is working
+        libm_library = dest_lib / 'libm.so'
+        libm_library.touch()
+        libcxx_library = dest_lib / 'libc++.so'
+        libcxx_library.touch()
+        libcxxabi_library = dest_lib / 'libc++abi.so'
+        libcxxabi_library.touch()
+
+        # Copy a version of LFI to the normal aarch64 folder (aarch64_lfi-linux-android30
+        # copied to aarch64-linux-android30) because certain cmake commands (libunwind) are
+        # are looking for aarch64 version despite the aarc64_lfi triple being passed to it
+        # TODO: Investigate why this happening and fix it
+        lfi_lib = sysroot / 'usr' / 'lib' / config.ndk_sysroot_triple
+        normal_lib = sysroot / 'usr' / 'lib' / 'aarch64-linux-android'
+        shutil.copytree(lfi_lib, normal_lib, symlinks=True)
 
 
 class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):

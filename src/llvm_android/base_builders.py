@@ -157,6 +157,7 @@ class Builder:  # pylint: disable=too-few-public-methods
     """Base builder type."""
     name: str = ""
     config_list: List[configs.Config]
+    build_lfi: bool = False
 
     """Use prebuilt toolchain by default. This value will be updated if a new toolchain is built."""
     toolchain: toolchains.Toolchain = toolchains.get_prebuilt_toolchain()
@@ -166,12 +167,14 @@ class Builder:  # pylint: disable=too-few-public-methods
 
     def __init__(self,
                  config_list: Optional[Sequence[configs.Config]] = None,
-                 toolchain: Optional[toolchains.Toolchain] = None) -> None:
+                 toolchain: Optional[toolchains.Toolchain] = None,
+                 build_lfi: bool = False) -> None:
         if toolchain:
             self.toolchain = toolchain
         if config_list:
             self.config_list = list(config_list)
         self._config: configs.Config = self.config_list[0]
+        self.build_lfi = build_lfi
 
     @BuilderRegistry.register_and_build
     def build(self) -> None:
@@ -570,6 +573,8 @@ class LLVMRuntimeBuilder(LLVMBaseBuilder):  # pylint: disable=abstract-method
     @property
     def install_dir(self) -> Path:
         arch = self._config.target_arch
+        if arch == hosts.Arch.AARCH64_LFI:
+            return self.output_toolchain.clang_lib_dir
         if self._config.target_os.is_android and not self._config.platform:
             return self.output_toolchain.path / 'runtimes_ndk_cxx' / arch.value
         return self.output_resource_dir / arch.value

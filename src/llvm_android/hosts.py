@@ -75,6 +75,7 @@ class Arch(enum.Enum):
     """Enumeration of supported arches."""
     ARM = 'arm'
     AARCH64 = 'aarch64'
+    AARCH64_LFI = 'aarch64_lfi'
     I386 = 'i386'
     X86_64 = 'x86_64'
     RISCV64 = 'riscv64'
@@ -85,6 +86,7 @@ class Arch(enum.Enum):
         return {
             Arch.ARM: 'arm',
             Arch.AARCH64: 'aarch64',
+            Arch.AARCH64_LFI: 'aarch64_lfi',
             Arch.I386: 'i686',
             Arch.X86_64: 'x86_64',
             Arch.RISCV64: 'riscv64'
