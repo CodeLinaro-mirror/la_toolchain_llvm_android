@@ -1,0 +1,11 @@
+# These symbols are necessary to build libunwind for LFI
+LIBDL_LFI {
+  global:
+    __cxa_finalize; #library
+    __cxa_atexit; #library
+    dladdr;
+    dl_iterate_phdr;
+    __register_atfork; #library
+  local:
+    *;
+}

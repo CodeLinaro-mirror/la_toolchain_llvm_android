@@ -28,6 +28,7 @@ OUT_DIR: Path = Path(os.environ.get('OUT_DIR', ANDROID_DIR / 'out')).resolve()
 DIST_DIR = Path(os.environ.get('DIST_DIR', OUT_DIR)).resolve()
 SYSROOTS: Path = OUT_DIR / 'sysroots'
 LLVM_PATH: Path = OUT_DIR / 'llvm-project'
+STUBS_PATH: Path = OUT_DIR / 'stubs'
 PREBUILTS_DIR: Path = ANDROID_DIR / 'prebuilts'
 EXTERNAL_DIR: Path = ANDROID_DIR / 'external'
 TOOLCHAIN_DIR: Path = ANDROID_DIR / 'toolchain'
@@ -82,6 +83,8 @@ KYTHE_OUTPUT_DIR = OUT_DIR / 'kythe-files'
 KYTHE_VNAMES_JSON = SCRIPTS_DIR / 'kythe_vnames.json'
 
 ORDERFILE_SCRIPTS_DIR: Path = TOOLCHAIN_DIR / "llvm_android" / "orderfiles" / "scripts"
+
+LFI_DIR: Path = TOOLCHAIN_DIR / "llvm_android" / "lfi"
 
 def pgo_profdata_filename() -> str:
     svn_revision = android_version.get_svn_revision_number()
