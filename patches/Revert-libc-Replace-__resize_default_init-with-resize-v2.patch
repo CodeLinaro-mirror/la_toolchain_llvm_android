@@ -1,0 +1,351 @@
+From cdf12660730fe7950854b57ab0e80d97abe9b99d Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Fri, 10 Oct 2025 19:01:39 +0000
+Subject: [PATCH] Revert "[libc++] Replace __resize_default_init with
+ resize_and_overwrite (#157121)"
+
+This reverts commit 92f5d8df361bb1bb6dea88f86faeedfd295ab970.
+---
+ libcxx/include/string                         | 40 ++++++++--
+ libcxx/src/filesystem/format_string.h         | 13 ++--
+ .../benchmarks/containers/string.bench.cpp    | 18 +----
+ .../resize_default_initialized.pass.cpp       | 75 +++++++++++++++++++
+ .../last_write_time.pass.cpp                  |  1 +
+ .../filesystems/convert_file_time.pass.cpp    |  1 +
+ .../resize_default_initialized.pass.cpp       | 75 +++++++++++++++++++
+ 7 files changed, 192 insertions(+), 31 deletions(-)
+ create mode 100644 libcxx/test/libcxx-03/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+ create mode 100644 libcxx/test/libcxx/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+
+diff --git a/libcxx/include/string b/libcxx/include/string
+index 8f80afbc2fd3..0833873d7579 100644
+--- a/libcxx/include/string
++++ b/libcxx/include/string
+@@ -1314,17 +1314,13 @@ public:
+   _LIBCPP_HIDE_FROM_ABI constexpr void resize_and_overwrite(size_type __n, _Op __op) {
+     using __result_type = decltype(std::move(__op)(data(), auto(__n)));
+     static_assert(__integer_like<__result_type>, "Operation return type must be integer-like");
+-    size_type __sz  = size();
+-    size_type __cap = capacity();
+-    if (__n > __cap)
+-      __grow_by_without_replace(__cap, __n - __cap, __sz, __sz, 0);
+-    __annotate_delete();
+-    __set_size(__n);
+-    __annotate_new(__n);
+-    __erase_to_end(std::move(__op)(data(), auto(__n)));
++    __resize_default_init(__n);
++    __erase_to_end(std::move(__op)(data(), _LIBCPP_AUTO_CAST(__n)));
+   }
+ #  endif
+ 
++  _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 void __resize_default_init(size_type __n);
++
+ #  if _LIBCPP_STD_VER < 26 || defined(_LIBCPP_ENABLE_CXX26_REMOVED_STRING_RESERVE)
+   _LIBCPP_DEPRECATED_IN_CXX20 _LIBCPP_HIDE_FROM_ABI void reserve() _NOEXCEPT { shrink_to_fit(); }
+ #  endif
+@@ -1416,6 +1412,8 @@ public:
+   _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string& append(const value_type* _LIBCPP_DIAGNOSE_NULLPTR __s);
+   _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string& append(size_type __n, value_type __c);
+ 
++  _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 void __append_default_init(size_type __n);
++
+   template <class _InputIterator, __enable_if_t<__has_exactly_input_iterator_category<_InputIterator>::value, int> = 0>
+   _LIBCPP_HIDE_FROM_ABI _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 basic_string&
+   append(_InputIterator __first, _InputIterator __last) {
+@@ -3041,6 +3039,22 @@ basic_string<_CharT, _Traits, _Allocator>::append(size_type __n, value_type __c)
+   return *this;
+ }
+ 
++template <class _CharT, class _Traits, class _Allocator>
++_LIBCPP_CONSTEXPR_SINCE_CXX20 inline void
++basic_string<_CharT, _Traits, _Allocator>::__append_default_init(size_type __n) {
++  if (__n == 0)
++    return;
++  size_type __cap = capacity();
++  size_type __sz  = size();
++  if (__cap - __sz < __n)
++    __grow_by_without_replace(__cap, __sz + __n - __cap, __sz, __sz, 0);
++  __annotate_increase(__n);
++  pointer __p = __get_pointer();
++  __sz += __n;
++  __set_size(__sz);
++  traits_type::assign(__p[__sz], value_type());
++}
++
+ template <class _CharT, class _Traits, class _Allocator>
+ _LIBCPP_CONSTEXPR_SINCE_CXX20 void basic_string<_CharT, _Traits, _Allocator>::push_back(value_type __c) {
+   bool __is_short = !__is_long();
+@@ -3379,6 +3393,16 @@ _LIBCPP_CONSTEXPR_SINCE_CXX20 void basic_string<_CharT, _Traits, _Allocator>::re
+     __erase_to_end(__n);
+ }
+ 
++template <class _CharT, class _Traits, class _Allocator>
++_LIBCPP_CONSTEXPR_SINCE_CXX20 inline void
++basic_string<_CharT, _Traits, _Allocator>::__resize_default_init(size_type __n) {
++  size_type __sz = size();
++  if (__n > __sz) {
++    __append_default_init(__n - __sz);
++  } else
++    __erase_to_end(__n);
++}
++
+ template <class _CharT, class _Traits, class _Allocator>
+ _LIBCPP_CONSTEXPR_SINCE_CXX20 void basic_string<_CharT, _Traits, _Allocator>::reserve(size_type __requested_capacity) {
+   if (__requested_capacity > max_size())
+diff --git a/libcxx/src/filesystem/format_string.h b/libcxx/src/filesystem/format_string.h
+index 8d17b027a6e3..5e0d92065478 100644
+--- a/libcxx/src/filesystem/format_string.h
++++ b/libcxx/src/filesystem/format_string.h
+@@ -35,19 +35,20 @@ inline _LIBCPP_ATTRIBUTE_FORMAT(__printf__, 1, 0) string vformat_string(const ch
+ 
+   va_list apcopy;
+   va_copy(apcopy, ap);
+-  int size = ::vsnprintf(buf.data(), buf.size(), msg, apcopy);
++  int ret = ::vsnprintf(buf.data(), buf.size(), msg, apcopy);
+   va_end(apcopy);
+ 
+   string result;
+-  if (static_cast<size_t>(size) < buf.size()) {
+-    result.assign(buf.data(), static_cast<size_t>(size));
++  if (static_cast<size_t>(ret) < buf.size()) {
++    result.assign(buf.data(), static_cast<size_t>(ret));
+   } else {
+     // we did not provide a long enough buffer on our first attempt. The
+     // return value is the number of bytes (excluding the null byte) that are
+     // needed for formatting.
+-    result.resize_and_overwrite(size, [&](char* res, size_t n) { return ::vsnprintf(res, n, msg, ap); });
+-    _LIBCPP_ASSERT_INTERNAL(static_cast<size_t>(size) == result.size(),
+-                            "vsnprintf did not result in the same number of characters as the first attempt?");
++    size_t size_with_null = static_cast<size_t>(ret) + 1;
++    result.__resize_default_init(size_with_null - 1);
++    ret = ::vsnprintf(&result[0], size_with_null, msg, ap);
++    _LIBCPP_ASSERT_INTERNAL(static_cast<size_t>(ret) == (size_with_null - 1), "TODO");
+   }
+   return result;
+ }
+diff --git a/libcxx/test/benchmarks/containers/string.bench.cpp b/libcxx/test/benchmarks/containers/string.bench.cpp
+index 2484ec8fd955..5bfcc1263e3d 100644
+--- a/libcxx/test/benchmarks/containers/string.bench.cpp
++++ b/libcxx/test/benchmarks/containers/string.bench.cpp
+@@ -6,9 +6,8 @@
+ //
+ //===----------------------------------------------------------------------===//
+ 
+-// UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
++// UNSUPPORTED: c++03, c++11, c++14, c++17
+ 
+-#include <algorithm>
+ #include <cstdint>
+ #include <cstdlib>
+ #include <new>
+@@ -107,21 +106,6 @@ static void BM_StringCtorDefault(benchmark::State& state) {
+ }
+ BENCHMARK(BM_StringCtorDefault);
+ 
+-static void BM_StringResizeAndOverwrite(benchmark::State& state) {
+-  std::string str;
+-
+-  for (auto _ : state) {
+-    benchmark::DoNotOptimize(str);
+-    str.resize_and_overwrite(10, [](char* ptr, size_t n) {
+-      std::fill_n(ptr, n, 'a');
+-      return n;
+-    });
+-    benchmark::DoNotOptimize(str);
+-    str.clear();
+-  }
+-}
+-BENCHMARK(BM_StringResizeAndOverwrite);
+-
+ enum class Length { Empty, Small, Large, Huge };
+ struct AllLengths : EnumValuesAsTuple<AllLengths, Length, 4> {
+   static constexpr const char* Names[] = {"Empty", "Small", "Large", "Huge"};
+diff --git a/libcxx/test/libcxx-03/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp b/libcxx/test/libcxx-03/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+new file mode 100644
+index 000000000000..8e6e07d659c1
+--- /dev/null
++++ b/libcxx/test/libcxx-03/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+@@ -0,0 +1,75 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <string>
++
++// __resize_default_init(size_type)
++
++#include <string>
++#include <cassert>
++
++#include "test_macros.h"
++
++TEST_CONSTEXPR_CXX20 void write_c_str(char* buf, int size) {
++  for (int i = 0; i < size; ++i) {
++    buf[i] = 'a';
++  }
++  buf[size] = '\0';
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 void test_buffer_usage() {
++  {
++    unsigned buff_size = 125;
++    unsigned used_size = buff_size - 16;
++    S s;
++    s.__resize_default_init(buff_size);
++    write_c_str(&s[0], used_size);
++    assert(s.size() == buff_size);
++    assert(std::char_traits<char>().length(s.data()) == used_size);
++    s.__resize_default_init(used_size);
++    assert(s.size() == used_size);
++    assert(s.data()[used_size] == '\0');
++    for (unsigned i = 0; i < used_size; ++i) {
++      assert(s[i] == 'a');
++    }
++  }
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 void test_basic() {
++  {
++    S s;
++    s.__resize_default_init(3);
++    assert(s.size() == 3);
++    assert(s.data()[3] == '\0');
++    for (int i = 0; i < 3; ++i)
++      s[i] = 'a' + i;
++    s.__resize_default_init(1);
++    assert(s[0] == 'a');
++    assert(s.data()[1] == '\0');
++    assert(s.size() == 1);
++  }
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 bool test() {
++  test_basic<S>();
++  test_buffer_usage<S>();
++
++  return true;
++}
++
++int main(int, char**) {
++  test<std::string>();
++#if TEST_STD_VER > 17
++  static_assert(test<std::string>());
++#endif
++
++  return 0;
++}
+diff --git a/libcxx/test/libcxx/input.output/filesystems/class.directory_entry/directory_entry.mods/last_write_time.pass.cpp b/libcxx/test/libcxx/input.output/filesystems/class.directory_entry/directory_entry.mods/last_write_time.pass.cpp
+index 7f7a39557c0c..a25601698e4e 100644
+--- a/libcxx/test/libcxx/input.output/filesystems/class.directory_entry/directory_entry.mods/last_write_time.pass.cpp
++++ b/libcxx/test/libcxx/input.output/filesystems/class.directory_entry/directory_entry.mods/last_write_time.pass.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ // UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
++// UNSUPPORTED: availability-filesystem-missing
+ // UNSUPPORTED: no-filesystem
+ // ADDITIONAL_COMPILE_FLAGS: -I %{libcxx-dir}/src
+ 
+diff --git a/libcxx/test/libcxx/input.output/filesystems/convert_file_time.pass.cpp b/libcxx/test/libcxx/input.output/filesystems/convert_file_time.pass.cpp
+index 2d38fd8f4083..6e5c5aa52674 100644
+--- a/libcxx/test/libcxx/input.output/filesystems/convert_file_time.pass.cpp
++++ b/libcxx/test/libcxx/input.output/filesystems/convert_file_time.pass.cpp
+@@ -7,6 +7,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ // UNSUPPORTED: c++03, c++11, c++14, c++17, c++20
++// UNSUPPORTED: availability-filesystem-missing
+ 
+ // <filesystem>
+ 
+diff --git a/libcxx/test/libcxx/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp b/libcxx/test/libcxx/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+new file mode 100644
+index 000000000000..8e6e07d659c1
+--- /dev/null
++++ b/libcxx/test/libcxx/strings/basic.string/string.modifiers/resize_default_initialized.pass.cpp
+@@ -0,0 +1,75 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// <string>
++
++// __resize_default_init(size_type)
++
++#include <string>
++#include <cassert>
++
++#include "test_macros.h"
++
++TEST_CONSTEXPR_CXX20 void write_c_str(char* buf, int size) {
++  for (int i = 0; i < size; ++i) {
++    buf[i] = 'a';
++  }
++  buf[size] = '\0';
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 void test_buffer_usage() {
++  {
++    unsigned buff_size = 125;
++    unsigned used_size = buff_size - 16;
++    S s;
++    s.__resize_default_init(buff_size);
++    write_c_str(&s[0], used_size);
++    assert(s.size() == buff_size);
++    assert(std::char_traits<char>().length(s.data()) == used_size);
++    s.__resize_default_init(used_size);
++    assert(s.size() == used_size);
++    assert(s.data()[used_size] == '\0');
++    for (unsigned i = 0; i < used_size; ++i) {
++      assert(s[i] == 'a');
++    }
++  }
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 void test_basic() {
++  {
++    S s;
++    s.__resize_default_init(3);
++    assert(s.size() == 3);
++    assert(s.data()[3] == '\0');
++    for (int i = 0; i < 3; ++i)
++      s[i] = 'a' + i;
++    s.__resize_default_init(1);
++    assert(s[0] == 'a');
++    assert(s.data()[1] == '\0');
++    assert(s.size() == 1);
++  }
++}
++
++template <class S>
++TEST_CONSTEXPR_CXX20 bool test() {
++  test_basic<S>();
++  test_buffer_usage<S>();
++
++  return true;
++}
++
++int main(int, char**) {
++  test<std::string>();
++#if TEST_STD_VER > 17
++  static_assert(test<std::string>());
++#endif
++
++  return 0;
++}
+-- 
+2.51.0.740.g6adb054d12-goog
+
