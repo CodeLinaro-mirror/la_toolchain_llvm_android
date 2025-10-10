@@ -717,7 +717,7 @@ class LLVMBuilder(LLVMBaseBuilder):
         self._install_lib_deps(lib_dir)
 
     def _setup_build_dir(self) -> None:
-        if self._config.target_os.is_linux:
+        if self._config.target_os.is_linux or self._config.target_os.is_darwin:
             # Install dependent libs and tools to self.output_dir.  Just-built
             # tools like clang and lld need libc_musl and libxml2 in their
             # RPATH.  Tool deps (e.g. xmllint, that are needed for running
