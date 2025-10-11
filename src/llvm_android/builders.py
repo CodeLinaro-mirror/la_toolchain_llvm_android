@@ -1309,14 +1309,6 @@ class WinLibCxxBuilder(base_builders.LLVMRuntimeBuilder):
                             win_install_dir / 'include' / 'c++' / 'v1',
                             dirs_exist_ok=True)
 
-            # Copy the libraries into the output Windows toolchain.
-            # TODO: Maybe we don't need these, because there are per-triple libraries, but I'm not
-            # sure who might be using them.
-            lib_dir = win_install_dir / 'lib'
-            lib_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy(self.install_dir / 'lib' / triple_dir / 'libc++.a', lib_dir)
-            shutil.copy(self.install_dir / 'lib' / triple_dir / 'libc++abi.a', lib_dir)
-
             # Place the x86-64 __config_site header into the non-target-specific include directory.
             # TODO: Maybe we don't need this header either.
             shutil.copy(self.install_dir / 'include' / triple_dir / 'c++' / 'v1' / '__config_site',
