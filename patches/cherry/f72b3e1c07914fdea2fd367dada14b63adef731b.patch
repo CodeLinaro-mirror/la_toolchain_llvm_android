@@ -1,0 +1,627 @@
+From f72b3e1c07914fdea2fd367dada14b63adef731b Mon Sep 17 00:00:00 2001
+From: Corentin Jabot <corentinjabot@gmail.com>
+Date: Tue, 5 Aug 2025 10:51:26 +0200
+Subject: [PATCH] [Clang] Add detailed notes explaining why `is_constructible`
+ evaluates to false (Revert 16d5db7) (#151935)
+
+Adds explanation why `is_constructible` evaluates to false.
+
+This reapplies as-is e476f968bc8e438a0435d10934f148de570db8eb.
+This was reverted in 16d5db71b3c38f21aa17783a8758f947dca5883f because of
+a test failure in libc++.
+
+The test failure in libc++ is interesting in that, in the absence of
+nested diagnostics a bunch of diagnostics are emitted as error instead
+of notes, which we cannot silence with `-verify-ignore-unexpected`.
+
+The fix here is to prevent the diagnostics to be emitted in the first
+place.
+However this is clearly not ideal and we should make sure to deploy a
+better solution in the clang 22 time frame, in the lines of
+https://discourse.llvm.org/t/rfc-add-a-new-text-diagnostics-format-that-supports-nested-diagnostics/87641/12
+
+Fixes #150601
+
+---------
+
+Co-authored-by: Shamshura Egor <164661612+egorshamshura@users.noreply.github.com>
+---
+ .../clang/Basic/DiagnosticSemaKinds.td        |  5 +-
+ clang/lib/Sema/SemaTypeTraits.cpp             | 72 ++++++++++++++++++-
+ clang/test/CXX/drs/cwg18xx.cpp                |  3 +-
+ ...overload-resolution-deferred-templates.cpp | 19 +++--
+ .../type-traits-unsatisfied-diags-std.cpp     | 66 +++++++++++++++++
+ .../SemaCXX/type-traits-unsatisfied-diags.cpp | 62 ++++++++++++++++
+ .../and_then.mandates.verify.cpp              |  4 ++
+ .../or_else.mandates.verify.cpp               |  4 ++
+ .../value.observers.verify.cpp                |  7 +-
+ .../and_then.mandates.verify.cpp              |  4 ++
+ .../array/array.creation/to_array.verify.cpp  |  4 +-
+ .../views/mdspan/mdspan/conversion.verify.cpp |  2 +
+ .../func.bind.partial/bind_back.verify.cpp    |  2 +
+ .../func.bind_front/bind_front.verify.cpp     |  1 +
+ 14 files changed, 242 insertions(+), 13 deletions(-)
+
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index 9ce142e7b37c..f903b7f4dacd 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -1812,7 +1812,10 @@ def note_unsatisfied_trait_reason
+            "%DeletedAssign{has a deleted %select{copy|move}1 "
+            "assignment operator}|"
+            "%UnionWithUserDeclaredSMF{is a union with a user-declared "
+-           "%sub{select_special_member_kind}1}"
++           "%sub{select_special_member_kind}1}|"
++           "%FunctionType{is a function type}|"
++           "%CVVoidType{is a cv void type}|"
++           "%IncompleteArrayType{is an incomplete array type}"
+            "}0">;
+ 
+ def warn_consteval_if_always_true : Warning<
+diff --git a/clang/lib/Sema/SemaTypeTraits.cpp b/clang/lib/Sema/SemaTypeTraits.cpp
+index c2f0600295e9..1d8687e4bf1c 100644
+--- a/clang/lib/Sema/SemaTypeTraits.cpp
++++ b/clang/lib/Sema/SemaTypeTraits.cpp
+@@ -11,7 +11,9 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "clang/AST/DeclCXX.h"
++#include "clang/AST/TemplateBase.h"
+ #include "clang/AST/Type.h"
++#include "clang/Basic/DiagnosticIDs.h"
+ #include "clang/Basic/DiagnosticParse.h"
+ #include "clang/Basic/DiagnosticSema.h"
+ #include "clang/Basic/TypeTraits.h"
+@@ -1963,6 +1965,7 @@ static std::optional<TypeTrait> StdNameToTypeTrait(StringRef Name) {
+       .Case("is_assignable", TypeTrait::BTT_IsAssignable)
+       .Case("is_empty", TypeTrait::UTT_IsEmpty)
+       .Case("is_standard_layout", TypeTrait::UTT_IsStandardLayout)
++      .Case("is_constructible", TypeTrait::TT_IsConstructible)
+       .Default(std::nullopt);
+ }
+ 
+@@ -1999,8 +2002,16 @@ static ExtractedTypeTraitInfo ExtractTypeTraitFromExpression(const Expr *E) {
+     Trait = StdNameToTypeTrait(Name);
+     if (!Trait)
+       return std::nullopt;
+-    for (const auto &Arg : VD->getTemplateArgs().asArray())
+-      Args.push_back(Arg.getAsType());
++    for (const auto &Arg : VD->getTemplateArgs().asArray()) {
++      if (Arg.getKind() == TemplateArgument::ArgKind::Pack) {
++        for (const auto &InnerArg : Arg.pack_elements())
++          Args.push_back(InnerArg.getAsType());
++      } else if (Arg.getKind() == TemplateArgument::ArgKind::Type) {
++        Args.push_back(Arg.getAsType());
++      } else {
++        llvm_unreachable("Unexpected kind");
++      }
++    }
+     return {{Trait.value(), std::move(Args)}};
+   }
+ 
+@@ -2273,6 +2284,60 @@ static void DiagnoseNonTriviallyCopyableReason(Sema &SemaRef,
+   }
+ }
+ 
++static void DiagnoseNonConstructibleReason(
++    Sema &SemaRef, SourceLocation Loc,
++    const llvm::SmallVector<clang::QualType, 1> &Ts) {
++  if (Ts.empty()) {
++    return;
++  }
++
++  bool ContainsVoid = false;
++  for (const QualType &ArgTy : Ts) {
++    ContainsVoid |= ArgTy->isVoidType();
++  }
++
++  if (ContainsVoid)
++    SemaRef.Diag(Loc, diag::note_unsatisfied_trait_reason)
++        << diag::TraitNotSatisfiedReason::CVVoidType;
++
++  QualType T = Ts[0];
++  if (T->isFunctionType())
++    SemaRef.Diag(Loc, diag::note_unsatisfied_trait_reason)
++        << diag::TraitNotSatisfiedReason::FunctionType;
++
++  if (T->isIncompleteArrayType())
++    SemaRef.Diag(Loc, diag::note_unsatisfied_trait_reason)
++        << diag::TraitNotSatisfiedReason::IncompleteArrayType;
++
++  const CXXRecordDecl *D = T->getAsCXXRecordDecl();
++  if (!D || D->isInvalidDecl() || !D->hasDefinition())
++    return;
++
++  llvm::BumpPtrAllocator OpaqueExprAllocator;
++  SmallVector<Expr *, 2> ArgExprs;
++  ArgExprs.reserve(Ts.size() - 1);
++  for (unsigned I = 1, N = Ts.size(); I != N; ++I) {
++    QualType ArgTy = Ts[I];
++    if (ArgTy->isObjectType() || ArgTy->isFunctionType())
++      ArgTy = SemaRef.Context.getRValueReferenceType(ArgTy);
++    ArgExprs.push_back(
++        new (OpaqueExprAllocator.Allocate<OpaqueValueExpr>())
++            OpaqueValueExpr(Loc, ArgTy.getNonLValueExprType(SemaRef.Context),
++                            Expr::getValueKindForType(ArgTy)));
++  }
++
++  EnterExpressionEvaluationContext Unevaluated(
++      SemaRef, Sema::ExpressionEvaluationContext::Unevaluated);
++  Sema::ContextRAII TUContext(SemaRef,
++                              SemaRef.Context.getTranslationUnitDecl());
++  InitializedEntity To(InitializedEntity::InitializeTemporary(T));
++  InitializationKind InitKind(InitializationKind::CreateDirect(Loc, Loc, Loc));
++  InitializationSequence Init(SemaRef, To, InitKind, ArgExprs);
++
++  Init.Diagnose(SemaRef, To, InitKind, ArgExprs);
++  SemaRef.Diag(D->getLocation(), diag::note_defined_here) << D;
++}
++
+ static void DiagnoseNonTriviallyCopyableReason(Sema &SemaRef,
+                                                SourceLocation Loc, QualType T) {
+   SemaRef.Diag(Loc, diag::note_unsatisfied_trait)
+@@ -2559,6 +2624,9 @@ void Sema::DiagnoseTypeTraitDetails(const Expr *E) {
+   case UTT_IsStandardLayout:
+     DiagnoseNonStandardLayoutReason(*this, E->getBeginLoc(), Args[0]);
+     break;
++  case TT_IsConstructible:
++    DiagnoseNonConstructibleReason(*this, E->getBeginLoc(), Args);
++    break;
+   default:
+     break;
+   }
+diff --git a/clang/test/CXX/drs/cwg18xx.cpp b/clang/test/CXX/drs/cwg18xx.cpp
+index 5b4551ba0143..994807585213 100644
+--- a/clang/test/CXX/drs/cwg18xx.cpp
++++ b/clang/test/CXX/drs/cwg18xx.cpp
+@@ -564,11 +564,12 @@ struct A {
+ namespace ex2 {
+ #if __cplusplus >= 201103L
+ struct Bar {
+-  struct Baz {
++  struct Baz { // #cwg1890-Baz
+     int a = 0;
+   };
+   static_assert(__is_constructible(Baz), "");
+   // since-cxx11-error@-1 {{static assertion failed due to requirement '__is_constructible(cwg1890::ex2::Bar::Baz)'}}
++  // since-cxx11-note@#cwg1890-Baz {{'Baz' defined here}}
+ };
+ #endif
+ } // namespace ex2
+diff --git a/clang/test/SemaCXX/overload-resolution-deferred-templates.cpp b/clang/test/SemaCXX/overload-resolution-deferred-templates.cpp
+index 8b469dd22943..135865c8450f 100644
+--- a/clang/test/SemaCXX/overload-resolution-deferred-templates.cpp
++++ b/clang/test/SemaCXX/overload-resolution-deferred-templates.cpp
+@@ -80,21 +80,30 @@ struct ImplicitlyCopyable {
+ static_assert(__is_constructible(ImplicitlyCopyable, const ImplicitlyCopyable&));
+ 
+ 
+-struct Movable {
++struct Movable { // #Movable
+   template <typename T>
+   requires __is_constructible(Movable, T) // #err-self-constraint-1
+-  explicit Movable(T op) noexcept; // #1
+-  Movable(Movable&&) noexcept = default; // #2
++  explicit Movable(T op) noexcept; // #Movable1
++  Movable(Movable&&) noexcept = default; // #Movable2
+ };
+ static_assert(__is_constructible(Movable, Movable&&));
+ static_assert(__is_constructible(Movable, const Movable&));
+-// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(Movable, const Movable &)'}}
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(Movable, const Movable &)'}} \
++// expected-error@-1 {{call to implicitly-deleted copy constructor of 'Movable'}} \
++// expected-note@#Movable  {{'Movable' defined here}} \
++// expected-note@#Movable  {{candidate constructor (the implicit copy constructor) not viable: no known conversion from 'int' to 'const Movable' for 1st argument}} \
++// expected-note@#Movable2  {{copy constructor is implicitly deleted because 'Movable' has a user-declared move constructor}} \
++// expected-note@#Movable2  {{candidate constructor not viable: no known conversion from 'int' to 'Movable' for 1st argument}} \
++// expected-note@#Movable1  {{candidate template ignored: constraints not satisfied [with T = int]}}
++
+ 
+ static_assert(__is_constructible(Movable, int));
+-// expected-error@-1{{static assertion failed due to requirement '__is_constructible(Movable, int)'}} \
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(Movable, int)'}} \
++// expected-error@-1 {{no matching constructor for initialization of 'Movable'}} \
+ // expected-note@-1 2{{}}
+ // expected-error@#err-self-constraint-1{{satisfaction of constraint '__is_constructible(Movable, T)' depends on itself}}
+ // expected-note@#err-self-constraint-1 4{{}}
++// expected-note@#Movable  {{'Movable' defined here}}
+ 
+ template <typename T>
+ struct Members {
+diff --git a/clang/test/SemaCXX/type-traits-unsatisfied-diags-std.cpp b/clang/test/SemaCXX/type-traits-unsatisfied-diags-std.cpp
+index cf33ac283ab4..f3ddbbfe15bd 100644
+--- a/clang/test/SemaCXX/type-traits-unsatisfied-diags-std.cpp
++++ b/clang/test/SemaCXX/type-traits-unsatisfied-diags-std.cpp
+@@ -42,6 +42,14 @@ static constexpr bool value = __is_standard_layout(T);
+ };
+ template <typename T>
+ constexpr bool is_standard_layout_v = __is_standard_layout(T);
++
++template <typename... Args>
++struct is_constructible {
++    static constexpr bool value = __is_constructible(Args...);
++};
++
++template <typename... Args>
++constexpr bool is_constructible_v = __is_constructible(Args...);
+ #endif
+ 
+ #ifdef STD2
+@@ -97,6 +105,17 @@ template <typename T>
+ using is_standard_layout = __details_is_standard_layout<T>;
+ template <typename T>
+ constexpr bool is_standard_layout_v = __is_standard_layout(T);
++
++template <typename... Args>
++struct __details_is_constructible{
++    static constexpr bool value = __is_constructible(Args...);
++};
++
++template <typename... Args>
++using is_constructible  = __details_is_constructible<Args...>;
++
++template <typename... Args>
++constexpr bool is_constructible_v = __is_constructible(Args...);
+ #endif
+ 
+ 
+@@ -149,6 +168,15 @@ template <typename T>
+ using is_standard_layout = __details_is_standard_layout<T>;
+ template <typename T>
+ constexpr bool is_standard_layout_v = is_standard_layout<T>::value;
++
++template <typename... Args>
++struct __details_is_constructible : bool_constant<__is_constructible(Args...)> {};
++
++template <typename... Args>
++using is_constructible  = __details_is_constructible<Args...>;
++
++template <typename... Args>
++constexpr bool is_constructible_v = is_constructible<Args...>::value;
+ #endif
+ 
+ }
+@@ -211,6 +239,15 @@ static_assert(std::is_assignable_v<int&, void>);
+ // expected-error@-1 {{static assertion failed due to requirement 'std::is_assignable_v<int &, void>'}} \
+ // expected-error@-1 {{assigning to 'int' from incompatible type 'void'}}
+ 
++static_assert(std::is_constructible<int, int>::value);
++
++static_assert(std::is_constructible<void>::value);
++// expected-error-re@-1 {{static assertion failed due to requirement 'std::{{.*}}is_constructible<void>::value'}} \
++// expected-note@-1 {{because it is a cv void type}}
++static_assert(std::is_constructible_v<void>);
++// expected-error@-1 {{static assertion failed due to requirement 'std::is_constructible_v<void>'}} \
++// expected-note@-1 {{because it is a cv void type}}
++
+ namespace test_namespace {
+     using namespace std;
+     static_assert(is_trivially_relocatable<int&>::value);
+@@ -256,6 +293,13 @@ namespace test_namespace {
+     // expected-error@-1 {{static assertion failed due to requirement 'is_empty_v<int &>'}} \
+     // expected-note@-1 {{'int &' is not empty}} \
+     // expected-note@-1 {{because it is a reference type}}
++
++    static_assert(is_constructible<void>::value);
++    // expected-error-re@-1 {{static assertion failed due to requirement '{{.*}}is_constructible<void>::value'}} \
++    // expected-note@-1 {{because it is a cv void type}}
++    static_assert(is_constructible_v<void>);
++    // expected-error@-1 {{static assertion failed due to requirement 'is_constructible_v<void>'}} \
++    // expected-note@-1 {{because it is a cv void type}}
+ }
+ 
+ 
+@@ -284,6 +328,15 @@ concept C4 = std::is_assignable_v<T, U>; // #concept8
+ 
+ template <C4<void> T> void g4();  // #cand8
+ 
++template <typename... Args>
++requires std::is_constructible<Args...>::value void f3();  // #cand5
++
++template <typename... Args>
++concept C3 = std::is_constructible_v<Args...>; // #concept6
++
++template <C3 T> void g3();  // #cand6
++
++
+ void test() {
+     f<int&>();
+     // expected-error@-1 {{no matching function for call to 'f'}} \
+@@ -327,6 +380,19 @@ void test() {
+     // expected-note@#cand8 {{because 'C4<int &, void>' evaluated to false}} \
+     // expected-note@#concept8 {{because 'std::is_assignable_v<int &, void>' evaluated to false}} \
+     // expected-error@#concept8 {{assigning to 'int' from incompatible type 'void'}}
++
++    f3<void>();
++    // expected-error@-1 {{no matching function for call to 'f3'}} \
++    // expected-note@#cand5 {{candidate template ignored: constraints not satisfied [with Args = <void>]}} \
++    // expected-note-re@#cand5 {{because '{{.*}}is_constructible<void>::value' evaluated to false}} \
++    // expected-note@#cand5 {{because it is a cv void type}}
++
++    g3<void>();
++    // expected-error@-1 {{no matching function for call to 'g3'}} \
++    // expected-note@#cand6 {{candidate template ignored: constraints not satisfied [with T = void]}} \
++    // expected-note@#cand6 {{because 'void' does not satisfy 'C3'}} \
++    // expected-note@#concept6 {{because 'std::is_constructible_v<void>' evaluated to false}} \
++    // expected-note@#concept6 {{because it is a cv void type}}
+ }
+ }
+ 
+diff --git a/clang/test/SemaCXX/type-traits-unsatisfied-diags.cpp b/clang/test/SemaCXX/type-traits-unsatisfied-diags.cpp
+index cc923d206ab3..54806a93ddf8 100644
+--- a/clang/test/SemaCXX/type-traits-unsatisfied-diags.cpp
++++ b/clang/test/SemaCXX/type-traits-unsatisfied-diags.cpp
+@@ -489,6 +489,68 @@ static_assert(__is_trivially_copyable(S12));
+ // expected-note@#tc-S12 {{'S12' defined here}}
+ }
+ 
++namespace constructible {
++
++struct S1 {  // #c-S1
++    S1(int); // #cc-S1
++};
++static_assert(__is_constructible(S1, char*));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(constructible::S1, char *)'}} \
++// expected-error@-1 {{no matching constructor for initialization of 'S1'}} \
++// expected-note@#c-S1 {{candidate constructor (the implicit copy constructor) not viable: no known conversion from 'char *' to 'const S1' for 1st argument}} \
++// expected-note@#c-S1 {{candidate constructor (the implicit move constructor) not viable: no known conversion from 'char *' to 'S1' for 1st argument}} \
++// expected-note@#cc-S1 {{candidate constructor not viable: no known conversion from 'char *' to 'int' for 1st argument; dereference the argument with *}} \
++// expected-note@#c-S1 {{'S1' defined here}}
++
++struct S2 { // #c-S2
++    S2(int, float, double); // #cc-S2
++};
++static_assert(__is_constructible(S2, float));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(constructible::S2, float)'}} \
++// expected-note@#c-S2 {{candidate constructor (the implicit copy constructor) not viable: no known conversion from 'float' to 'const S2' for 1st argument}} \
++// expected-note@#c-S2 {{candidate constructor (the implicit move constructor) not viable: no known conversion from 'float' to 'S2' for 1st argument}} \
++// expected-error@-1 {{no matching constructor for initialization of 'S2'}} \
++// expected-note@#cc-S2 {{candidate constructor not viable: requires 3 arguments, but 1 was provided}} \
++// expected-note@#c-S2 {{'S2' defined here}}
++
++static_assert(__is_constructible(S2, float, void));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(constructible::S2, float, void)'}} \
++// expected-note@#c-S2 {{candidate constructor (the implicit move constructor) not viable: requires 1 argument, but 2 were provided}} \
++// expected-note@#c-S2 {{candidate constructor (the implicit copy constructor) not viable: requires 1 argument, but 2 were provided}} \
++// expected-note@-1{{because it is a cv void type}} \
++// expected-error@-1 {{no matching constructor for initialization of 'S2'}} \
++// expected-note@#cc-S2 {{candidate constructor not viable: requires 3 arguments, but 2 were provided}} \
++// expected-note@#c-S2 {{'S2' defined here}}
++
++static_assert(__is_constructible(int[]));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(int[])'}} \
++// expected-note@-1 {{because it is an incomplete array type}}
++
++static_assert(__is_constructible(void));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(void)'}} \
++// expected-note@-1 {{because it is a cv void type}}
++
++static_assert(__is_constructible(void, void));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(void, void)'}} \
++// expected-note@-1 {{because it is a cv void type}}
++
++static_assert(__is_constructible(const void));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(const void)'}} \
++// expected-note@-1 {{because it is a cv void type}}
++
++static_assert(__is_constructible(volatile void));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(volatile void)'}} \
++// expected-note@-1 {{because it is a cv void type}}
++
++static_assert(__is_constructible(int ()));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(int ())'}} \
++// expected-note@-1 {{because it is a function type}}
++
++static_assert(__is_constructible(void (int, float)));
++// expected-error@-1 {{static assertion failed due to requirement '__is_constructible(void (int, float))'}} \
++// expected-note@-1 {{because it is a function type}}
++}
++
+ namespace assignable {
+ struct S1;
+ static_assert(__is_assignable(S1&, const S1&));
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.expected/and_then.mandates.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.expected/and_then.mandates.verify.cpp
+index c46ab633295c..fbd2317ebeee 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.expected/and_then.mandates.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.expected/and_then.mandates.verify.cpp
+@@ -55,6 +55,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(value()) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -74,6 +75,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(value()) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -94,6 +96,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(std::move(value())) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -113,6 +116,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(std::move(value())) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.expected/or_else.mandates.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.expected/or_else.mandates.verify.cpp
+index af1fa5330796..553ac4c6033a 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.expected/or_else.mandates.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.expected/or_else.mandates.verify.cpp
+@@ -55,6 +55,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(error()) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<G:value_type, T>
+@@ -74,6 +75,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(error()) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<G:value_type, T>
+@@ -93,6 +95,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(std::move(error())) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<G:value_type, T>
+@@ -112,6 +115,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f(std::move(error())) must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<G:value_type, T>
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.expected/value.observers.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.expected/value.observers.verify.cpp
+index d2b62a9b6ab9..9a8f067c04a5 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.expected/value.observers.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.expected/value.observers.verify.cpp
+@@ -95,6 +95,7 @@ void test() {
+       std::expected<int, CopyConstructibleButNotMoveConstructible> e;
+       [[maybe_unused]] auto val = std::move(e).value();
+       // expected-error-re@*:* {{static assertion failed {{.*}}error_type has to be both copy constructible and constructible from decltype(std::move(error()))}}
++      // The following diagnostic is emmitted in expected.h:
+     }
+   }
+ 
+@@ -118,14 +119,16 @@ void test() {
+       const std::expected<int, CopyConstructibleButNotMoveConstructible> e;
+       [[maybe_unused]] auto val = std::move(e).value();
+       // expected-error-re@*:* {{static assertion failed {{.*}}error_type has to be both copy constructible and constructible from decltype(std::move(error()))}}
++      // The following diagnostic is emmitted in expected.h:
+     }
+   }
+ // These diagnostics happen when we try to construct bad_expected_access from the non copy-constructible error type.
+ #if _LIBCPP_HAS_EXCEPTIONS
+   // expected-error-re@*:* {{call to deleted constructor of{{.*}}}}
+   // expected-error-re@*:* {{call to deleted constructor of{{.*}}}}
+-  // expected-error-re@*:* {{call to deleted constructor of{{.*}}}}
+-  // expected-error-re@*:* {{call to deleted constructor of{{.*}}}}
+ #endif
++// These diagnostics can also additionally be produced by static_assert (see GH150601).
++// expected-error-re@*:* 0-2{{call to deleted constructor of{{.*}}}}
++// expected-error-re@*:* 0-2{{call to deleted constructor of{{.*}}}}
+ }
+ // clang-format on
+diff --git a/libcxx/test/libcxx/utilities/expected/expected.void/and_then.mandates.verify.cpp b/libcxx/test/libcxx/utilities/expected/expected.void/and_then.mandates.verify.cpp
+index e1a7ec5ff4d7..1df6cbf543b4 100644
+--- a/libcxx/test/libcxx/utilities/expected/expected.void/and_then.mandates.verify.cpp
++++ b/libcxx/test/libcxx/utilities/expected/expected.void/and_then.mandates.verify.cpp
+@@ -55,6 +55,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f() must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -74,6 +75,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f() must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -93,6 +95,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f() must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+@@ -112,6 +115,7 @@ void test() {
+       // expected-error-re@*:* {{static assertion failed {{.*}}The result of f() must be a specialization of std::expected}}
+       // expected-error-re@*:* {{{{.*}}cannot be used prior to '::' because it has no members}}
+       // expected-error-re@*:* {{no matching constructor for initialization of{{.*}}}}
++      // expected-error@*:* 0-1{{excess elements in struct initializer}}
+     }
+ 
+     // !std::is_same_v<U:error_type, E>
+diff --git a/libcxx/test/std/containers/sequences/array/array.creation/to_array.verify.cpp b/libcxx/test/std/containers/sequences/array/array.creation/to_array.verify.cpp
+index 9e7b456bce18..e3efef988f0f 100644
+--- a/libcxx/test/std/containers/sequences/array/array.creation/to_array.verify.cpp
++++ b/libcxx/test/std/containers/sequences/array/array.creation/to_array.verify.cpp
+@@ -28,14 +28,14 @@ int main(int, char**) {
+   {
+     MoveOnly mo[] = {MoveOnly{3}};
+     // expected-error@array:* {{to_array requires copy constructible elements}}
+-    // expected-error-re@array:* {{{{(call to implicitly-deleted copy constructor of 'MoveOnly')|(call to deleted constructor of 'MoveOnly')}}}}
++    // expected-error-re@array:* 1-2{{{{(call to implicitly-deleted copy constructor of 'MoveOnly')|(call to deleted constructor of 'MoveOnly')}}}}
+     std::to_array(mo); // expected-note {{requested here}}
+   }
+ 
+   {
+     const MoveOnly cmo[] = {MoveOnly{3}};
+     // expected-error@array:* {{to_array requires move constructible elements}}
+-    // expected-error-re@array:* {{{{(call to implicitly-deleted copy constructor of 'MoveOnly')|(call to deleted constructor of 'MoveOnly')}}}}
++    // expected-error-re@array:* 0-1{{{{(call to implicitly-deleted copy constructor of 'MoveOnly')|(call to deleted constructor of 'MoveOnly')}}}}
+     std::to_array(std::move(cmo)); // expected-note {{requested here}}
+   }
+ 
+diff --git a/libcxx/test/std/containers/views/mdspan/mdspan/conversion.verify.cpp b/libcxx/test/std/containers/views/mdspan/mdspan/conversion.verify.cpp
+index d46ba6ffbe5e..cd4d4d9a7c9d 100644
+--- a/libcxx/test/std/containers/views/mdspan/mdspan/conversion.verify.cpp
++++ b/libcxx/test/std/containers/views/mdspan/mdspan/conversion.verify.cpp
+@@ -43,6 +43,7 @@ void cant_construct_data_handle_type() {
+   int data;
+   std::mdspan<int, std::extents<int>, std::layout_right, convertible_accessor_but_not_handle<int>> m_nc(&data);
+   // expected-error-re@*:* {{{{.*}}no matching constructor for initialization of {{.*}} (aka 'not_const_convertible_handle<const int>')}}
++  // expected-error@*:* 0-1{{no matching constructor for initialization of 'not_const_convertible_handle<const int>'}}
+   // expected-error-re@*:* {{static assertion failed {{.*}}mdspan: incompatible data_handle_type for mdspan construction}}
+   [[maybe_unused]] std::
+       mdspan<const int, std::extents<int>, std::layout_right, convertible_accessor_but_not_handle<const int>> m_c(m_nc);
+@@ -52,5 +53,6 @@ void mapping_constructible_despite_extents_compatibility() {
+   int data;
+   std::mdspan<int, std::extents<int>, always_convertible_layout> m(&data);
+   // expected-error-re@*:* {{static assertion failed {{.*}}mdspan: incompatible extents for mdspan construction}}
++  // expected-error@*:* 0-1{{no matching constructor for initialization of 'std::extents<int, 5>'}}
+   [[maybe_unused]] std::mdspan<int, std::extents<int, 5>, always_convertible_layout> m2(m);
+ }
+diff --git a/libcxx/test/std/utilities/function.objects/func.bind.partial/bind_back.verify.cpp b/libcxx/test/std/utilities/function.objects/func.bind.partial/bind_back.verify.cpp
+index eb100c15f580..6a63b65bf148 100644
+--- a/libcxx/test/std/utilities/function.objects/func.bind.partial/bind_back.verify.cpp
++++ b/libcxx/test/std/utilities/function.objects/func.bind.partial/bind_back.verify.cpp
+@@ -69,6 +69,8 @@ void test() {
+     auto f = std::bind_back([](const Arg&) {}, x);
+     // expected-error-re@*:* {{static assertion failed{{.*}}bind_back requires all decay_t<Args> to be constructible from respective Args}}
+     // expected-error@*:* {{no matching constructor for initialization}}
++    // expected-error@*:* 0-1{{call to deleted constructor of 'F'}}
++    // expected-error@*:* 0-1{{call to deleted constructor of 'Arg'}}
+   }
+ 
+   { // Mandates: (is_move_constructible_v<decay_t<Args>> && ...)
+diff --git a/libcxx/test/std/utilities/function.objects/func.bind_front/bind_front.verify.cpp b/libcxx/test/std/utilities/function.objects/func.bind_front/bind_front.verify.cpp
+index 5100259bd5b2..27a1fba90329 100644
+--- a/libcxx/test/std/utilities/function.objects/func.bind_front/bind_front.verify.cpp
++++ b/libcxx/test/std/utilities/function.objects/func.bind_front/bind_front.verify.cpp
+@@ -42,4 +42,5 @@ void f() {
+     auto d = std::bind_front(do_nothing, n); // expected-error {{no matching function for call to 'bind_front'}}
+ 
+     auto t = std::bind_front(testNotMoveConst, NotMoveConst(0)); // expected-error {{no matching function for call to 'bind_front'}}
++    // expected-error@*:* 0-1{{call to deleted constructor of 'NotMoveConst'}}
+ }
+-- 
+2.51.0.760.g7b8bcc2412-goog
+

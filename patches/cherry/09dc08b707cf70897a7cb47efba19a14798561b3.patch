@@ -1,0 +1,80 @@
+From 09dc08b707cf70897a7cb47efba19a14798561b3 Mon Sep 17 00:00:00 2001
+From: Nikita Popov <npopov@redhat.com>
+Date: Fri, 1 Aug 2025 11:06:10 +0200
+Subject: [PATCH] [InstCombine] Handle repeated users in foldOpIntoPhi()
+
+If the phi is used multiple times in the same user, it will appear
+multiple times in users(), in which case make_early_inc_range()
+is insufficient to prevent iterator invalidation.
+
+Fixes the issue reported at:
+https://github.com/llvm/llvm-project/pull/151115#issuecomment-3141542852
+---
+ .../InstCombine/InstructionCombining.cpp      | 11 ++++++--
+ llvm/test/Transforms/InstCombine/phi.ll       | 28 +++++++++++++++++++
+ 2 files changed, 36 insertions(+), 3 deletions(-)
+
+diff --git a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+index 79238e9fc780..5ee3bb1abe86 100644
+--- a/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
++++ b/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp
+@@ -2011,12 +2011,17 @@ Instruction *InstCombinerImpl::foldOpIntoPhi(Instruction &I, PHINode *PN,
+     NewPN->addIncoming(NewPhiValues[i], PN->getIncomingBlock(i));
+ 
+   if (IdenticalUsers) {
+-    for (User *U : make_early_inc_range(PN->users())) {
++    // Collect and deduplicate users up-front to avoid iterator invalidation.
++    SmallSetVector<Instruction *, 4> ToReplace;
++    for (User *U : PN->users()) {
+       Instruction *User = cast<Instruction>(U);
+       if (User == &I)
+         continue;
+-      replaceInstUsesWith(*User, NewPN);
+-      eraseInstFromFunction(*User);
++      ToReplace.insert(User);
++    }
++    for (Instruction *I : ToReplace) {
++      replaceInstUsesWith(*I, NewPN);
++      eraseInstFromFunction(*I);
+     }
+     OneUse = true;
+   }
+diff --git a/llvm/test/Transforms/InstCombine/phi.ll b/llvm/test/Transforms/InstCombine/phi.ll
+index d9f729e69ad1..3454835d3ad6 100644
+--- a/llvm/test/Transforms/InstCombine/phi.ll
++++ b/llvm/test/Transforms/InstCombine/phi.ll
+@@ -3025,3 +3025,31 @@ join:
+   %umax = call noundef i32 @llvm.umax(i32 noundef %phi, i32 1)
+   ret i32 %umax
+ }
++
++define i32 @multiple_intrinsics_with_multiple_phi_uses(i1 %c, i32 %arg) {
++; CHECK-LABEL: @multiple_intrinsics_with_multiple_phi_uses(
++; CHECK-NEXT:  entry:
++; CHECK-NEXT:    br i1 [[C:%.*]], label [[IF:%.*]], label [[IF_END:%.*]]
++; CHECK:       if:
++; CHECK-NEXT:    [[ADD:%.*]] = add i32 [[ARG:%.*]], -8
++; CHECK-NEXT:    [[TMP0:%.*]] = call i32 @llvm.fshl.i32(i32 [[ADD]], i32 [[ADD]], i32 29)
++; CHECK-NEXT:    [[TMP1:%.*]] = shl i32 [[TMP0]], 1
++; CHECK-NEXT:    br label [[IF_END]]
++; CHECK:       if.end:
++; CHECK-NEXT:    [[PHI:%.*]] = phi i32 [ [[TMP1]], [[IF]] ], [ 0, [[ENTRY:%.*]] ]
++; CHECK-NEXT:    ret i32 [[PHI]]
++;
++entry:
++  br i1 %c, label %if, label %if.end
++
++if:
++  %add = add i32 %arg, -8
++  br label %if.end
++
++if.end:
++  %phi = phi i32 [ %add, %if ], [ 0, %entry ]
++  %fshl1 = call i32 @llvm.fshl.i32(i32 %phi, i32 %phi, i32 29)
++  %fshl2 = call i32 @llvm.fshl.i32(i32 %phi, i32 %phi, i32 29)
++  %add2 = add i32 %fshl1, %fshl2
++  ret i32 %add2
++}
+-- 
+2.51.0.760.g7b8bcc2412-goog
+
