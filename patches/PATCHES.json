@@ -1096,6 +1096,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"Reland \"RegisterCoalescer: Add implicit-def of super register when coalescing SUBREG_TO_REG\" (#134408)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ed5bd23867eacaa3789060f9250ba6fcece2a3de.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585229
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Clang] Add detailed notes explaining why `is_constructible` evaluates to false (Revert 16d5db7) (#151935)"
         },
         "platforms": [
