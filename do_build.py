@@ -561,7 +561,9 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     # Check necessary lib files exist.
     for necessary_lib_file in necessary_lib_files:
         if necessary_lib_file.startswith('libc++') and (host.is_linux or host.is_windows):
-            if not host.is_linux:
+            # libc++ is packaged under a triple-specific subdirectory for Linux and Windows
+            # but is present in lib/ for Darwin.
+            if host.is_darwin:
                 verify_file_exists(lib_dir, necessary_lib_file)
             if necessary_lib_file.endswith('.a'):
                 verify_file_exists(lib_dir / 'i686-w64-windows-gnu', necessary_lib_file)
