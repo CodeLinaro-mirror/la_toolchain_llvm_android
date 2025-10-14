@@ -1236,6 +1236,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"CodeGen: Respect function align attribute if less than preferred alignment.\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/97716d2e311aed1b3b73461ee83e53faa512e499.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 587614
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Fix ABI break introduced by switching to _LIBCPP_COMPRESSED_PAIR (#154686)"
         },
         "platforms": [
