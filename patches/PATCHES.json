@@ -1082,6 +1082,132 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [InstCombine] Handle repeated users in foldOpIntoPhi()"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/09dc08b707cf70897a7cb47efba19a14798561b3.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 584962
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"Reland \"RegisterCoalescer: Add implicit-def of super register when coalescing SUBREG_TO_REG\" (#134408)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ed5bd23867eacaa3789060f9250ba6fcece2a3de.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585229
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Add detailed notes explaining why `is_constructible` evaluates to false (Revert 16d5db7) (#151935)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f72b3e1c07914fdea2fd367dada14b63adef731b.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585367
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[AMDGPU] SelectionDAG divergence tracking should take into account Target divergency. (#147560)\" (#152548)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c7c022948031a3c79b92b1a0497dc75868382d17.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585798
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[IR] Optimize stripAndAccumulateConstantOffsets() for common case (NFC)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f35e9fa478e25266f7a72aed5cd34437c6aa7c39.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585886
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LoopInfo] Pointer to stack object may not be loop invariant in a coroutine function (#149936)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5e87792200697818c0f6cb17be64b393fe31244c.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585947
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [NVPTX] expand extractelt(v2f32) with dynamic index (#153078)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/00369230c1e0384328a0cdeff9c368afad61cd55.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 586079
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[lldb] Fallback to expression eval when Dump of variable fails in dwim-print\" (#153824)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1dc0005d6d23f36b80358abad6590886c8eed32a.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 586678
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[SimpleLoopUnswitch]\u00a0Record loops from unswitching non-trivial conditions\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/33761df961627f9d057fa049509fc8ba8baaaf78.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 586893
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] ThinLTOBitcodeWriter: Emit __cfi_check to full LTO part of bitcode file."
         },
         "platforms": [
@@ -1105,6 +1231,20 @@
         "version_range": {
             "from": 563880,
             "until": 587558
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"CodeGen: Respect function align attribute if less than preferred alignment.\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/97716d2e311aed1b3b73461ee83e53faa512e499.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 587614
         }
     },
     {
@@ -1161,6 +1301,20 @@
         "version_range": {
             "from": 574158,
             "until": 589350
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[mlir] move if-condition propagation to a standalone pass\" (#159535)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c5062d7d6358d73931b4791c77500f476606b003.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 590952
         }
     },
     {
@@ -1399,6 +1553,34 @@
         "version_range": {
             "from": 574158,
             "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [AArch64][Clang] Exclude address spaces from pointer-only coercion types."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-AArch64-Clang-Exclude-address-spaces-from-poi.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 584949
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert [AArch64] Change the coercion type of structs with pointer members."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-AArch64-Change-the-coercion-type-of-structs-w.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 584949
         }
     },
     {
