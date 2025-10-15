@@ -616,6 +616,7 @@ class AndroidConfig(_BaseConfig):
         if (self.target_arch == hosts.Arch.X86_64 or
                 self.target_arch == hosts.Arch.AARCH64):
             ldflags.append('-Wl,-z,max-page-size=16384')
+            ldflags.append('-Wl,-z,common-page-size=16384')
         return ldflags
 
     @property
