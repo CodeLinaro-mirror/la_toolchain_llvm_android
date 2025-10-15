@@ -19,8 +19,6 @@
 """Update the prebuilt clang from the build server."""
 
 import argparse
-import contextlib
-import glob
 import inspect
 import logging
 import os
@@ -31,8 +29,6 @@ import sys
 import context  # pylint: disable=unused-import
 from llvm_android import utils, paths
 
-PGO_PROFILE_PATTERN = 'pgo-*.tar.xz'
-BOLT_PROFILE_PATTERN = 'bolt-*.tar.xz'
 
 def logger():
     """Returns the module level logger."""
@@ -73,13 +69,6 @@ class ArgParser(argparse.ArgumentParser):
             help='Skip the cleanup, and leave intermediate files')
 
         self.add_argument(
-            '--skip-update-profiles',
-            '-sp',
-            action='store_true',
-            default=False,
-            help='Skip updating PGO and BOLT profiles')
-
-        self.add_argument(
             '--overwrite', action='store_true',
             help='Remove/overwrite any existing prebuilt directories.')
 
@@ -112,18 +101,9 @@ class ArgParser(argparse.ArgumentParser):
             assert not args.overwrite, """Overwriting clang prebuilt in the
                 kernel branch isn't allowed in order to avoid affecting release
                 branches."""
-            assert args.skip_update_profiles, """Updating profiles should be
-                skipped when updating clang prebuilt in the kernel branch."""
             assert args.host == 'linux-x86', """Only need linux-x86 host when
                 updating clang prebuilt in the kernel branch."""
         return args
-
-
-def fetch_artifact(branch, target, build, pattern):
-    fetch_artifact_path = '/google/data/ro/projects/android/fetch_artifact'
-    cmd = [fetch_artifact_path, f'--branch={branch}',
-           f'--target={target}', f'--bid={build}', pattern]
-    utils.check_call(cmd)
 
 
 def extract_clang_info(clang_dir):
@@ -320,30 +300,6 @@ def install_clang_directory(extract_subdir: str, install_subdir: str, overwrite:
     os.rename(extract_subdir, install_subdir)
 
 
-def update_profiles(download_dir, build_number, bug):
-    profiles_dir = paths.PREBUILTS_DIR / 'clang' / 'host' / 'linux-x86' / 'profiles'
-
-    with contextlib.chdir(profiles_dir):
-        # First, delete the old profiles.
-        for f in glob.glob(PGO_PROFILE_PATTERN):
-            os.remove(f)
-        for f in glob.glob(BOLT_PROFILE_PATTERN):
-            os.remove(f)
-
-        # Replace with the downloaded new profiles.
-        shutil.copy(glob.glob(f'{download_dir}/{PGO_PROFILE_PATTERN}')[0], '.')
-        shutil.copy(glob.glob(f'{download_dir}/{BOLT_PROFILE_PATTERN}')[0], '.')
-
-        utils.check_call(['git', 'add', '.'])
-        message_lines = [f'Check in profiles from build {build_number}']
-        message_lines.append('')
-        if bug is not None:
-            message_lines.append(f'Bug: {format_bug(bug)}')
-        message_lines.append('Test: N/A')
-        message = '\n'.join(message_lines)
-        utils.check_call(['git', 'commit', '-m', message])
-
-
 def main():
     args = ArgParser().parse_args()
     logging.basicConfig(level=logging.DEBUG)
@@ -390,17 +346,13 @@ def main():
 
     try:
         if do_fetch:
-            fetch_artifact(branch, targets[0], args.build, manifest)
+            utils.fetch_artifact(branch, targets[0], args.build, manifest)
             for host in hosts:
                 target = targets_map[host]
-                fetch_artifact(branch, target, args.build, build_info)
+                utils.fetch_artifact(branch, target, args.build, build_info)
                 os.rename(f'{download_dir}/{build_info}', f'{download_dir}/{build_info}-{host}')
             for target in targets:
-                fetch_artifact(branch, target, args.build, clang_pattern)
-
-            if not args.skip_update_profiles and 'linux-x86' in hosts:
-                fetch_artifact(branch, 'llvm_linux', args.build, PGO_PROFILE_PATTERN)
-                fetch_artifact(branch, 'llvm_linux', args.build, BOLT_PROFILE_PATTERN)
+                utils.fetch_artifact(branch, target, args.build, clang_pattern)
 
         if args.update_in_kernel_branch_dir:
             prebuilt_dir = Path(args.update_in_kernel_branch_dir) / 'prebuilts'
@@ -410,9 +362,6 @@ def main():
             update_clang(prebuilt_dir, host, args.build, args.use_current_branch,
                          download_dir, args.bug, manifest, args.overwrite,
                          not args.no_validity_check, is_testing)
-
-        if not args.skip_update_profiles and 'linux-x86' in hosts:
-            update_profiles(download_dir, args.build, args.bug)
 
         if args.repo_upload:
             topic = f'clang-prebuilt-{args.build}'

@@ -230,3 +230,25 @@ def prepare_env(android_root: Path, android_target: str) -> Dict[str, str]:
         env[key] = value
 
     return env
+
+
+def fetch_artifact(branch: str, target: str, build: str, pattern: str):
+    """Fetches artifact from the build server."""
+    fetch_artifact_path = '/google/data/ro/projects/android/fetch_artifact'
+    cmd = [fetch_artifact_path, f'--branch={branch}',
+           f'--target={target}', f'--bid={build}', pattern]
+    check_call(cmd)
+
+
+def get_latest_green_build(branch: str, target: str) -> str:
+    """Return the latest green build id."""
+    cmd = [
+      '/google/data/ro/projects/android/ab',
+      'lkgb',
+      '--branch',
+      branch,
+      '--target',
+      target,
+    ]
+    output = check_output(cmd)
+    return output.split()[2]
