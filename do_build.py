@@ -653,7 +653,6 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                             'clang++-real\n'
                             'clang-tidy\n'
                             'clang-tidy-real\n'
-                            '../lib/libc++.so\n'
                             'lld\n'
                             'ld64.lld\n'
                             'ld.lld\n'
