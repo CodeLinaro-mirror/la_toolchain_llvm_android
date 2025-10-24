@@ -228,6 +228,15 @@ def setup_sources(git_am=False, llvm_rev=None, skip_apply_patches=False, continu
         failure_mode = 'continue' if continue_on_patch_errors else 'fail'
         patch_output = apply_patches(tmp_source_dir, svn_version, patch_json,
                                      patch_dir, git_am, failure_mode)
+
+        if android_version.is_llvm_next():
+            logger().info('Applying ToT Patches');
+            tot_json = os.path.join(patch_dir, 'TOT.json')
+            tot_patch_output = apply_patches(tmp_source_dir, svn_version, tot_json,
+                                                patch_dir, git_am, failure_mode)
+            tot_patch_output = tot_patch_output.replace("The following", "The following tot")
+            logger().info(tot_patch_output)
+
         logger().info(patch_output)
         pi = get_source_info(patch_output)
         write_source_info(pi)

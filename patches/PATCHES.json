@@ -1582,47 +1582,5 @@
             "from": 584948,
             "until": 584949
         }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert [libc++] Replace __resize_default_init with"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-libc-Replace-__resize_default_init-with-resize.patch",
-        "version_range": {
-            "from": 590636,
-            "until": 593406
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert [libc++] Replace __resize_default_init with"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-libc-Replace-__resize_default_init-with-resize-v2.patch",
-        "version_range": {
-            "from": 593406,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert Reapply [libc++] Avoid constructing additional objects when using map::at (#160738) (#161485)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-Reapply-libc-Avoid-constructing-additional-ob.patch",
-        "version_range": {
-            "from": 594273,
-            "until": null
-        }
     }
 ]
