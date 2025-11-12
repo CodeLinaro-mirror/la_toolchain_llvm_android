@@ -788,6 +788,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Reapply \"IR: Remove uselist for constantdata (#137313)\" (#138961)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9383fb23e18bb983d0024fb956a0a724ef9eb03d.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 574618
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [HWASan] fix missing BTI attribute on personality function thunks (#139138)"
         },
         "platforms": [
