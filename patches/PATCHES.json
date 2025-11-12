@@ -1166,6 +1166,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] ValueMapper: Delete unused initializers of replaced appending globals."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1f38d49ebe96417e368a567efa4d650b8a9ac30f.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 597042
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Add stubs and headers for nl_types APIs."
         },
         "platforms": [
