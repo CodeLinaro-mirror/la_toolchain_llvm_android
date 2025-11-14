@@ -1390,6 +1390,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64][SME] Disable tail calls for callees that require saving ZT0 (#165371)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bfb54e8ba6262a509343985c018f9a8d52963734.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 595389
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] ValueMapper: Delete unused initializers of replaced appending globals."
         },
         "platforms": [
