@@ -1110,6 +1110,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang][ARM] Fix setting of MaxAtomicInlineWidth. (#151404)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/558277ae4db665bea93686db4b4538c1c2c0cf4d.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 585039
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"Reland \"RegisterCoalescer: Add implicit-def of super register when coalescing SUBREG_TO_REG\" (#134408)\""
         },
         "platforms": [
