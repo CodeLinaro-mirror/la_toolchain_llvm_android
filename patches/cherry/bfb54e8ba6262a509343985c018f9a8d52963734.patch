@@ -1,0 +1,60 @@
+From 4be3fccd7b430a40cda264d21d8da50781d5ff87 Mon Sep 17 00:00:00 2001
+From: Benjamin Maxwell <benjamin.maxwell@arm.com>
+Date: Tue, 28 Oct 2025 14:53:08 +0000
+Subject: [PATCH] [AArch64][SME] Disable tail calls for callees that require
+ saving ZT0
+
+We may need to load ZT0 after the call, so we can't perform a tail call.
+---
+ .../lib/Target/AArch64/AArch64ISelLowering.cpp |  3 ++-
+ llvm/test/CodeGen/AArch64/sme-zt0-state.ll     | 18 ++++++++++++++++++
+ 2 files changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+index a62aa443983e..035558947d37 100644
+--- a/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp
+@@ -8655,12 +8655,13 @@ bool AArch64TargetLowering::isEligibleForTailCallOptimization(
+   CallingConv::ID CallerCC = CallerF.getCallingConv();
+ 
+   // SME Streaming functions are not eligible for TCO as they may require
+-  // the streaming mode or ZA to be restored after returning from the call.
++  // the streaming mode or ZA/ZT0 to be restored after returning from the call.
+   SMEAttrs CallerAttrs(MF.getFunction());
+   auto CalleeAttrs = CLI.CB ? SMEAttrs(*CLI.CB) : SMEAttrs(SMEAttrs::Normal);
+   if (CallerAttrs.requiresSMChange(CalleeAttrs) ||
+       CallerAttrs.requiresLazySave(CalleeAttrs) ||
+       CallerAttrs.requiresPreservingAllZAState(CalleeAttrs) ||
++      CallerAttrs.requiresPreservingZT0(CalleeAttrs) ||
+       CallerAttrs.hasStreamingBody())
+     return false;
+ 
+diff --git a/llvm/test/CodeGen/AArch64/sme-zt0-state.ll b/llvm/test/CodeGen/AArch64/sme-zt0-state.ll
+index 7361e850d713..d285e94f4a75 100644
+--- a/llvm/test/CodeGen/AArch64/sme-zt0-state.ll
++++ b/llvm/test/CodeGen/AArch64/sme-zt0-state.ll
+@@ -276,3 +276,21 @@ define void @shared_za_new_zt0() "aarch64_inout_za" "aarch64_new_zt0" nounwind {
+   call void @callee() "aarch64_inout_za" "aarch64_in_zt0";
+   ret void;
+ }
++
++define void @disable_tailcallopt(ptr %callee) "aarch64_inout_zt0" nounwind {
++; CHECK-COMMON-LABEL: disable_tailcallopt:
++; CHECK-COMMON:       // %bb.0:
++; CHECK-COMMON-NEXT:    sub sp, sp, #80
++; CHECK-COMMON-NEXT:    stp x30, x19, [sp, #64] // 16-byte Folded Spill
++; CHECK-COMMON-NEXT:    mov x19, sp
++; CHECK-COMMON-NEXT:    str zt0, [x19]
++; CHECK-COMMON-NEXT:    smstop za
++; CHECK-COMMON-NEXT:    blr x0
++; CHECK-COMMON-NEXT:    smstart za
++; CHECK-COMMON-NEXT:    ldr zt0, [x19]
++; CHECK-COMMON-NEXT:    ldp x30, x19, [sp, #64] // 16-byte Folded Reload
++; CHECK-COMMON-NEXT:    add sp, sp, #80
++; CHECK-COMMON-NEXT:    ret
++  tail call void %callee()
++  ret void
++}
+-- 
+2.43.0
+
