@@ -583,7 +583,26 @@ class LLVMRuntimeBuilder(LLVMBaseBuilder):  # pylint: disable=abstract-method
             # It's usually set by the NDK's CMake toolchain file, which we don't
             # use.
             defines['ANDROID_PLATFORM_LEVEL'] = self._config.api_level
+        if self.enable_execute_only_memory():
+            defines['RUNTIMES_EXECUTE_ONLY_CODE'] = 'ON'
         return defines
+
+    def enable_execute_only_memory(self) -> bool:
+        # // https://github.com/android/ndk/issues/1196
+        # The unwinder used by the crash handler on versions of Android prior to
+        # API 29 did not correctly handle binaries built with rosegment. So they use --no-rosegment
+        # when linking, which is conflict with execute only memory.
+        return (self._config.target_os.is_android and self._config.target_arch == hosts.Arch.AARCH64
+                and self._config.api_level >= 29)
+
+    @property
+    def cflags(self) -> List[str]:
+        cflags = super().cflags
+        if self.enable_execute_only_memory():
+            # Some runtime libraries are not using runtimes/CMakeLists.txt. So manually add
+            # -mexecute-only.
+            cflags.append('-mexecute-only')
+        return cflags
 
     @property
     def ldflags(self) -> List[str]:
@@ -596,6 +615,10 @@ class LLVMRuntimeBuilder(LLVMBaseBuilder):  # pylint: disable=abstract-method
             ldflags.extend((
                 '-resource-dir', f'{self.output_toolchain.clang_lib_dir}'
             ))
+        if self.enable_execute_only_memory():
+            # crtbegin_so.o and crtend_so.o from sysroot don't have SHF_AARCH64_PURECODE section
+            # flag. So we need to force lld to build execute-only section.
+            ldflags.append('-Wl,--execute-only')
         return ldflags
 
 
