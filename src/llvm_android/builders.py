@@ -363,6 +363,14 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
         defines['COMPILER_RT_OS_DIR'] = self._config.target_os.crt_dir
         return defines
 
+    @property
+    def cflags(self) -> List[str]:
+        cflags = super().cflags
+        if self.enable_execute_only_memory():
+            # We are not using compiler-rt/CMakeLists.txt. So manually add the macro.
+            cflags.append('-DCOMPILER_RT_EXECUTE_ONLY_CODE')
+        return cflags
+
     def install_config(self) -> None:
         # Copy the library into the toolchain resource directory (lib/linux) and
         # runtimes_ndk_cxx.
