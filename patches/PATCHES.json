@@ -1404,6 +1404,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Runtimes][CMake] Add CMake option to enable execute-only code generation on AArch64 (#143698)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/927092b262e58a7f3d79fea615daecc60e61bdcb.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 596506
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt] Add CMake option to enable execute-only code generation on AArch64 (#140555)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9d18e92ee78c4171477d5a868bd8ad3c1dbf07a1.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 596507
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libunwind] Add CMake option to enable execute-only code generation on AArch64 (#140554)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4508f44af7529dbba8e3762325b2c416ff9f20c6.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 596508
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] ValueMapper: Delete unused initializers of replaced appending globals."
         },
         "platforms": [
