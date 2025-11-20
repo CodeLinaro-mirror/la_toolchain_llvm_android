@@ -1366,6 +1366,8 @@ class WindowsToolchainBuilder(base_builders.LLVMBuilder):
         defines = super().cmake_defines
         # Don't build compiler-rt, libcxx etc. for Windows
         defines['LLVM_BUILD_RUNTIME'] = 'OFF'
+        # Don't enable plugins for Windows.
+        defines['LLVM_ENABLE_PLUGINS'] = 'OFF'
         # Build clang-tidy/clang-format for Windows.
         defines['LLVM_TOOL_CLANG_TOOLS_EXTRA_BUILD'] = 'ON'
         defines['LLVM_TOOL_OPENMP_BUILD'] = 'OFF'
