@@ -1,0 +1,113 @@
+From 558277ae4db665bea93686db4b4538c1c2c0cf4d Mon Sep 17 00:00:00 2001
+From: Eli Friedman <efriedma@quicinc.com>
+Date: Fri, 1 Aug 2025 11:03:21 -0700
+Subject: [PATCH] [clang][ARM] Fix setting of MaxAtomicInlineWidth. (#151404)
+
+2f497ec3a0056f15727ee6008211aeb2c4a8f455 updated the backend's rules for
+when lock-free atomics are available, but we never made a corresponding
+change to the frontend. Fix it to be consistent. This only affects
+targets older than v7.
+---
+ clang/lib/Basic/Targets/ARM.cpp | 21 +++++++++++++--------
+ clang/test/CodeGen/atomic-arm.c | 13 ++++++++-----
+ clang/test/CodeGen/pr45476.cpp  |  2 +-
+ 3 files changed, 22 insertions(+), 14 deletions(-)
+
+diff --git a/clang/lib/Basic/Targets/ARM.cpp b/clang/lib/Basic/Targets/ARM.cpp
+index 6bec2fae0fbd0..75fdf38e2104f 100644
+--- a/clang/lib/Basic/Targets/ARM.cpp
++++ b/clang/lib/Basic/Targets/ARM.cpp
+@@ -133,19 +133,24 @@ void ARMTargetInfo::setArchInfo(llvm::ARM::ArchKind Kind) {
+ }
+ 
+ void ARMTargetInfo::setAtomic() {
+-  // when triple does not specify a sub arch,
+-  // then we are not using inline atomics
+-  bool ShouldUseInlineAtomic =
+-      (ArchISA == llvm::ARM::ISAKind::ARM && ArchVersion >= 6) ||
+-      (ArchISA == llvm::ARM::ISAKind::THUMB && ArchVersion >= 7);
+-  // Cortex M does not support 8 byte atomics, while general Thumb2 does.
+   if (ArchProfile == llvm::ARM::ProfileKind::M) {
++    // M-class only ever supports 32-bit atomics. Cortex-M0 doesn't have
++    // any atomics.
+     MaxAtomicPromoteWidth = 32;
+-    if (ShouldUseInlineAtomic)
++    if (ArchVersion >= 7)
+       MaxAtomicInlineWidth = 32;
+   } else {
++    // A-class targets have up to 64-bit atomics.
++    //
++    // On Linux, 64-bit atomics are always available through kernel helpers
++    // (which are lock-free). Otherwise, atomics are available on v6 or later.
++    //
++    // (Thumb doesn't matter; for Thumbv6, we just use a library call which
++    // switches out of Thumb mode.)
++    //
++    // This should match setMaxAtomicSizeInBitsSupported() in the backend.
+     MaxAtomicPromoteWidth = 64;
+-    if (ShouldUseInlineAtomic)
++    if (getTriple().getOS() == llvm::Triple::Linux || ArchVersion >= 6)
+       MaxAtomicInlineWidth = 64;
+   }
+ }
+diff --git a/clang/test/CodeGen/atomic-arm.c b/clang/test/CodeGen/atomic-arm.c
+index 6952b4d0099b5..e6c2b8dca613a 100644
+--- a/clang/test/CodeGen/atomic-arm.c
++++ b/clang/test/CodeGen/atomic-arm.c
+@@ -2,7 +2,10 @@
+ // RUN: %clang_cc1 -triple thumbv7m-apple-unknown-macho %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-V7M
+ // RUN: %clang_cc1 -triple thumbv7-apple-ios13.0 %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-HOSTED
+ // RUN: %clang_cc1 -triple thumbv7k-apple-watchos5.0 %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-HOSTED
+-
++// RUN: %clang_cc1 -triple arm-linux-gnueabi %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-HOSTED
++// RUN: %clang_cc1 -triple armv7-none-eabi %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-HOSTED
++// RUN: %clang_cc1 -triple thumbv6k-none-eabi %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-HOSTED
++// RUN: %clang_cc1 -triple armv5-none-eabi %s -emit-llvm -o - | FileCheck %s --check-prefixes=CHECK,CHECK-V6M
+ 
+ // CHECK-V6M: @always1 = global i32 0
+ // CHECK-V6M: @always4 = global i32 0
+@@ -22,7 +25,7 @@ int always8 = __atomic_always_lock_free(8, 0);
+ 
+ int lock_free_1() {
+   // CHECK-LABEL: @lock_free_1
+-  // CHECK-V6M:   [[RES:%.*]] = call arm_aapcscc zeroext i1 @__atomic_is_lock_free(i32 noundef 1, ptr noundef null)
++  // CHECK-V6M:   [[RES:%.*]] = call{{.*}}zeroext i1 @__atomic_is_lock_free(i32 noundef 1, ptr noundef null)
+   // CHECK-V6M:   [[RES32:%.*]] = zext i1 [[RES]] to i32
+   // CHECK-V6M:   ret i32 [[RES32]]
+ 
+@@ -33,7 +36,7 @@ int lock_free_1() {
+ 
+ int lock_free_4() {
+   // CHECK-LABEL: @lock_free_4
+-  // CHECK-V6M:   [[RES:%.*]] = call arm_aapcscc zeroext i1 @__atomic_is_lock_free(i32 noundef 4, ptr noundef null)
++  // CHECK-V6M:   [[RES:%.*]] = call{{.*}}zeroext i1 @__atomic_is_lock_free(i32 noundef 4, ptr noundef null)
+   // CHECK-V6M:   [[RES32:%.*]] = zext i1 [[RES]] to i32
+   // CHECK-V6M:   ret i32 [[RES32]]
+ 
+@@ -44,11 +47,11 @@ int lock_free_4() {
+ 
+ int lock_free_8() {
+   // CHECK-LABEL: @lock_free_8
+-  // CHECK-V6M:   [[RES:%.*]] = call arm_aapcscc zeroext i1 @__atomic_is_lock_free(i32 noundef 8, ptr noundef null)
++  // CHECK-V6M:   [[RES:%.*]] = call{{.*}}zeroext i1 @__atomic_is_lock_free(i32 noundef 8, ptr noundef null)
+   // CHECK-V6M:   [[RES32:%.*]] = zext i1 [[RES]] to i32
+   // CHECK-V6M:   ret i32 [[RES32]]
+ 
+-  // CHECK-V7M:   [[RES:%.*]] = call arm_aapcscc zeroext i1 @__atomic_is_lock_free(i32 noundef 8, ptr noundef null)
++  // CHECK-V7M:   [[RES:%.*]] = call{{.*}}zeroext i1 @__atomic_is_lock_free(i32 noundef 8, ptr noundef null)
+   // CHECK-V7M:   [[RES32:%.*]] = zext i1 [[RES]] to i32
+   // CHECK-V7M:   ret i32 [[RES32]]
+ 
+diff --git a/clang/test/CodeGen/pr45476.cpp b/clang/test/CodeGen/pr45476.cpp
+index 84e7a984a1a25..c95f7fb8cd9c3 100644
+--- a/clang/test/CodeGen/pr45476.cpp
++++ b/clang/test/CodeGen/pr45476.cpp
+@@ -1,4 +1,4 @@
+-// RUN: %clang_cc1 -triple arm-unknown-linux-gnueabi -emit-llvm %s -o - | FileCheck -check-prefix=LIBCALL %s
++// RUN: %clang_cc1 -triple armv6m-eabi -emit-llvm %s -o - | FileCheck -check-prefix=LIBCALL %s
+ // RUN: %clang_cc1 -triple armv8-eabi -emit-llvm %s -o - | FileCheck -check-prefix=NATIVE %s
+ // PR45476
+ 
+-- 
+2.52.0.rc1.455.g30608eb744-goog
+

@@ -520,7 +520,7 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
 
         # https://github.com/android-ndk/ndk/issues/574 - Don't depend on libtinfo.
         defines['LLVM_ENABLE_TERMINFO'] = 'OFF'
-        defines['LLVM_ENABLE_PLUGINS'] = 'OFF'
+        defines['LLVM_ENABLE_PLUGINS'] = 'ON'
         if patch_level := android_version.get_patch_level():
             defines['LLVM_VERSION_PATCH'] = patch_level
         defines['LLVM_VERSION_SUFFIX'] = ""
