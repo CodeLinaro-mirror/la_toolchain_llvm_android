@@ -1,0 +1,63 @@
+From 4508f44af7529dbba8e3762325b2c416ff9f20c6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Csan=C3=A1d=20Hajd=C3=BA?= <csanad.hajdu@arm.com>
+Date: Fri, 7 Nov 2025 09:36:32 +0100
+Subject: [PATCH] [libunwind] Add CMake option to enable execute-only code
+ generation on AArch64 (#140554)
+
+For a full toolchain supporting execute-only code generation the runtime
+libraries also need to be pre-compiled with it enabled. The generic
+`RUNTIMES_EXECUTE_ONLY_CODE` CMake option can now be used during build
+configuration to enable execute-only code generation in libunwind.
+
+Related RFC:
+https://discourse.llvm.org/t/rfc-execute-only-code-support-for-runtime-libraries-on-aarch64/86180
+---
+ libunwind/CMakeLists.txt               | 4 ++++
+ libunwind/src/UnwindRegistersRestore.S | 2 ++
+ libunwind/src/UnwindRegistersSave.S    | 2 ++
+ 3 files changed, 8 insertions(+)
+
+diff --git a/libunwind/CMakeLists.txt b/libunwind/CMakeLists.txt
+index 5f4b0902d522..97edff0b87ea 100644
+--- a/libunwind/CMakeLists.txt
++++ b/libunwind/CMakeLists.txt
+@@ -332,6 +332,10 @@ if (C_SUPPORTS_COMMENT_LIB_PRAGMA)
+   endif()
+ endif()
+ 
++if (RUNTIMES_EXECUTE_ONLY_CODE)
++  add_compile_definitions(_LIBUNWIND_EXECUTE_ONLY_CODE)
++endif()
++
+ #===============================================================================
+ # Setup Source Code
+ #===============================================================================
+diff --git a/libunwind/src/UnwindRegistersRestore.S b/libunwind/src/UnwindRegistersRestore.S
+index 198735fa800a..fd306ed8c523 100644
+--- a/libunwind/src/UnwindRegistersRestore.S
++++ b/libunwind/src/UnwindRegistersRestore.S
+@@ -18,6 +18,8 @@
+ 
+ #if defined(_AIX)
+   .toc
++#elif defined(__aarch64__) && defined(__ELF__) && defined(_LIBUNWIND_EXECUTE_ONLY_CODE)
++  .section .text,"axy",@progbits,unique,0
+ #else
+   .text
+ #endif
+diff --git a/libunwind/src/UnwindRegistersSave.S b/libunwind/src/UnwindRegistersSave.S
+index 619a59751151..b7ddd0a621d1 100644
+--- a/libunwind/src/UnwindRegistersSave.S
++++ b/libunwind/src/UnwindRegistersSave.S
+@@ -18,6 +18,8 @@
+ 
+ #if defined(_AIX)
+     .toc
++#elif defined(__aarch64__) && defined(__ELF__) && defined(_LIBUNWIND_EXECUTE_ONLY_CODE)
++    .section .text,"axy",@progbits,unique,0
+ #else
+     .text
+ #endif
+-- 
+2.52.0.rc1.455.g30608eb744-goog
+
