@@ -31,6 +31,7 @@ import context  # pylint: disable=unused-import
 from llvm_android.base_builders import Builder, LLVMBuilder
 from llvm_android.builder_registry import BuilderRegistry
 from llvm_android import (android_version, builders, build_info, configs, hosts, paths, source_manager, toolchain_errors, timer, toolchains, utils, win_sdk)
+from llvm_android.version import Version
 
 def logger():
     """Returns the module level logger."""
@@ -663,6 +664,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                            )
             inputs_file.write(dependencies)
 
+        check_execute_only_runtime_libraries(install_dir, version)
+
     # Package up the resulting trimmed install/ directory.
     if create_tar:
         tag = host.os_tag
@@ -675,6 +678,26 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         logger().info(f'Packaging {package_path}')
         with timer.Timer('package_final_toolchain'):
             utils.create_tarball(install_host_dir, [package_name], package_path)
+
+
+def check_execute_only_runtime_libraries(install_dir: Path, version: Version):
+    """ Verify execute-only runtime libraries on AArch64. """
+    # Static libraries are also compiled with -mexecute-only, but the
+    # final memory protection is determined at link time (by the --execute-only
+    # linker flag). Therefore, we only verify the shared libraries where
+    # this property can be checked in the ELF headers.
+    execute_only_runtime_libraries = [
+        f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.ubsan_standalone-aarch64-android.so",
+        f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.asan-aarch64-android.so",
+        f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.ubsan_minimal-aarch64-android.so",
+        f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.hwasan-aarch64-android.so",
+        f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.tsan-aarch64-android.so",
+        "android_libc++/platform/aarch64/lib/libc++.so",
+    ]
+    for library in execute_only_runtime_libraries:
+        flags = utils.get_executable_segment_flags(install_dir / library)
+        if flags != "E":
+            raise RuntimeError(f"The executable segment of {library} isn't execute-only: {flags}")
 
 
 def parse_args():
