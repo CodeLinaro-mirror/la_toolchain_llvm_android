@@ -12,33 +12,5 @@
             "from": 593406,
             "until": null
         }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert Reapply [libc++] Avoid constructing additional objects when using map::at (#160738) (#161485)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-Reapply-libc-Avoid-constructing-additional-ob.patch",
-        "version_range": {
-            "from": 594273,
-            "until": 595841
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert Reapply [libc++] Avoid constructing additional objects when using map::at (#160738) (#161485)"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-Reapply-libc-Avoid-constructing-additional-ob-v2.patch",
-        "version_range": {
-            "from": 595842,
-            "until": null
-        }
     }
 ]

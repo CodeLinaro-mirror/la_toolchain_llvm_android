@@ -3,8 +3,8 @@ index 3406023e..8ee03d0f 100644
 --- a/prebuilts/clang/host/linux-x86/soong/clangprebuilts.go
 +++ b/prebuilts/clang/host/linux-x86/soong/clangprebuilts.go
 @@ -35,7 +35,6 @@ var (
- 		"bin/llvm-cxxfilt",
- 		"bin/llvm-profdata",
+ 		"bin/llvm-objcopy",
+ 		"bin/llvm-strip",
  		"bin/llvm-symbolizer",
 -		"lib/libc++.so",
  		"lib/x86_64-unknown-linux-gnu/libc++.so",
