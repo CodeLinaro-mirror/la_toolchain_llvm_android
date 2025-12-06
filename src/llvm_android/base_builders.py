@@ -520,7 +520,6 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
 
         # https://github.com/android-ndk/ndk/issues/574 - Don't depend on libtinfo.
         defines['LLVM_ENABLE_TERMINFO'] = 'OFF'
-        defines['LLVM_ENABLE_PLUGINS'] = 'ON'
         if patch_level := android_version.get_patch_level():
             defines['LLVM_VERSION_PATCH'] = patch_level
         defines['LLVM_VERSION_SUFFIX'] = ""
@@ -536,6 +535,13 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
             defines['LLVM_USE_LINKER'] = 'ld'
         else:
             defines['LLVM_USE_LINKER'] = 'lld'
+
+        if self._config.target_os.is_windows:
+            # Enabling plugins on Windows causes "too many exported symbols" error.
+            # See http://b/460540592.
+            defines['LLVM_ENABLE_PLUGINS'] = 'OFF'
+        else:
+            defines['LLVM_ENABLE_PLUGINS'] = 'ON'
 
         # Building llvm with tests needs python >= 3.6, which may not be available on build server.
         # So always use prebuilts python.
