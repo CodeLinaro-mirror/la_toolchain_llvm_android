@@ -58,7 +58,13 @@ def apply_patches(source_dir, svn_version, patch_json, patch_dir, git_am,
         # Run git am in the source directory
         patch_dir=source_dir
 
-    return utils.check_output(patch_manager_cmd, cwd=patch_dir)
+    try:
+        return utils.check_output(patch_manager_cmd, cwd=patch_dir)
+    except subprocess.CalledProcessError as e:
+        # These get dropped, which can be hard to debug. Surface them here.
+        logging.error("patch_manager failed; stdout:\n%s", e.stdout)
+        logging.error("patch_manager stderr:\n%s", e.stderr)
+        raise
 
 class PatchInfo:
     """Holds info for a round of patch applications."""
