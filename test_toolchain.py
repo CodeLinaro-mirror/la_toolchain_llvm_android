@@ -39,6 +39,7 @@ input_yaml_config_example = """test_configs:
         type: GEEKBENCH # program-defined value for the test to run (see TestType enum)
         num_samples: 2 # number of times to run this test (defaults to 1 if line not included)
         bin_dir: ~/opt/geekbench/6.1.0/ # Geekbench-specific key-value pair
+        prep_between_runs: false # re-run device set-up between test runs (default 'false')
 
     device_configs:
       # One or more device configs to be specified...
@@ -815,11 +816,13 @@ class Config:
             test_type: TestType,
             num_samples: int,
             test_specific: Dict[str, Any],
+            prep_between_runs: bool = False,
         ):
             self.test_id = test_id
             self.test_type = test_type
             self.num_samples = num_samples
             self.test_specific = test_specific
+            self.prep_between_runs = prep_between_runs
 
         @classmethod
         def from_input_config(
@@ -857,7 +860,14 @@ class Config:
                         f"Invalid bin_dir {bin_dir} provided for Geekbench tests."
                     )
                 test_specific["bin_dir"] = bin_dir
-            return cls(test_id, test_type, num_samples, test_specific)
+            prep_between_runs = test_config.get("prep_between_runs", False)
+            return cls(
+                test_id,
+                test_type,
+                num_samples,
+                test_specific,
+                prep_between_runs=prep_between_runs,
+            )
 
     class Device:
         def __init__(
@@ -1046,6 +1056,7 @@ def _setup_device(
 
 
 def _run_test_on_device(
+    iteration: int,
     test_config: Config.Test,
     dut: Dut,
 ) -> TestResult:
@@ -1053,7 +1064,8 @@ def _run_test_on_device(
         raise TestToolchainError(
             "Test could not be run because the device is not ready for testing."
         )
-    dut.prep_for_test()
+    if test_config.prep_between_runs or iteration == 0:
+        dut.prep_for_test()
     match test_config.test_type:
         case TestType.CTS_BIONIC:
             results = TestRunner.run_bionic_cts(dut)
@@ -1084,8 +1096,9 @@ def test_toolchain(config: Config, android_root: Path, results_root: Path, lab: 
     - If a test cannot be run for a given iteration, it is skipped.
     - Devices are cleaned up (when finished with testing and during exceptions).
     """
+    date_format = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     results_dir = (
-        results_root / f"results-{datetime.now().strftime("%Y-%m-%d-%H-%M-%S")}"
+        results_root / f"results-{date_format}"
     )
     results_dir.mkdir(parents=True)
     latest_sym_link_path = results_root.resolve() / "latest"
@@ -1121,7 +1134,7 @@ def test_toolchain(config: Config, android_root: Path, results_root: Path, lab: 
                             f" {device_iteration})."
                         )
 
-                        results = _run_test_on_device(test_config, dut)
+                        results = _run_test_on_device(test_iteration, test_config, dut)
 
                         # Write results
                         test_results_dir = (
