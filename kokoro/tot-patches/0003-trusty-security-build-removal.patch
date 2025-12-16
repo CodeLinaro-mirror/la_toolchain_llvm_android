@@ -1,7 +1,7 @@
-diff --git a/guest/trusty/security_vm/vm/Android.bp b/guest/trusty/security_vm/vm/Android.bp
+diff --git a/packages/modules/Virtualization/guest/trusty/security_vm/vm/Android.bp b/packages/modules/Virtualization/guest/trusty/security_vm/vm/Android.bp
 index 77ac95407..d85e3a5f7 100644
---- a/guest/trusty/security_vm/vm/Android.bp
-+++ b/guest/trusty/security_vm/vm/Android.bp
+--- a/packages/modules/Virtualization/guest/trusty/security_vm/vm/Android.bp
++++ b/packages/modules/Virtualization/guest/trusty/security_vm/vm/Android.bp
 @@ -13,8 +13,8 @@ package {
  prebuilt_etc {
      name: "trusty_security_vm.elf",
