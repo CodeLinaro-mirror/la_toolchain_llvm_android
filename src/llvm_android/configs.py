@@ -585,6 +585,7 @@ class AndroidConfig(_BaseConfig):
         return {
             hosts.Arch.ARM: 'arm',
             hosts.Arch.AARCH64: 'arm64',
+            hosts.Arch.AARCH64_LFI: 'arm64_lfi',
             hosts.Arch.I386: 'x86',
             hosts.Arch.RISCV64: 'riscv64',
             hosts.Arch.X86_64: 'x86_64',
@@ -614,7 +615,8 @@ class AndroidConfig(_BaseConfig):
         if self.static:
             ldflags.append('-static')
         if (self.target_arch == hosts.Arch.X86_64 or
-                self.target_arch == hosts.Arch.AARCH64):
+                self.target_arch == hosts.Arch.AARCH64 or
+                self.target_arch == hosts.Arch.AARCH64_LFI):
             ldflags.append('-Wl,-z,max-page-size=16384')
             ldflags.append('-Wl,-z,common-page-size=16384')
         return ldflags
@@ -627,7 +629,8 @@ class AndroidConfig(_BaseConfig):
         cflags.append('-ffunction-sections')
         cflags.append('-fdata-sections')
         if (self.target_arch == hosts.Arch.X86_64 or
-                self.target_arch == hosts.Arch.AARCH64):
+                self.target_arch == hosts.Arch.AARCH64 or
+                self.target_arch == hosts.Arch.AARCH64_LFI):
             cflags.append('-D__BIONIC_NO_PAGE_SIZE_MACRO')
         return cflags
 
@@ -676,6 +679,20 @@ class AndroidAArch64Config(AndroidConfig):
         cflags.append('-mbranch-protection=standard')
         return cflags
 
+class AndroidAArch64LFIConfig(AndroidConfig):
+    """Configs for android arm64_lfi targets."""
+    target_arch: hosts.Arch = hosts.Arch.AARCH64_LFI
+
+    # We need a target and sysroot to compile the stubs to a ARM64 shared
+    # library so we can use the regular arm64 sysroot since these stub
+    # libraries are just temporarily needed for building the prebuilts.
+    @property
+    def stubs_triple(self) -> str:
+        return f'aarch64-linux-android{self.api_level}'
+
+    @property
+    def stubs_sysroot(self) -> str:
+        return paths.SYSROOTS / 'platform' / 'arm64'
 
 class AndroidRiscv64Config(AndroidConfig):
     """Configs for android riscv64 targets."""
@@ -731,6 +748,19 @@ def android_configs(platform: bool=True,
     for config in configs:
         config.static = static
         config.platform = platform
+        config.extra_config = extra_config
+    # List is not covariant. Explicit convert is required to make it List[Config].
+    return list(configs)
+
+def android_lfi_configs(static: bool=False,
+                        extra_config=None) -> List[Config]:
+    """Returns a list of configs for android builds."""
+    configs = [
+        AndroidAArch64LFIConfig(),
+    ]
+    for config in configs:
+        config.static = static
+        config.platform = True
         config.extra_config = extra_config
     # List is not covariant. Explicit convert is required to make it List[Config].
     return list(configs)
