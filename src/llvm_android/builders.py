@@ -1220,6 +1220,7 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
 
         if self._config.target_arch is hosts.Arch.ARM:
             result.append('-mthumb')
+            result.append('-I' + str(paths.LLVM_PATH / 'libunwind' / 'include'))
         return result
 
     @property
