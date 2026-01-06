@@ -1,0 +1,65 @@
+From c9a45d3fd777997f669ff6af9c1f27e60a0fa23f Mon Sep 17 00:00:00 2001
+From: Kees Cook <kees@kernel.org>
+Date: Fri, 24 Oct 2025 20:27:05 -0700
+Subject: [PATCH] [ARM][KCFI] Fix bundle sizes to reflect worst-case expansion
+ (#164917)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The KCFI_CHECK pseudo-instruction size for ARM got miscalculated. These
+should represent worst-case expansion to ensure correct branch range
+calculations and code layout.
+
+Update the Size field for each ARM sub-architecture:
+
+- ARM: 28 → 40 bytes (10 instructions @ 4 bytes when r3 spill needed)
+- Thumb2: 32 → 34 bytes (mixed 16/32-bit instructions with r3 spill)
+- Thumb1: 50 → 38 bytes (19 instructions @ 2 bytes with r2+r3 spills)
+
+The ARM and Thumb2 sizes were underestimating the case where the target
+register is r12, requiring r3 to be used as scratch and
+spilled/restored. The Thumb1 size was overestimated and has been
+corrected to the actual worst-case of 19 instructions.
+---
+ llvm/lib/Target/ARM/ARMInstrInfo.td | 12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
+index 53be1677b96e..10d4cd5dd96c 100644
+--- a/llvm/lib/Target/ARM/ARMInstrInfo.td
++++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
+@@ -6546,23 +6546,25 @@ def KCFI_CHECK_ARM
+     : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
+       Sched<[]>,
+       Requires<[IsARM]> {
+-  let Size = 28; // 7 instructions (bic, ldr, 4x eor, beq, udf)
++  let Size = 40; // worst-case 10 instructions @ 4 bytes each
++                 // (push, bic, ldr, 4x eor, pop, beq, udf)
+ }
+ 
+ def KCFI_CHECK_Thumb2
+     : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
+       Sched<[]>,
+       Requires<[IsThumb2]> {
+-  let Size =
+-      32; // worst-case 9 instructions (push, bic, ldr, 4x eor, pop, beq.w, udf)
++  let Size = 34; // worst-case (push.w[2], bic[4], ldr[4], 4x eor[16], pop.w[2],
++                 // beq.w[4], udf[2])
+ }
+ 
+ def KCFI_CHECK_Thumb1
+     : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
+       Sched<[]>,
+       Requires<[IsThumb1Only]> {
+-  let Size = 50; // worst-case 25 instructions (pushes, bic helper, type
+-                 // building, cmp, pops)
++  let Size = 38; // worst-case 19 instructions @ 2 bytes each
++                 // (2x push, 3x bic-helper, subs+ldr, 13x type-building, cmp,
++                 // 2x pop, beq, bkpt)
+ }
+ 
+ //===----------------------------------------------------------------------===//
+-- 
+2.52.0.351.gbe84eed79e-goog
+

@@ -1390,6 +1390,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ARM][KCFI] Add backend support for Kernel Control-Flow Integrity (#163698)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d130f402642fba3d065aacb506cb061c899558de.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 594953
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ARM][KCFI] Fix bundle sizes to reflect worst-case expansion (#164917)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c9a45d3fd777997f669ff6af9c1f27e60a0fa23f.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 595134
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64][SME] Disable tail calls for callees that require saving ZT0 (#165371)"
         },
         "platforms": [
