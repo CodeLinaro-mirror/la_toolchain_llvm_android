@@ -668,7 +668,8 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                            )
             inputs_file.write(dependencies)
 
-        check_execute_only_runtime_libraries(install_dir, version)
+        if with_runtimes:
+            check_execute_only_runtime_libraries(install_dir, version)
 
     # Package up the resulting trimmed install/ directory.
     if create_tar:
