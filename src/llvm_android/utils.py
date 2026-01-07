@@ -20,6 +20,7 @@ import datetime
 import logging
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -252,3 +253,17 @@ def get_latest_green_build(branch: str, target: str) -> str:
     ]
     output = check_output(cmd)
     return output.split()[2]
+
+def get_executable_segment_flags(binary_path: Path) -> str:
+    """Return the flags of the executable segment of a binary."""
+    readelf_path = paths.CLANG_PREBUILT_DIR / 'bin' / 'llvm-readelf'
+    try:
+        output = check_output([readelf_path, '-lW', binary_path])
+        # Match LOAD segments, skip 5 columns (Offset..MemSiz), capture Flags
+        # Return the first flag string containing 'E' found, or empty string
+        return next((m.group(1).strip()
+                     for m in re.finditer(r"^\s*LOAD\s+(?:0x[\da-f]+\s+){5}(.*?)\s+0x",
+                     output, re.M | re.I)
+                     if 'E' in m.group(1)), "")
+    except Exception as e:
+        raise RuntimeError(f"Failed to read executable segment flags for {binary_path}: {e}")

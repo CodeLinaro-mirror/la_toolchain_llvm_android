@@ -1,0 +1,43 @@
+# We have more symbols than in the minimal libc to build libunwind
+# but these are not needed for LFI-ed codecs
+LIBC_LFI {
+  global:
+    abort;
+    __assert_fail; #unwind
+    calloc;
+    __cxa_finalize; #library
+    __cxa_atexit; #library
+    __errno; #unwind
+    free;
+    fopen; #compiler-rt
+    fflush; #unwind
+    fprintf; #unwind
+    fwrite; #unwind
+    getenv; #unwind
+    __libc_init; #library
+    malloc;
+    memchr;
+    memcmp;
+    memcpy;
+    memmove;
+    memrchr;
+    memset;
+    mmap;
+    realloc;
+    __register_atfork; #library
+    snprintf; #unwind
+    stderr;
+    stpcpy;
+    strchr;
+    strchrnul;
+    strcmp;
+    strcpy;
+    strlen;
+    strncmp;
+    strnlen;
+    strrchr;
+    syscall; #unwind
+    write;
+  local:
+    *;
+}

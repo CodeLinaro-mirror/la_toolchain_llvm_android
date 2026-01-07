@@ -1,0 +1,1539 @@
+From d130f402642fba3d065aacb506cb061c899558de Mon Sep 17 00:00:00 2001
+From: Kees Cook <kees@kernel.org>
+Date: Thu, 23 Oct 2025 08:27:13 -0700
+Subject: [PATCH] [ARM][KCFI] Add backend support for Kernel Control-Flow
+ Integrity (#163698)
+
+Implement KCFI (Kernel Control Flow Integrity) backend support for
+ARM32, Thumb2, and Thumb1. The Linux kernel has supported ARM KCFI via
+Clang's generic KCFI implementation, but this has finally started to
+[cause problems](https://github.com/ClangBuiltLinux/linux/issues/2124)
+so it's time to get the KCFI operand bundle lowering working on ARM.
+
+Supports patchable-function-prefix with adjusted load offsets. Provides
+an instruction size worst case estimate of how large the KCFI bundle is
+so that range-limited instructions (e.g. cbz) know how big the indirect
+calls can become.
+
+ARM implementation notes:
+- Four-instruction EOR sequence builds the 32-bit type ID byte-by-byte
+  to work within ARM's modified immediate encoding constraints.
+- Scratch register selection: r12 (IP) is preferred, r3 used as fallback
+  when r12 holds the call target. r3 gets spilled/reloaded if it is
+  being used as a call argument.
+- UDF trap encoding: 0x8000 | (0x1F << 5) | target_reg_index, similar
+  to aarch64's trap encoding.
+
+Thumb2 implementation notes:
+- Logically the same as ARM
+- UDF trap encoding: 0x80 | target_reg_index
+
+Thumb1 implementation notes:
+- Due to register pressure, 2 scratch registers are needed: r3 and r2,
+  which get spilled/reloaded if they are being used as call args.
+- Instead of EOR, add/lsl sequence to load immediate, followed by
+  a compare.
+- No trap encoding.
+
+Update tests to validate all three sub targets.
+---
+ clang/lib/CodeGen/BackendUtil.cpp             |   3 +-
+ llvm/lib/Target/ARM/ARMAsmPrinter.cpp         | 435 ++++++++++++++++++
+ llvm/lib/Target/ARM/ARMAsmPrinter.h           |  11 +
+ llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp  |   2 +
+ llvm/lib/Target/ARM/ARMISelLowering.cpp       |  69 +++
+ llvm/lib/Target/ARM/ARMISelLowering.h         |   6 +
+ llvm/lib/Target/ARM/ARMInstrInfo.td           |  30 ++
+ llvm/lib/Target/ARM/ARMTargetMachine.cpp      |  12 +-
+ llvm/test/CodeGen/ARM/O3-pipeline.ll          |   1 +
+ llvm/test/CodeGen/ARM/kcfi-arm.ll             | 138 ++++++
+ llvm/test/CodeGen/ARM/kcfi-cbz-range.ll       |  81 ++++
+ .../ARM/kcfi-patchable-function-prefix.ll     |  99 ++++
+ llvm/test/CodeGen/ARM/kcfi-thumb.ll           | 215 +++++++++
+ llvm/test/CodeGen/ARM/kcfi-thumb2.ll          | 163 +++++++
+ llvm/test/CodeGen/ARM/kcfi.ll                 |  28 --
+ 15 files changed, 1262 insertions(+), 31 deletions(-)
+ create mode 100644 llvm/test/CodeGen/ARM/kcfi-arm.ll
+ create mode 100644 llvm/test/CodeGen/ARM/kcfi-cbz-range.ll
+ create mode 100644 llvm/test/CodeGen/ARM/kcfi-patchable-function-prefix.ll
+ create mode 100644 llvm/test/CodeGen/ARM/kcfi-thumb.ll
+ create mode 100644 llvm/test/CodeGen/ARM/kcfi-thumb2.ll
+ delete mode 100644 llvm/test/CodeGen/ARM/kcfi.ll
+
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index c423c4bebcac..468c930acacb 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -684,7 +684,8 @@ static void addKCFIPass(const Triple &TargetTriple, const LangOptions &LangOpts,
+                         PassBuilder &PB) {
+   // If the back-end supports KCFI operand bundle lowering, skip KCFIPass.
+   if (TargetTriple.getArch() == llvm::Triple::x86_64 ||
+-      TargetTriple.isAArch64(64) || TargetTriple.isRISCV())
++      TargetTriple.isAArch64(64) || TargetTriple.isRISCV() ||
++      TargetTriple.isARM() || TargetTriple.isThumb())
+     return;
+ 
+   // Ensure we lower KCFI operand bundles with -O0.
+diff --git a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+index 3368a509661a..8e35cadb7585 100644
+--- a/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
++++ b/llvm/lib/Target/ARM/ARMAsmPrinter.cpp
+@@ -1471,6 +1471,436 @@ void ARMAsmPrinter::EmitUnwindingInstruction(const MachineInstr *MI) {
+ // instructions) auto-generated.
+ #include "ARMGenMCPseudoLowering.inc"
+ 
++// Helper function to check if a register is live (used as an implicit operand)
++// in the given call instruction.
++static bool isRegisterLiveInCall(const MachineInstr &Call, MCRegister Reg) {
++  for (const MachineOperand &MO : Call.implicit_operands()) {
++    if (MO.isReg() && MO.getReg() == Reg && MO.isUse()) {
++      return true;
++    }
++  }
++  return false;
++}
++
++void ARMAsmPrinter::EmitKCFI_CHECK_ARM32(Register AddrReg, int64_t Type,
++                                         const MachineInstr &Call,
++                                         int64_t PrefixNops) {
++  // Choose scratch register: r12 primary, r3 if target is r12.
++  unsigned ScratchReg = ARM::R12;
++  if (AddrReg == ARM::R12) {
++    ScratchReg = ARM::R3;
++  }
++
++  // Calculate ESR for ARM mode (16-bit): 0x8000 | (scratch_reg << 5) | addr_reg
++  // Note: scratch_reg is always 0x1F since the EOR sequence clobbers it.
++  const ARMBaseRegisterInfo *TRI = static_cast<const ARMBaseRegisterInfo *>(
++      MF->getSubtarget().getRegisterInfo());
++  unsigned AddrIndex = TRI->getEncodingValue(AddrReg);
++  unsigned ESR = 0x8000 | (31 << 5) | (AddrIndex & 31);
++
++  // Check if r3 is live and needs to be spilled.
++  bool NeedSpillR3 =
++      (ScratchReg == ARM::R3) && isRegisterLiveInCall(Call, ARM::R3);
++
++  // If we need to spill r3, push it first.
++  if (NeedSpillR3) {
++    // push {r3}
++    EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::STMDB_UPD)
++                                     .addReg(ARM::SP)
++                                     .addReg(ARM::SP)
++                                     .addImm(ARMCC::AL)
++                                     .addReg(0)
++                                     .addReg(ARM::R3));
++  }
++
++  // Clear bit 0 of target address to handle Thumb function pointers.
++  // In 32-bit ARM, function pointers may have the low bit set to indicate
++  // Thumb state when ARM/Thumb interworking is enabled (ARMv4T and later).
++  // We need to clear it to avoid an alignment fault when loading.
++  // bic scratch, target, #1
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::BICri)
++                                   .addReg(ScratchReg)
++                                   .addReg(AddrReg)
++                                   .addImm(1)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0)
++                                   .addReg(0));
++
++  // ldr scratch, [scratch, #-(PrefixNops * 4 + 4)]
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDRi12)
++                                   .addReg(ScratchReg)
++                                   .addReg(ScratchReg)
++                                   .addImm(-(PrefixNops * 4 + 4))
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // Each EOR instruction XORs one byte of the type, shifted to its position.
++  for (int i = 0; i < 4; i++) {
++    uint8_t byte = (Type >> (i * 8)) & 0xFF;
++    uint32_t imm = byte << (i * 8);
++    bool isLast = (i == 3);
++
++    // Encode as ARM modified immediate.
++    int SOImmVal = ARM_AM::getSOImmVal(imm);
++    assert(SOImmVal != -1 &&
++           "Cannot encode immediate as ARM modified immediate");
++
++    // eor[s] scratch, scratch, #imm (last one sets flags with CPSR)
++    EmitToStreamer(*OutStreamer,
++                   MCInstBuilder(ARM::EORri)
++                       .addReg(ScratchReg)
++                       .addReg(ScratchReg)
++                       .addImm(SOImmVal)
++                       .addImm(ARMCC::AL)
++                       .addReg(0)
++                       .addReg(isLast ? ARM::CPSR : ARM::NoRegister));
++  }
++
++  // If we spilled r3, restore it immediately after the comparison.
++  // This must happen before the branch so r3 is valid on both paths.
++  if (NeedSpillR3) {
++    // pop {r3}
++    EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::LDMIA_UPD)
++                                     .addReg(ARM::SP)
++                                     .addReg(ARM::SP)
++                                     .addImm(ARMCC::AL)
++                                     .addReg(0)
++                                     .addReg(ARM::R3));
++  }
++
++  // beq .Lpass (branch if types match, i.e., scratch is zero)
++  MCSymbol *Pass = OutContext.createTempSymbol();
++  EmitToStreamer(*OutStreamer,
++                 MCInstBuilder(ARM::Bcc)
++                     .addExpr(MCSymbolRefExpr::create(Pass, OutContext))
++                     .addImm(ARMCC::EQ)
++                     .addReg(ARM::CPSR));
++
++  // udf #ESR (trap with encoded diagnostic)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::UDF).addImm(ESR));
++
++  OutStreamer->emitLabel(Pass);
++}
++
++void ARMAsmPrinter::EmitKCFI_CHECK_Thumb2(Register AddrReg, int64_t Type,
++                                          const MachineInstr &Call,
++                                          int64_t PrefixNops) {
++  // Choose scratch register: r12 primary, r3 if target is r12.
++  unsigned ScratchReg = ARM::R12;
++  if (AddrReg == ARM::R12) {
++    ScratchReg = ARM::R3;
++  }
++
++  // Calculate ESR for Thumb mode (8-bit): 0x80 | addr_reg
++  // Bit 7: KCFI trap indicator
++  // Bits 6-5: Reserved
++  // Bits 4-0: Address register encoding
++  const ARMBaseRegisterInfo *TRI = static_cast<const ARMBaseRegisterInfo *>(
++      MF->getSubtarget().getRegisterInfo());
++  unsigned AddrIndex = TRI->getEncodingValue(AddrReg);
++  unsigned ESR = 0x80 | (AddrIndex & 0x1F);
++
++  // Check if r3 is live and needs to be spilled.
++  bool NeedSpillR3 =
++      (ScratchReg == ARM::R3) && isRegisterLiveInCall(Call, ARM::R3);
++
++  // If we need to spill r3, push it first.
++  if (NeedSpillR3) {
++    // push {r3}
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPUSH).addImm(ARMCC::AL).addReg(0).addReg(ARM::R3));
++  }
++
++  // Clear bit 0 of target address to handle Thumb function pointers.
++  // In 32-bit ARM, function pointers may have the low bit set to indicate
++  // Thumb state when ARM/Thumb interworking is enabled (ARMv4T and later).
++  // We need to clear it to avoid an alignment fault when loading.
++  // bic scratch, target, #1
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::t2BICri)
++                                   .addReg(ScratchReg)
++                                   .addReg(AddrReg)
++                                   .addImm(1)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0)
++                                   .addReg(0));
++
++  // ldr scratch, [scratch, #-(PrefixNops * 4 + 4)]
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::t2LDRi8)
++                                   .addReg(ScratchReg)
++                                   .addReg(ScratchReg)
++                                   .addImm(-(PrefixNops * 4 + 4))
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // Each EOR instruction XORs one byte of the type, shifted to its position.
++  for (int i = 0; i < 4; i++) {
++    uint8_t byte = (Type >> (i * 8)) & 0xFF;
++    uint32_t imm = byte << (i * 8);
++    bool isLast = (i == 3);
++
++    // Verify the immediate can be encoded as Thumb2 modified immediate.
++    int T2SOImmVal = ARM_AM::getT2SOImmVal(imm);
++    assert(T2SOImmVal != -1 &&
++           "Cannot encode immediate as Thumb2 modified immediate");
++
++    // eor[s] scratch, scratch, #imm (last one sets flags with CPSR)
++    EmitToStreamer(*OutStreamer,
++                   MCInstBuilder(ARM::t2EORri)
++                       .addReg(ScratchReg)
++                       .addReg(ScratchReg)
++                       .addImm(imm)
++                       .addImm(ARMCC::AL)
++                       .addReg(0)
++                       .addReg(isLast ? ARM::CPSR : ARM::NoRegister));
++  }
++
++  // If we spilled r3, restore it immediately after the comparison.
++  // This must happen before the branch so r3 is valid on both paths.
++  if (NeedSpillR3) {
++    // pop {r3}
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPOP).addImm(ARMCC::AL).addReg(0).addReg(ARM::R3));
++  }
++
++  // beq .Lpass (branch if types match, i.e., scratch is zero)
++  MCSymbol *Pass = OutContext.createTempSymbol();
++  EmitToStreamer(*OutStreamer,
++                 MCInstBuilder(ARM::t2Bcc)
++                     .addExpr(MCSymbolRefExpr::create(Pass, OutContext))
++                     .addImm(ARMCC::EQ)
++                     .addReg(ARM::CPSR));
++
++  // udf #ESR (trap with encoded diagnostic)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tUDF).addImm(ESR));
++
++  OutStreamer->emitLabel(Pass);
++}
++
++void ARMAsmPrinter::EmitKCFI_CHECK_Thumb1(Register AddrReg, int64_t Type,
++                                          const MachineInstr &Call,
++                                          int64_t PrefixNops) {
++  // For Thumb1, use R2 unconditionally as scratch register (a low register
++  // required for tLDRi). R3 is used for building the type hash.
++  unsigned ScratchReg = ARM::R2;
++  unsigned TempReg = ARM::R3;
++
++  // Check if r3 is live and needs to be spilled.
++  bool NeedSpillR3 = isRegisterLiveInCall(Call, ARM::R3);
++
++  // Spill r3 if needed
++  if (NeedSpillR3) {
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPUSH).addImm(ARMCC::AL).addReg(0).addReg(ARM::R3));
++  }
++
++  // Check if r2 is live and needs to be spilled.
++  bool NeedSpillR2 = isRegisterLiveInCall(Call, ARM::R2);
++
++  // Push R2 if it's live
++  if (NeedSpillR2) {
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPUSH).addImm(ARMCC::AL).addReg(0).addReg(ARM::R2));
++  }
++
++  // Clear bit 0 from target address
++  // TempReg (R3) is used first as helper for BIC, then later for building type
++  // hash.
++
++  // movs temp, #1
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tMOVi8)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addImm(1)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // mov scratch, target
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tMOVr)
++                                   .addReg(ScratchReg)
++                                   .addReg(AddrReg)
++                                   .addImm(ARMCC::AL));
++
++  // bics scratch, temp (scratch = scratch & ~temp)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tBIC)
++                                   .addReg(ScratchReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(ScratchReg)
++                                   .addReg(TempReg)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // Load type hash. Thumb1 doesn't support negative offsets, so subtract.
++  int offset = PrefixNops * 4 + 4;
++
++  // subs scratch, #offset
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tSUBi8)
++                                   .addReg(ScratchReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(ScratchReg)
++                                   .addImm(offset)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // ldr scratch, [scratch, #0]
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tLDRi)
++                                   .addReg(ScratchReg)
++                                   .addReg(ScratchReg)
++                                   .addImm(0)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // Load expected type inline (instead of EOR sequence)
++  //
++  // This creates the 32-bit value byte-by-byte in the temp register:
++  // movs temp, #byte3 (high byte)
++  // lsls temp, temp, #8
++  // adds temp, #byte2
++  // lsls temp, temp, #8
++  // adds temp, #byte1
++  // lsls temp, temp, #8
++  // adds temp, #byte0 (low byte)
++
++  uint8_t byte0 = (Type >> 0) & 0xFF;
++  uint8_t byte1 = (Type >> 8) & 0xFF;
++  uint8_t byte2 = (Type >> 16) & 0xFF;
++  uint8_t byte3 = (Type >> 24) & 0xFF;
++
++  // movs temp, #byte3 (start with high byte)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tMOVi8)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addImm(byte3)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // lsls temp, temp, #8
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tLSLri)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(8)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // adds temp, #byte2
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tADDi8)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(byte2)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // lsls temp, temp, #8
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tLSLri)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(8)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // adds temp, #byte1
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tADDi8)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(byte1)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // lsls temp, temp, #8
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tLSLri)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(8)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // adds temp, #byte0 (low byte)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tADDi8)
++                                   .addReg(TempReg)
++                                   .addReg(ARM::CPSR)
++                                   .addReg(TempReg)
++                                   .addImm(byte0)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // cmp scratch, temp
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tCMPr)
++                                   .addReg(ScratchReg)
++                                   .addReg(TempReg)
++                                   .addImm(ARMCC::AL)
++                                   .addReg(0));
++
++  // Restore registers if spilled (pop in reverse order of push: R2, then R3)
++  if (NeedSpillR2) {
++    // pop {r2}
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPOP).addImm(ARMCC::AL).addReg(0).addReg(ARM::R2));
++  }
++
++  // Restore r3 if spilled
++  if (NeedSpillR3) {
++    // pop {r3}
++    EmitToStreamer(
++        *OutStreamer,
++        MCInstBuilder(ARM::tPOP).addImm(ARMCC::AL).addReg(0).addReg(ARM::R3));
++  }
++
++  // beq .Lpass (branch if types match, i.e., scratch == temp)
++  MCSymbol *Pass = OutContext.createTempSymbol();
++  EmitToStreamer(*OutStreamer,
++                 MCInstBuilder(ARM::tBcc)
++                     .addExpr(MCSymbolRefExpr::create(Pass, OutContext))
++                     .addImm(ARMCC::EQ)
++                     .addReg(ARM::CPSR));
++
++  // bkpt #0 (trap with encoded diagnostic)
++  EmitToStreamer(*OutStreamer, MCInstBuilder(ARM::tBKPT).addImm(0));
++
++  OutStreamer->emitLabel(Pass);
++}
++
++void ARMAsmPrinter::LowerKCFI_CHECK(const MachineInstr &MI) {
++  Register AddrReg = MI.getOperand(0).getReg();
++  const int64_t Type = MI.getOperand(1).getImm();
++
++  // Get the call instruction that follows this KCFI_CHECK.
++  assert(std::next(MI.getIterator())->isCall() &&
++         "KCFI_CHECK not followed by a call instruction");
++  const MachineInstr &Call = *std::next(MI.getIterator());
++
++  // Adjust the offset for patchable-function-prefix.
++  int64_t PrefixNops = 0;
++  MI.getMF()
++      ->getFunction()
++      .getFnAttribute("patchable-function-prefix")
++      .getValueAsString()
++      .getAsInteger(10, PrefixNops);
++
++  // Emit the appropriate instruction sequence based on the opcode variant.
++  switch (MI.getOpcode()) {
++  case ARM::KCFI_CHECK_ARM:
++    EmitKCFI_CHECK_ARM32(AddrReg, Type, Call, PrefixNops);
++    break;
++  case ARM::KCFI_CHECK_Thumb2:
++    EmitKCFI_CHECK_Thumb2(AddrReg, Type, Call, PrefixNops);
++    break;
++  case ARM::KCFI_CHECK_Thumb1:
++    EmitKCFI_CHECK_Thumb1(AddrReg, Type, Call, PrefixNops);
++    break;
++  default:
++    llvm_unreachable("Unexpected KCFI_CHECK opcode");
++  }
++}
++
+ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+   ARM_MC::verifyInstructionPredicates(MI->getOpcode(),
+                                       getSubtargetInfo().getFeatureBits());
+@@ -1504,6 +1934,11 @@ void ARMAsmPrinter::emitInstruction(const MachineInstr *MI) {
+   switch (Opc) {
+   case ARM::t2MOVi32imm: llvm_unreachable("Should be lowered by thumb2it pass");
+   case ARM::DBG_VALUE: llvm_unreachable("Should be handled by generic printing");
++  case ARM::KCFI_CHECK_ARM:
++  case ARM::KCFI_CHECK_Thumb2:
++  case ARM::KCFI_CHECK_Thumb1:
++    LowerKCFI_CHECK(*MI);
++    return;
+   case ARM::LEApcrel:
+   case ARM::tLEApcrel:
+   case ARM::t2LEApcrel: {
+diff --git a/llvm/lib/Target/ARM/ARMAsmPrinter.h b/llvm/lib/Target/ARM/ARMAsmPrinter.h
+index 2b067c753264..9e92b5a36a67 100644
+--- a/llvm/lib/Target/ARM/ARMAsmPrinter.h
++++ b/llvm/lib/Target/ARM/ARMAsmPrinter.h
+@@ -123,9 +123,20 @@ public:
+   void LowerPATCHABLE_FUNCTION_EXIT(const MachineInstr &MI);
+   void LowerPATCHABLE_TAIL_CALL(const MachineInstr &MI);
+ 
++  // KCFI check lowering
++  void LowerKCFI_CHECK(const MachineInstr &MI);
++
+ private:
+   void EmitSled(const MachineInstr &MI, SledKind Kind);
+ 
++  // KCFI check emission helpers
++  void EmitKCFI_CHECK_ARM32(Register AddrReg, int64_t Type,
++                            const MachineInstr &Call, int64_t PrefixNops);
++  void EmitKCFI_CHECK_Thumb2(Register AddrReg, int64_t Type,
++                             const MachineInstr &Call, int64_t PrefixNops);
++  void EmitKCFI_CHECK_Thumb1(Register AddrReg, int64_t Type,
++                             const MachineInstr &Call, int64_t PrefixNops);
++
+   // Helpers for emitStartOfAsmFile() and emitEndOfAsmFile()
+   void emitAttributes();
+ 
+diff --git a/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp b/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
+index 0d7b6d123644..fffb63738166 100644
+--- a/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
++++ b/llvm/lib/Target/ARM/ARMExpandPseudoInsts.cpp
+@@ -2301,6 +2301,8 @@ bool ARMExpandPseudo::ExpandMI(MachineBasicBlock &MBB,
+       for (unsigned i = 2, e = MBBI->getNumOperands(); i != e; ++i)
+         NewMI->addOperand(MBBI->getOperand(i));
+ 
++      NewMI->setCFIType(*MBB.getParent(), MI.getCFIType());
++
+       // Update call info and delete the pseudo instruction TCRETURN.
+       if (MI.isCandidateForAdditionalCallInfo())
+         MI.getMF()->moveAdditionalCallInfo(&MI, &*NewMI);
+diff --git a/llvm/lib/Target/ARM/ARMISelLowering.cpp b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+index b1a668eef608..8122db27a9f6 100644
+--- a/llvm/lib/Target/ARM/ARMISelLowering.cpp
++++ b/llvm/lib/Target/ARM/ARMISelLowering.cpp
+@@ -2849,6 +2849,8 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
+   if (isTailCall) {
+     MF.getFrameInfo().setHasTailCall();
+     SDValue Ret = DAG.getNode(ARMISD::TC_RETURN, dl, MVT::Other, Ops);
++    if (CLI.CFIType)
++      Ret.getNode()->setCFIType(CLI.CFIType->getZExtValue());
+     DAG.addNoMergeSiteInfo(Ret.getNode(), CLI.NoMerge);
+     DAG.addCallSiteInfo(Ret.getNode(), std::move(CSInfo));
+     return Ret;
+@@ -2856,6 +2858,8 @@ ARMTargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
+ 
+   // Returns a chain and a flag for retval copy to use.
+   Chain = DAG.getNode(CallOpc, dl, {MVT::Other, MVT::Glue}, Ops);
++  if (CLI.CFIType)
++    Chain.getNode()->setCFIType(CLI.CFIType->getZExtValue());
+   DAG.addNoMergeSiteInfo(Chain.getNode(), CLI.NoMerge);
+   InGlue = Chain.getValue(1);
+   DAG.addCallSiteInfo(Chain.getNode(), std::move(CSInfo));
+@@ -12008,6 +12012,71 @@ static void genTPLoopBody(MachineBasicBlock *TpLoopBody,
+       .add(predOps(ARMCC::AL));
+ }
+ 
++bool ARMTargetLowering::supportKCFIBundles() const {
++  // KCFI is supported in all ARM/Thumb modes
++  return true;
++}
++
++MachineInstr *
++ARMTargetLowering::EmitKCFICheck(MachineBasicBlock &MBB,
++                                 MachineBasicBlock::instr_iterator &MBBI,
++                                 const TargetInstrInfo *TII) const {
++  assert(MBBI->isCall() && MBBI->getCFIType() &&
++         "Invalid call instruction for a KCFI check");
++
++  MachineOperand *TargetOp = nullptr;
++  switch (MBBI->getOpcode()) {
++  // ARM mode opcodes
++  case ARM::BLX:
++  case ARM::BLX_pred:
++  case ARM::BLX_noip:
++  case ARM::BLX_pred_noip:
++  case ARM::BX_CALL:
++    TargetOp = &MBBI->getOperand(0);
++    break;
++  case ARM::TCRETURNri:
++  case ARM::TCRETURNrinotr12:
++  case ARM::TAILJMPr:
++  case ARM::TAILJMPr4:
++    TargetOp = &MBBI->getOperand(0);
++    break;
++  // Thumb mode opcodes (Thumb1 and Thumb2)
++  // Note: Most Thumb call instructions have predicate operands before the
++  // target register Format: tBLXr pred, predreg, target_register, ...
++  case ARM::tBLXr:      // Thumb1/Thumb2: BLX register (requires V5T)
++  case ARM::tBLXr_noip: // Thumb1/Thumb2: BLX register, no IP clobber
++  case ARM::tBX_CALL:   // Thumb1 only: BX call (push LR, BX)
++    TargetOp = &MBBI->getOperand(2);
++    break;
++  // Tail call instructions don't have predicates, target is operand 0
++  case ARM::tTAILJMPr: // Thumb1/Thumb2: Tail call via register
++    TargetOp = &MBBI->getOperand(0);
++    break;
++  default:
++    llvm_unreachable("Unexpected CFI call opcode");
++  }
++
++  assert(TargetOp && TargetOp->isReg() && "Invalid target operand");
++  TargetOp->setIsRenamable(false);
++
++  // Select the appropriate KCFI_CHECK variant based on the instruction set
++  unsigned KCFICheckOpcode;
++  if (Subtarget->isThumb()) {
++    if (Subtarget->isThumb2()) {
++      KCFICheckOpcode = ARM::KCFI_CHECK_Thumb2;
++    } else {
++      KCFICheckOpcode = ARM::KCFI_CHECK_Thumb1;
++    }
++  } else {
++    KCFICheckOpcode = ARM::KCFI_CHECK_ARM;
++  }
++
++  return BuildMI(MBB, MBBI, MBBI->getDebugLoc(), TII->get(KCFICheckOpcode))
++      .addReg(TargetOp->getReg())
++      .addImm(MBBI->getCFIType())
++      .getInstr();
++}
++
+ MachineBasicBlock *
+ ARMTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
+                                                MachineBasicBlock *BB) const {
+diff --git a/llvm/lib/Target/ARM/ARMISelLowering.h b/llvm/lib/Target/ARM/ARMISelLowering.h
+index 70aa001a4188..8c5e0cfbfda1 100644
+--- a/llvm/lib/Target/ARM/ARMISelLowering.h
++++ b/llvm/lib/Target/ARM/ARMISelLowering.h
+@@ -447,6 +447,12 @@ class VectorType;
+     void AdjustInstrPostInstrSelection(MachineInstr &MI,
+                                        SDNode *Node) const override;
+ 
++    bool supportKCFIBundles() const override;
++
++    MachineInstr *EmitKCFICheck(MachineBasicBlock &MBB,
++                                MachineBasicBlock::instr_iterator &MBBI,
++                                const TargetInstrInfo *TII) const override;
++
+     SDValue PerformCMOVCombine(SDNode *N, SelectionDAG &DAG) const;
+     SDValue PerformBRCONDCombine(SDNode *N, SelectionDAG &DAG) const;
+     SDValue PerformCMOVToBFICombine(SDNode *N, SelectionDAG &DAG) const;
+diff --git a/llvm/lib/Target/ARM/ARMInstrInfo.td b/llvm/lib/Target/ARM/ARMInstrInfo.td
+index 282ff534fc11..53be1677b96e 100644
+--- a/llvm/lib/Target/ARM/ARMInstrInfo.td
++++ b/llvm/lib/Target/ARM/ARMInstrInfo.td
+@@ -6535,6 +6535,36 @@ def CMP_SWAP_64 : PseudoInst<(outs GPRPair:$Rd, GPRPair:$addr_temp_out),
+ 
+ def : Pat<(atomic_fence (timm), 0), (MEMBARRIER)>;
+ 
++//===----------------------------------------------------------------------===//
++// KCFI check pseudo-instruction.
++//===----------------------------------------------------------------------===//
++// KCFI_CHECK pseudo-instruction for Kernel Control-Flow Integrity.
++// Expands to a sequence that verifies the function pointer's type hash.
++// Different sizes for different architectures due to different expansions.
++
++def KCFI_CHECK_ARM
++    : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
++      Sched<[]>,
++      Requires<[IsARM]> {
++  let Size = 28; // 7 instructions (bic, ldr, 4x eor, beq, udf)
++}
++
++def KCFI_CHECK_Thumb2
++    : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
++      Sched<[]>,
++      Requires<[IsThumb2]> {
++  let Size =
++      32; // worst-case 9 instructions (push, bic, ldr, 4x eor, pop, beq.w, udf)
++}
++
++def KCFI_CHECK_Thumb1
++    : PseudoInst<(outs), (ins GPR:$ptr, i32imm:$type), NoItinerary, []>,
++      Sched<[]>,
++      Requires<[IsThumb1Only]> {
++  let Size = 50; // worst-case 25 instructions (pushes, bic helper, type
++                 // building, cmp, pops)
++}
++
+ //===----------------------------------------------------------------------===//
+ // Instructions used for emitting unwind opcodes on Windows.
+ //===----------------------------------------------------------------------===//
+diff --git a/llvm/lib/Target/ARM/ARMTargetMachine.cpp b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+index 86740a92b32c..590d4c70592f 100644
+--- a/llvm/lib/Target/ARM/ARMTargetMachine.cpp
++++ b/llvm/lib/Target/ARM/ARMTargetMachine.cpp
+@@ -111,6 +111,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeARMTarget() {
+   initializeMVELaneInterleavingPass(Registry);
+   initializeARMFixCortexA57AES1742098Pass(Registry);
+   initializeARMDAGToDAGISelLegacyPass(Registry);
++  initializeKCFIPass(Registry);
+ }
+ 
+ static std::unique_ptr<TargetLoweringObjectFile> createTLOF(const Triple &TT) {
+@@ -487,6 +488,9 @@ void ARMPassConfig::addPreSched2() {
+   // proper scheduling.
+   addPass(createARMExpandPseudoPass());
+ 
++  // Emit KCFI checks for indirect calls.
++  addPass(createKCFIPass());
++
+   if (getOptLevel() != CodeGenOptLevel::None) {
+     // When optimising for size, always run the Thumb2SizeReduction pass before
+     // IfConversion. Otherwise, check whether IT blocks are restricted
+@@ -517,9 +521,12 @@ void ARMPassConfig::addPreSched2() {
+ void ARMPassConfig::addPreEmitPass() {
+   addPass(createThumb2SizeReductionPass());
+ 
+-  // Constant island pass work on unbundled instructions.
++  // Unpack bundles for:
++  // - Thumb2: Constant island pass requires unbundled instructions
++  // - KCFI: KCFI_CHECK pseudo instructions need to be unbundled for AsmPrinter
+   addPass(createUnpackMachineBundles([](const MachineFunction &MF) {
+-    return MF.getSubtarget<ARMSubtarget>().isThumb2();
++    return MF.getSubtarget<ARMSubtarget>().isThumb2() ||
++           MF.getFunction().getParent()->getModuleFlag("kcfi");
+   }));
+ 
+   // Don't optimize barriers or block placement at -O0.
+@@ -530,6 +537,7 @@ void ARMPassConfig::addPreEmitPass() {
+ }
+ 
+ void ARMPassConfig::addPreEmitPass2() {
++
+   // Inserts fixup instructions before unsafe AES operations. Instructions may
+   // be inserted at the start of blocks and at within blocks so this pass has to
+   // come before those below.
+diff --git a/llvm/test/CodeGen/ARM/O3-pipeline.ll b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+index 9601a2e4e3d1..273114822ec4 100644
+--- a/llvm/test/CodeGen/ARM/O3-pipeline.ll
++++ b/llvm/test/CodeGen/ARM/O3-pipeline.ll
+@@ -166,6 +166,7 @@
+ ; CHECK-NEXT:      ARM Execution Domain Fix
+ ; CHECK-NEXT:      BreakFalseDeps
+ ; CHECK-NEXT:      ARM pseudo instruction expansion pass
++; CHECK-NEXT:      Insert KCFI indirect call checks
+ ; CHECK-NEXT:      Thumb2 instruction size reduce pass
+ ; CHECK-NEXT:      MachineDominator Tree Construction
+ ; CHECK-NEXT:      Machine Natural Loop Construction
+diff --git a/llvm/test/CodeGen/ARM/kcfi-arm.ll b/llvm/test/CodeGen/ARM/kcfi-arm.ll
+new file mode 100644
+index 000000000000..e3696cf8ea4e
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/kcfi-arm.ll
+@@ -0,0 +1,138 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
++; RUN: llc -mtriple=armv7-linux-gnueabi -verify-machineinstrs < %s | FileCheck %s --check-prefix=ASM
++; RUN: llc -mtriple=armv7-linux-gnueabi -verify-machineinstrs -stop-after=finalize-isel < %s | FileCheck %s --check-prefixes=MIR,ISEL
++; RUN: llc -mtriple=armv7-linux-gnueabi -verify-machineinstrs -stop-after=kcfi < %s | FileCheck %s --check-prefixes=MIR,KCFI
++
++; MIR checks for all functions (grouped here to prevent update_llc_test_checks.py from removing them)
++
++; MIR-LABEL: name: f1
++; MIR: body:
++
++; ISEL:     BLX %0, csr_aapcs,{{.*}} cfi-type 12345678
++
++; KCFI:       BUNDLE{{.*}} {
++; KCFI-NEXT:    KCFI_CHECK_ARM $r0, 12345678
++; KCFI-NEXT:    BLX killed $r0, csr_aapcs,{{.*}}
++; KCFI-NEXT:  }
++
++; MIR-LABEL: name: f2
++; MIR: body:
++
++; ISEL:     TCRETURNri %0, 0, csr_aapcs, implicit $sp, cfi-type 12345678
++
++; KCFI:       BUNDLE{{.*}} {
++; KCFI-NEXT:    KCFI_CHECK_ARM $r0, 12345678
++; KCFI-NEXT:    TAILJMPr killed $r0, csr_aapcs, implicit $sp, implicit $sp
++; KCFI-NEXT:  }
++
++; ASM:       .long 12345678
++define void @f1(ptr noundef %x) !kcfi_type !1 {
++; ASM-LABEL: f1:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r11, lr}
++; ASM-NEXT:    push {r11, lr}
++; ASM-NEXT:    bic r12, r0, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq .Ltmp0
++; ASM-NEXT:    udf #33760
++; ASM-NEXT:  .Ltmp0:
++; ASM-NEXT:    blx r0
++; ASM-NEXT:    pop {r11, pc}
++
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test with tail call
++define void @f2(ptr noundef %x) !kcfi_type !1 {
++; ASM-LABEL: f2:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    bic r12, r0, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq .Ltmp1
++; ASM-NEXT:    udf #33760
++; ASM-NEXT:  .Ltmp1:
++; ASM-NEXT:    bx r0
++
++  tail call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test r3 spill/reload when target is r12 and r3 is a call argument.
++; With 5+ arguments (target + 4 args), r0-r3 are all used for arguments,
++; forcing r3 to be spilled when we need it as scratch register.
++define void @f3_r3_spill(ptr noundef %target, i32 %a, i32 %b, i32 %c, i32 %d) !kcfi_type !1 {
++; ASM-LABEL: f3_r3_spill:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r11, lr}
++; ASM-NEXT:    push {r11, lr}
++; ASM-NEXT:    mov lr, r3
++; ASM-NEXT:    ldr r3, [sp, #8]
++; ASM-NEXT:    mov r12, r0
++; ASM-NEXT:    mov r0, r1
++; ASM-NEXT:    mov r1, r2
++; ASM-NEXT:    mov r2, lr
++; ASM-NEXT:    stmdb sp!, {r3}
++; ASM-NEXT:    bic r3, r12, #1
++; ASM-NEXT:    ldr r3, [r3, #-4]
++; ASM-NEXT:    eor r3, r3, #78
++; ASM-NEXT:    eor r3, r3, #24832
++; ASM-NEXT:    eor r3, r3, #12320768
++; ASM-NEXT:    eors r3, r3, #0
++; ASM-NEXT:    ldm sp!, {r3}
++; ASM-NEXT:    beq .Ltmp2
++; ASM-NEXT:    udf #33772
++; ASM-NEXT:  .Ltmp2:
++; ASM-NEXT:    blx r12
++; ASM-NEXT:    pop {r11, pc}
++; Arguments: r0=%target, r1=%a, r2=%b, r3=%c, [sp]=%d
++; Call needs: r0=%a, r1=%b, r2=%c, r3=%d, target in r12
++; Compiler shuffles arguments into place, saving r3 (c) in lr, loading d from stack
++; r3 is live as 4th argument, so push it before KCFI check
++; Restore r3 immediately after comparison, before branch
++  call void %target(i32 %a, i32 %b, i32 %c, i32 %d) [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test with 3 arguments - r3 not live, target in r12, so r3 used as scratch without spilling
++define void @f4_r3_unused(ptr noundef %target, i32 %a, i32 %b) !kcfi_type !1 {
++; ASM-LABEL: f4_r3_unused:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r11, lr}
++; ASM-NEXT:    push {r11, lr}
++; ASM-NEXT:    mov r3, r0
++; ASM-NEXT:    mov r0, r1
++; ASM-NEXT:    mov r1, r2
++; ASM-NEXT:    bic r12, r3, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq .Ltmp3
++; ASM-NEXT:    udf #33763
++; ASM-NEXT:  .Ltmp3:
++; ASM-NEXT:    blx r3
++; ASM-NEXT:    pop {r11, pc}
++; Only 3 arguments total, so r3 is not used as call argument
++; Compiler puts target→r3, a→r0, b→r1
++; r3 is the target, so we use r12 as scratch (no spill needed)
++  call void %target(i32 %a, i32 %b) [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 4, !"kcfi", i32 1}
++!1 = !{i32 12345678}
++;; NOTE: These prefixes are unused and the list is autogenerated. Do not add tests below this line:
++; ISEL: {{.*}}
++; KCFI: {{.*}}
++; MIR: {{.*}}
+diff --git a/llvm/test/CodeGen/ARM/kcfi-cbz-range.ll b/llvm/test/CodeGen/ARM/kcfi-cbz-range.ll
+new file mode 100644
+index 000000000000..8e71cae3131d
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/kcfi-cbz-range.ll
+@@ -0,0 +1,81 @@
++; RUN: llc -mtriple=thumbv7-linux-gnueabi -filetype=obj < %s
++; RUN: llc -mtriple=thumbv7-linux-gnueabi < %s | FileCheck %s
++
++; This test verifies that KCFI instrumentation doesn't cause "out of range
++; pc-relative fixup value" errors when generating object files.
++;
++; The test creates a scenario with enough KCFI-instrumented indirect calls
++; (~32 bytes each) that would push a cbz/cbnz instruction out of its ±126 byte
++; range if the KCFI_CHECK pseudo-instruction size is not properly accounted for.
++;
++; Without the fix (KCFI_CHECK returns size 0):
++;   - Backend thinks KCFI checks take no space
++;   - Generates cbz to branch over the code
++;   - During assembly, cbz target is >126 bytes away
++;   - Assembly fails with "error: out of range pc-relative fixup value"
++;
++; With the fix (KCFI_CHECK returns size 32 for Thumb2):
++;   - Backend correctly accounts for KCFI check expansion
++;   - Avoids cbz or uses longer-range branch instructions
++;   - Assembly succeeds, object file is generated
++
++declare void @external_function(i32)
++
++; Test WITHOUT KCFI: should generate cbz since calls are small
++; CHECK-LABEL: test_without_kcfi:
++; CHECK: cbz
++; CHECK-NOT: bic{{.*}}#1
++define i32 @test_without_kcfi(ptr %callback, i32 %x) {
++entry:
++  %cmp = icmp eq i32 %x, 0
++  br i1 %cmp, label %if_zero, label %if_nonzero
++
++if_nonzero:
++  ; Regular (non-KCFI) indirect calls - much smaller
++  call void %callback()
++  call void %callback()
++  call void %callback()
++  call void %callback()
++  call void %callback()
++  call void %callback()
++
++  call void @external_function(i32 %x)
++  %add1 = add i32 %x, 1
++  ret i32 %add1
++
++if_zero:
++  call void @external_function(i32 0)
++  ret i32 0
++}
++
++; Test WITH KCFI: should NOT generate cbz due to large KCFI checks
++; CHECK-LABEL: test_with_kcfi:
++; CHECK-NOT: cbz
++; CHECK: bic{{.*}}#1
++define i32 @test_with_kcfi(ptr %callback, i32 %x) !kcfi_type !1 {
++entry:
++  %cmp = icmp eq i32 %x, 0
++  br i1 %cmp, label %if_zero, label %if_nonzero
++
++if_nonzero:
++  ; Six KCFI-instrumented indirect calls (~192 bytes total, exceeds cbz range)
++  call void %callback() [ "kcfi"(i32 12345678) ]
++  call void %callback() [ "kcfi"(i32 12345678) ]
++  call void %callback() [ "kcfi"(i32 12345678) ]
++  call void %callback() [ "kcfi"(i32 12345678) ]
++  call void %callback() [ "kcfi"(i32 12345678) ]
++  call void %callback() [ "kcfi"(i32 12345678) ]
++
++  ; Regular call to prevent optimization
++  call void @external_function(i32 %x)
++  %add1 = add i32 %x, 1
++  ret i32 %add1
++
++if_zero:
++  call void @external_function(i32 0)
++  ret i32 0
++}
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 4, !"kcfi", i32 1}
++!1 = !{i32 12345678}
+diff --git a/llvm/test/CodeGen/ARM/kcfi-patchable-function-prefix.ll b/llvm/test/CodeGen/ARM/kcfi-patchable-function-prefix.ll
+new file mode 100644
+index 000000000000..f8e083891ead
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/kcfi-patchable-function-prefix.ll
+@@ -0,0 +1,99 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
++; RUN: llc -mtriple=armv7-linux-gnueabi -verify-machineinstrs < %s | FileCheck %s
++
++; CHECK:          .p2align 2
++; CHECK-NOT:        nop
++; CHECK:          .long   12345678
++define void @f1(ptr noundef %x) !kcfi_type !1 {
++; CHECK-LABEL: f1:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r11, lr}
++; CHECK-NEXT:    push {r11, lr}
++; CHECK-NEXT:    bic r12, r0, #1
++; CHECK-NEXT:    ldr r12, [r12, #-4]
++; CHECK-NEXT:    eor r12, r12, #78
++; CHECK-NEXT:    eor r12, r12, #24832
++; CHECK-NEXT:    eor r12, r12, #12320768
++; CHECK-NEXT:    eors r12, r12, #0
++; CHECK-NEXT:    beq .Ltmp0
++; CHECK-NEXT:    udf #33760
++; CHECK-NEXT:  .Ltmp0:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r11, pc}
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; CHECK:          .p2align 2
++; CHECK-NOT:       .long
++; CHECK-NOT:        nop
++define void @f2(ptr noundef %x) {
++; CHECK-LABEL: f2:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r11, lr}
++; CHECK-NEXT:    push {r11, lr}
++; CHECK-NEXT:    bic r12, r0, #1
++; CHECK-NEXT:    ldr r12, [r12, #-4]
++; CHECK-NEXT:    eor r12, r12, #78
++; CHECK-NEXT:    eor r12, r12, #24832
++; CHECK-NEXT:    eor r12, r12, #12320768
++; CHECK-NEXT:    eors r12, r12, #0
++; CHECK-NEXT:    beq .Ltmp1
++; CHECK-NEXT:    udf #33760
++; CHECK-NEXT:  .Ltmp1:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r11, pc}
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; CHECK:          .p2align 2
++; CHECK:          .long   12345678
++; CHECK-COUNT-11:   nop
++define void @f3(ptr noundef %x) #0 !kcfi_type !1 {
++; CHECK-LABEL: f3:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r11, lr}
++; CHECK-NEXT:    push {r11, lr}
++; CHECK-NEXT:    bic r12, r0, #1
++; CHECK-NEXT:    ldr r12, [r12, #-48]
++; CHECK-NEXT:    eor r12, r12, #78
++; CHECK-NEXT:    eor r12, r12, #24832
++; CHECK-NEXT:    eor r12, r12, #12320768
++; CHECK-NEXT:    eors r12, r12, #0
++; CHECK-NEXT:    beq .Ltmp3
++; CHECK-NEXT:    udf #33760
++; CHECK-NEXT:  .Ltmp3:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r11, pc}
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; CHECK:          .p2align 2
++; CHECK-COUNT-11:   nop
++define void @f4(ptr noundef %x) #0 {
++; CHECK-LABEL: f4:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r11, lr}
++; CHECK-NEXT:    push {r11, lr}
++; CHECK-NEXT:    bic r12, r0, #1
++; CHECK-NEXT:    ldr r12, [r12, #-48]
++; CHECK-NEXT:    eor r12, r12, #78
++; CHECK-NEXT:    eor r12, r12, #24832
++; CHECK-NEXT:    eor r12, r12, #12320768
++; CHECK-NEXT:    eors r12, r12, #0
++; CHECK-NEXT:    beq .Ltmp5
++; CHECK-NEXT:    udf #33760
++; CHECK-NEXT:  .Ltmp5:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r11, pc}
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++attributes #0 = { "patchable-function-prefix"="11" }
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 4, !"kcfi", i32 1}
++!1 = !{i32 12345678}
+diff --git a/llvm/test/CodeGen/ARM/kcfi-thumb.ll b/llvm/test/CodeGen/ARM/kcfi-thumb.ll
+new file mode 100644
+index 000000000000..7c02d83034d6
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/kcfi-thumb.ll
+@@ -0,0 +1,215 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
++; RUN: llc -mtriple=thumbv6m-none-eabi < %s | FileCheck %s
++
++; This test verifies that Thumb1 (ARMv6-M) generates correct code for backend KCFI.
++; Thumb1 uses the backend KCFI implementation with Thumb1-specific instructions.
++
++; Test function without KCFI annotation
++; CHECK-LABEL: .globl nosan
++; CHECK-NEXT:  .p2align 1
++; CHECK-NEXT:  .type nosan,%function
++; CHECK-NEXT:  .code 16
++; CHECK-NEXT:  .thumb_func
++define dso_local void @nosan() nounwind {
++; CHECK-LABEL: nosan:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    bx lr
++  ret void
++}
++
++; Test function with KCFI annotation - verifies type hash emission
++;; The alignment is at least 4 to avoid unaligned type hash loads when this
++;; instrumented function is indirectly called.
++; CHECK-LABEL: .globl target_func
++; CHECK-NEXT:  .p2align 2
++; CHECK-NEXT:  .type target_func,%function
++; CHECK-NEXT:  .long 3170468932
++; CHECK-NEXT:  .code 16
++; CHECK-NEXT:  .thumb_func
++define void @target_func() !kcfi_type !1 {
++; CHECK-LABEL: target_func:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    bx lr
++  ret void
++}
++
++; Test indirect call with KCFI check using operand bundles
++; CHECK-LABEL: .globl f1
++; CHECK:       .p2align 2
++; CHECK-NEXT:  .type f1,%function
++; CHECK-NEXT:  .long 3170468932
++; CHECK-NEXT:  .code 16
++; CHECK-NEXT:  .thumb_func
++define void @f1(ptr noundef %x) !kcfi_type !1 {
++; CHECK-LABEL: f1:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r7, lr}
++; CHECK-NEXT:    push {r7, lr}
++; CHECK-NEXT:    movs r3, #1
++; CHECK-NEXT:    mov r2, r0
++; CHECK-NEXT:    bics r2, r3
++; CHECK-NEXT:    subs r2, #4
++; CHECK-NEXT:    ldr r2, [r2]
++; CHECK-NEXT:    movs r3, #188
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #249
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #132
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #68
++; CHECK-NEXT:    cmp r2, r3
++; CHECK-NEXT:    beq .Ltmp0
++; CHECK-NEXT:    bkpt #0
++; CHECK-NEXT:  .Ltmp0:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r7, pc}
++  call void %x() [ "kcfi"(i32 -1124498364) ]
++  ret void
++}
++
++; Test with tail call - backend KCFI supports tail calls
++define void @f2(ptr noundef %x) !kcfi_type !1 {
++; CHECK-LABEL: f2:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r7, lr}
++; CHECK-NEXT:    push {r7, lr}
++; CHECK-NEXT:    movs r3, #1
++; CHECK-NEXT:    mov r2, r0
++; CHECK-NEXT:    bics r2, r3
++; CHECK-NEXT:    subs r2, #4
++; CHECK-NEXT:    ldr r2, [r2]
++; CHECK-NEXT:    movs r3, #188
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #249
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #132
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #68
++; CHECK-NEXT:    cmp r2, r3
++; CHECK-NEXT:    beq .Ltmp1
++; CHECK-NEXT:    bkpt #0
++; CHECK-NEXT:  .Ltmp1:
++; CHECK-NEXT:    blx r0
++; CHECK-NEXT:    pop {r7, pc}
++  tail call void %x() [ "kcfi"(i32 -1124498364) ]
++  ret void
++}
++
++; Test with R2 live (3 arguments) - compiler shuffles args, no spilling needed
++define void @f3_r2_live(ptr noundef %x, i32 %a, i32 %b, i32 %c) !kcfi_type !1 {
++; CHECK-LABEL: f3_r2_live:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r4, lr}
++; CHECK-NEXT:    push {r4, lr}
++; CHECK-NEXT:    mov r4, r0
++; CHECK-NEXT:    mov r0, r1
++; CHECK-NEXT:    mov r1, r2
++; CHECK-NEXT:    mov r2, r3
++; CHECK-NEXT:    push {r2}
++; CHECK-NEXT:    movs r3, #1
++; CHECK-NEXT:    mov r2, r4
++; CHECK-NEXT:    bics r2, r3
++; CHECK-NEXT:    subs r2, #4
++; CHECK-NEXT:    ldr r2, [r2]
++; CHECK-NEXT:    movs r3, #188
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #249
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #132
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #68
++; CHECK-NEXT:    cmp r2, r3
++; CHECK-NEXT:    pop {r2}
++; CHECK-NEXT:    beq .Ltmp2
++; CHECK-NEXT:    bkpt #0
++; CHECK-NEXT:  .Ltmp2:
++; CHECK-NEXT:    blx r4
++; CHECK-NEXT:    pop {r4, pc}
++; Compiler shuffles: target→r4, c→r2, a→r0, b→r1
++; R2 is live (3rd arg), so we push it, then uses R3 as temp, R2 as scratch
++  call void %x(i32 %a, i32 %b, i32 %c) [ "kcfi"(i32 -1124498364) ]
++  ret void
++}
++
++; Test with both R2 and R3 live (4 arguments) - compiler moves to r5/r4, uses R3 temp and R12 scratch
++define void @f4_r2_r3_live(ptr noundef %x, i32 %a, i32 %b, i32 %c, i32 %d) !kcfi_type !1 {
++; CHECK-LABEL: f4_r2_r3_live:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r4, r5, r7, lr}
++; CHECK-NEXT:    push {r4, r5, r7, lr}
++; CHECK-NEXT:    mov r5, r3
++; CHECK-NEXT:    mov r4, r0
++; CHECK-NEXT:    ldr r3, [sp, #16]
++; CHECK-NEXT:    mov r0, r1
++; CHECK-NEXT:    mov r1, r2
++; CHECK-NEXT:    mov r2, r5
++; CHECK-NEXT:    push {r3}
++; CHECK-NEXT:    push {r2}
++; CHECK-NEXT:    movs r3, #1
++; CHECK-NEXT:    mov r2, r4
++; CHECK-NEXT:    bics r2, r3
++; CHECK-NEXT:    subs r2, #4
++; CHECK-NEXT:    ldr r2, [r2]
++; CHECK-NEXT:    movs r3, #188
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #249
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #132
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #68
++; CHECK-NEXT:    cmp r2, r3
++; CHECK-NEXT:    pop {r2}
++; CHECK-NEXT:    pop {r3}
++; CHECK-NEXT:    beq .Ltmp3
++; CHECK-NEXT:    bkpt #0
++; CHECK-NEXT:  .Ltmp3:
++; CHECK-NEXT:    blx r4
++; CHECK-NEXT:    pop {r4, r5, r7, pc}
++; Compiler shuffles: r3→r5, target→r4, d→r3 (from stack), a→r0, b→r1, c→r2
++; Then pushes r3 (d value), then r2, uses R3 as temp, R2 as scratch
++  call void %x(i32 %a, i32 %b, i32 %c, i32 %d) [ "kcfi"(i32 -1124498364) ]
++  ret void
++}
++
++; Test where target ends up in R12, forcing R2 as scratch, with both R2 and R3 live
++; This uses inline asm to force target into R12, with 4 call arguments to make R2/R3 live
++define void @f5_r12_target_r2_r3_live(i32 %a, i32 %b, i32 %c, i32 %d) !kcfi_type !1 {
++; CHECK-LABEL: f5_r12_target_r2_r3_live:
++; CHECK:       @ %bb.0:
++; CHECK-NEXT:    .save {r7, lr}
++; CHECK-NEXT:    push {r7, lr}
++; CHECK-NEXT:    @APP
++; CHECK-NEXT:    @NO_APP
++; CHECK-NEXT:    push {r3}
++; CHECK-NEXT:    push {r2}
++; CHECK-NEXT:    movs r3, #1
++; CHECK-NEXT:    mov r2, r12
++; CHECK-NEXT:    bics r2, r3
++; CHECK-NEXT:    subs r2, #4
++; CHECK-NEXT:    ldr r2, [r2]
++; CHECK-NEXT:    movs r3, #188
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #249
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #132
++; CHECK-NEXT:    lsls r3, r3, #8
++; CHECK-NEXT:    adds r3, #68
++; CHECK-NEXT:    cmp r2, r3
++; CHECK-NEXT:    pop {r2}
++; CHECK-NEXT:    pop {r3}
++; CHECK-NEXT:    beq .Ltmp4
++; CHECK-NEXT:    bkpt #0
++; CHECK-NEXT:  .Ltmp4:
++; CHECK-NEXT:    blx r12
++; CHECK-NEXT:    pop {r7, pc}
++; Use inline asm to get function pointer into R12
++; With 4 arguments (r0-r3), both R2 and R3 are live
++; Target in R12 means R2 is scratch, R3 is temp, and both need spilling
++  %target = call ptr asm "", "={r12}"()
++  call void %target(i32 %a, i32 %b, i32 %c, i32 %d) [ "kcfi"(i32 -1124498364) ]
++  ret void
++}
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 4, !"kcfi", i32 1}
++!1 = !{i32 -1124498364}
+diff --git a/llvm/test/CodeGen/ARM/kcfi-thumb2.ll b/llvm/test/CodeGen/ARM/kcfi-thumb2.ll
+new file mode 100644
+index 000000000000..f319d98b845d
+--- /dev/null
++++ b/llvm/test/CodeGen/ARM/kcfi-thumb2.ll
+@@ -0,0 +1,163 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
++; RUN: llc -mtriple=thumbv7-linux-gnueabi -verify-machineinstrs < %s | FileCheck %s --check-prefix=ASM
++; RUN: llc -mtriple=thumbv7-linux-gnueabi -verify-machineinstrs -stop-after=finalize-isel < %s | FileCheck %s --check-prefixes=MIR,ISEL
++; RUN: llc -mtriple=thumbv7-linux-gnueabi -verify-machineinstrs -stop-after=kcfi < %s | FileCheck %s --check-prefixes=MIR,KCFI
++
++; MIR checks for all functions (grouped here to prevent update_llc_test_checks.py from removing them)
++
++; MIR-LABEL: name: f1
++; MIR: body:
++
++; ISEL:     tBLXr 14 /* CC::al */, $noreg, %0, csr_aapcs,{{.*}} cfi-type 12345678
++
++; KCFI:       BUNDLE{{.*}} {
++; KCFI-NEXT:    KCFI_CHECK_Thumb2 $r0, 12345678
++; KCFI-NEXT:    tBLXr 14 /* CC::al */, $noreg, {{(killed )?}}$r0, csr_aapcs,{{.*}}
++; KCFI-NEXT:  }
++
++; MIR-LABEL: name: f2
++; MIR: body:
++
++; ISEL:     TCRETURNri %0, 0, csr_aapcs, implicit $sp, cfi-type 12345678
++
++; KCFI:       BUNDLE{{.*}} {
++; KCFI-NEXT:    KCFI_CHECK_Thumb2 $r0, 12345678
++; KCFI-NEXT:    tTAILJMPr {{(killed )?}}$r0, csr_aapcs, implicit $sp, implicit $sp
++; KCFI-NEXT:  }
++
++; Test function without KCFI annotation
++; ASM-LABEL: .globl nosan
++; ASM-NEXT:  .p2align 1
++; ASM-NEXT:  .type nosan,%function
++; ASM-NEXT:  .code 16
++; ASM-NEXT:  .thumb_func
++define dso_local void @nosan() nounwind {
++; ASM-LABEL: nosan:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    bx lr
++  ret void
++}
++
++; Test function with KCFI annotation - verifies type hash emission
++;; The alignment is at least 4 to avoid unaligned type hash loads when this
++;; instrumented function is indirectly called.
++; ASM-LABEL: .globl target_func
++; ASM-NEXT:  .p2align 2
++; ASM-NEXT:  .type target_func,%function
++; ASM-NEXT:  .long 12345678
++; ASM-NEXT:  .code 16
++; ASM-NEXT:  .thumb_func
++define void @target_func() !kcfi_type !1 {
++; ASM-LABEL: target_func:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    bx lr
++  ret void
++}
++
++; Test indirect call with KCFI check
++; ASM:       .long 12345678
++define void @f1(ptr noundef %x) !kcfi_type !1 {
++; ASM-LABEL: f1:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r7, lr}
++; ASM-NEXT:    push {r7, lr}
++; ASM-NEXT:    bic r12, r0, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq.w .Ltmp0
++; ASM-NEXT:    udf #128
++; ASM-NEXT:  .Ltmp0:
++; ASM-NEXT:    blx r0
++; ASM-NEXT:    pop {r7, pc}
++
++  call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test with tail call
++define void @f2(ptr noundef %x) !kcfi_type !1 {
++; ASM-LABEL: f2:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    bic r12, r0, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq.w .Ltmp1
++; ASM-NEXT:    udf #128
++; ASM-NEXT:  .Ltmp1:
++; ASM-NEXT:    bx r0
++
++  tail call void %x() [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test r3 spill/reload when target is r12 and r3 is a call argument (Thumb2)
++define void @f3_r3_spill(ptr noundef %target, i32 %a, i32 %b, i32 %c, i32 %d) !kcfi_type !1 {
++; ASM-LABEL: f3_r3_spill:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r7, lr}
++; ASM-NEXT:    push {r7, lr}
++; ASM-NEXT:    mov lr, r3
++; ASM-NEXT:    ldr r3, [sp, #8]
++; ASM-NEXT:    mov r12, r0
++; ASM-NEXT:    mov r0, r1
++; ASM-NEXT:    mov r1, r2
++; ASM-NEXT:    mov r2, lr
++; ASM-NEXT:    push {r3}
++; ASM-NEXT:    bic r3, r12, #1
++; ASM-NEXT:    ldr r3, [r3, #-4]
++; ASM-NEXT:    eor r3, r3, #78
++; ASM-NEXT:    eor r3, r3, #24832
++; ASM-NEXT:    eor r3, r3, #12320768
++; ASM-NEXT:    eors r3, r3, #0
++; ASM-NEXT:    pop {r3}
++; ASM-NEXT:    beq.w .Ltmp2
++; ASM-NEXT:    udf #140
++; ASM-NEXT:  .Ltmp2:
++; ASM-NEXT:    blx r12
++; ASM-NEXT:    pop {r7, pc}
++; Arguments: r0=%target, r1=%a, r2=%b, r3=%c, [sp+8]=%d
++; Call needs: r0=%a, r1=%b, r2=%c, r3=%d, target in r12
++; r3 is live as 4th argument, so push it before KCFI check
++  call void %target(i32 %a, i32 %b, i32 %c, i32 %d) [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++; Test with 3 arguments - r3 not live, target in r12 or elsewhere, r12 used as scratch
++define void @f4_r3_unused(ptr noundef %target, i32 %a, i32 %b) !kcfi_type !1 {
++; ASM-LABEL: f4_r3_unused:
++; ASM:       @ %bb.0:
++; ASM-NEXT:    .save {r7, lr}
++; ASM-NEXT:    push {r7, lr}
++; ASM-NEXT:    mov r3, r0
++; ASM-NEXT:    mov r0, r1
++; ASM-NEXT:    mov r1, r2
++; ASM-NEXT:    bic r12, r3, #1
++; ASM-NEXT:    ldr r12, [r12, #-4]
++; ASM-NEXT:    eor r12, r12, #78
++; ASM-NEXT:    eor r12, r12, #24832
++; ASM-NEXT:    eor r12, r12, #12320768
++; ASM-NEXT:    eors r12, r12, #0
++; ASM-NEXT:    beq.w .Ltmp3
++; ASM-NEXT:    udf #131
++; ASM-NEXT:  .Ltmp3:
++; ASM-NEXT:    blx r3
++; ASM-NEXT:    pop {r7, pc}
++; Only 3 arguments total, so r3 is not used as call argument
++; Target might be in r3, using r12 as scratch (no spill needed)
++  call void %target(i32 %a, i32 %b) [ "kcfi"(i32 12345678) ]
++  ret void
++}
++
++!llvm.module.flags = !{!0}
++!0 = !{i32 4, !"kcfi", i32 1}
++!1 = !{i32 12345678}
++;; NOTE: These prefixes are unused and the list is autogenerated. Do not add tests below this line:
++; ISEL: {{.*}}
++; KCFI: {{.*}}
++; MIR: {{.*}}
+diff --git a/llvm/test/CodeGen/ARM/kcfi.ll b/llvm/test/CodeGen/ARM/kcfi.ll
+deleted file mode 100644
+index 9e16468c9347..000000000000
+--- a/llvm/test/CodeGen/ARM/kcfi.ll
++++ /dev/null
+@@ -1,28 +0,0 @@
+-; RUN: llc -mtriple=thumbv6m-none-eabi < %s | FileCheck %s
+-
+-; CHECK-LABEL: .globl nosan
+-; CHECK-NEXT:  .p2align 1
+-; CHECK-NEXT:  .type nosan,%function
+-; CHECK-NEXT:  .code 16
+-; CHECK-NEXT:  .thumb_func
+-; CHECK-NEXT:  nosan:
+-define dso_local void @nosan() nounwind {
+-  ret void
+-}
+-
+-;; The alignment is at least 4 to avoid unaligned type hash loads when this
+-;; instrumented function is indirectly called.
+-; CHECK-LABEL: .globl f1
+-; CHECK-NEXT:  .p2align 2
+-; CHECK-NEXT:  .type f1,%function
+-; CHECK-NEXT:  .long 3170468932
+-; CHECK-NEXT:  .code 16
+-; CHECK-NEXT:  .thumb_func
+-; CHECK-NEXT:  f1:
+-define void @f1(ptr noundef %x) !kcfi_type !1 {
+-  ret void
+-}
+-
+-!llvm.module.flags = !{!0}
+-!0 = !{i32 4, !"kcfi", i32 1}
+-!1 = !{i32 -1124498364}
+-- 
+2.52.0.351.gbe84eed79e-goog
+
