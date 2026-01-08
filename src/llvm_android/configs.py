@@ -416,14 +416,12 @@ class LinuxMuslConfig(LinuxConfig):
         defines['LIBUNWIND_HAS_DL_LIB'] = 'FALSE'
         defines['LIBUNWIND_HAS_PTHREAD_LIB'] = 'FALSE'
 
-        defines['LLVM_DEFAULT_TARGET_TRIPLE'] = self.llvm_triple
-
         return defines
 
 
 class LinuxMuslHostConfig(LinuxMuslConfig):
     """Config for Musl as the host"""
-    def __init__(self, arch: hosts.Arch = hosts.Arch.X86_64):
+    def __init__(self, arch: hosts.Arch = hosts.build_arch()):
         super().__init__(arch=arch, is_cross_compiling=False)
 
     @property

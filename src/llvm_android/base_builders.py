@@ -229,7 +229,7 @@ class Builder:  # pylint: disable=too-few-public-methods
         env.update(self._config.env)
         path_env = [
             self._config.env.get('PATH'),
-            str(paths.get_python_dir(hosts.build_host()) / 'bin'),
+            str(paths.get_python_dir(hosts.build_host(), hosts.build_arch()) / 'bin'),
             utils.ORIG_ENV.get('PATH')
         ]
         env['PATH'] = os.pathsep.join(p for p in path_env if p)
@@ -549,12 +549,14 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
         # Building llvm with tests needs python >= 3.6, which may not be available on build server.
         # So always use prebuilts python.
         target = self._config.target_os
+        arch = self._config.target_arch
         if target != hosts.Host.Android and target != hosts.Host.Baremetal:
-            defines['Python3_LIBRARY'] = str(paths.get_python_lib(target))
-            defines['Python3_LIBRARIES'] = str(paths.get_python_lib(target))
-            defines['Python3_INCLUDE_DIR'] = str(paths.get_python_include_dir(target))
-            defines['Python3_INCLUDE_DIRS'] = str(paths.get_python_include_dir(target))
-        defines['Python3_EXECUTABLE'] = str(paths.get_python_executable(hosts.build_host()))
+            defines['Python3_LIBRARY'] = str(paths.get_python_lib(target, arch))
+            defines['Python3_LIBRARIES'] = str(paths.get_python_lib(target, arch))
+            defines['Python3_INCLUDE_DIR'] = str(paths.get_python_include_dir(target, arch))
+            defines['Python3_INCLUDE_DIRS'] = str(paths.get_python_include_dir(target, arch))
+        defines['Python3_EXECUTABLE'] = str(paths.get_python_executable(hosts.build_host(),
+                                                                        hosts.build_arch()))
 
         return defines
 
@@ -740,7 +742,8 @@ class LLVMBuilder(LLVMBaseBuilder):
 
     def _setup_install_dir(self) -> None:
         if self.swig_executable:
-            python_prebuilt_dir = paths.get_python_dir(self._config.target_os)
+            python_prebuilt_dir = paths.get_python_dir(self._config.target_os,
+                                                       self._config.target_arch)
             python_dest_dir = self.install_dir / 'python3'
             shutil.copytree(python_prebuilt_dir, python_dest_dir, symlinks=True, dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns('*.pyc', '__pycache__', 'Android.bp',

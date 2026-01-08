@@ -120,7 +120,7 @@ def package(_build_name: str) -> None:
                       f'--dir={paths.ANDROID_DIR}',
                       '-k', 'TARGET_RELEASE=trunk_staging',
                       'merge_zips'])
-    merge_zips_path = (paths.OUT_DIR / 'host' / hosts.build_host().os_tag /
+    merge_zips_path = (paths.OUT_DIR / 'host' / hosts.build_tag() /
                        'bin' / 'merge_zips')
 
     # Call: merge_zips $DIST_DIR/<build_name>.kzip <kzip files>
