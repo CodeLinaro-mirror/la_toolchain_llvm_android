@@ -1,0 +1,45 @@
+From 42a0e871689d213ff8ea8ad21fe350fd1b337a71 Mon Sep 17 00:00:00 2001
+From: Fei Peng <pengfei.02@bytedance.com>
+Date: Mon, 6 Oct 2025 10:49:54 -0700
+Subject: [PATCH] [compiler-rt][TSan] fix crash caused by intercpting
+ pthread_detach on Android (#161596)
+
+In Bionic, pthread_detach calls pthread_join, so the thread has already
+been consumed by the pthread_detach interceptor.
+
+
+https://android.googlesource.com/platform/bionic/+/refs/heads/android16-release/libc/bionic/pthread_detach.cpp
+---
+ .../lib/tsan/rtl/tsan_interceptors_posix.cpp     | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+index 28e35229bd5e..37c69b1ca996 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+@@ -1130,6 +1130,22 @@ TSAN_INTERCEPTOR(int, pthread_create,
+ 
+ TSAN_INTERCEPTOR(int, pthread_join, void *th, void **ret) {
+   SCOPED_INTERCEPTOR_RAW(pthread_join, th, ret);
++#if SANITIZER_ANDROID
++  {
++    // In Bionic, if the target thread has already exited when pthread_detach is
++    // called, pthread_detach will call pthread_join internally to clean it up.
++    // In that case, the thread has already been consumed by the pthread_detach
++    // interceptor.
++    Tid tid = ctx->thread_registry.FindThread(
++        [](ThreadContextBase* tctx, void* arg) {
++          return tctx->user_id == (uptr)arg;
++        },
++        th);
++    if (tid == kInvalidTid) {
++      return REAL(pthread_join)(th, ret);
++    }
++  }
++#endif
+   Tid tid = ThreadConsumeTid(thr, pc, (uptr)th);
+   ThreadIgnoreBegin(thr, pc);
+   int res = BLOCK_REAL(pthread_join)(th, ret);
+-- 
+2.52.0.457.g6b5491de43-goog
+
