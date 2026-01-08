@@ -1334,6 +1334,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [sanitizer] Fix prctl interceptor causing PAC authentication failure (#153081)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6bbf0c30ca4449e325beb2d28db00d258d3a1a10.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 588983
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LoopIdiomVectorize] Fix FindFirstByte successors (#156945)"
         },
         "platforms": [
@@ -1399,6 +1413,62 @@
         "version_range": {
             "from": 574158,
             "until": 592533
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt][TSan] Add support for Android (#147580)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/208231d1973bb4dd8c8991cfae8db422c443fcdf.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 592918
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt][TSan] fix crash caused by intercpting pthread_detach on Android (#161596)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/42a0e871689d213ff8ea8ad21fe350fd1b337a71.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 592931
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt][TSan] Fix TSan compile error on Android (#162369)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5f7dc8ad11c096a556d49ee676bb627eb8b5cd11.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 593101
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt][TSan] Fix compilation error on Android x86 (#162385)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5d5fe11c38caabe97337afa5a426c7c8de10a29e.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 593131
         }
     },
     {
