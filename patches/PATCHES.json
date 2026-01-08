@@ -1488,15 +1488,15 @@
     {
         "metadata": {
             "info": [],
-            "title": "Add stubs and headers for nl_types APIs."
+            "title": "[UPSTREAM] [compiler-rt][AArch64] Exit early from __arm_za_disable. (#174942)"
         },
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "Add-stubs-and-headers-for-nl_types-APIs.patch",
+        "rel_patch_path": "cherry/012097d4fe7f300a59f9d2b89e528e1bd449d4c1.patch",
         "version_range": {
-            "from": 370808,
-            "until": 563880
+            "from": 584948,
+            "until": 602499
         }
     },
     {

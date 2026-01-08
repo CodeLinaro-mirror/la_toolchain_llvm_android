@@ -1,0 +1,35 @@
+From 012097d4fe7f300a59f9d2b89e528e1bd449d4c1 Mon Sep 17 00:00:00 2001
+From: Sander de Smalen <sander.desmalen@arm.com>
+Date: Thu, 8 Jan 2026 15:00:25 +0000
+Subject: [PATCH] [compiler-rt][AArch64] Exit early from __arm_za_disable.
+ (#174942)
+
+Because `__arm_za_disable` is a private-ZA function, it's only ever
+entered with ZA state `off` or `dormant`. If the state is `off` then we
+can safely return and there is no need to call `__arm_tpidr2_save` or to
+explicitly set PSTATE.ZA or TPIDR2_EL0 to zero.
+---
+ compiler-rt/lib/builtins/aarch64/sme-abi.S | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/compiler-rt/lib/builtins/aarch64/sme-abi.S b/compiler-rt/lib/builtins/aarch64/sme-abi.S
+index 1713a5969459..465f1c763c0d 100644
+--- a/compiler-rt/lib/builtins/aarch64/sme-abi.S
++++ b/compiler-rt/lib/builtins/aarch64/sme-abi.S
+@@ -161,6 +161,13 @@ DEFINE_COMPILERRT_FUNCTION(__arm_za_disable)
+   ldr x14, [x14, CPU_FEATS_SYMBOL_OFFSET]
+   tbz x14, #FEAT_SME_BIT, 0f
+ 
++  // If TPIDR2_EL0 is zero then nothing needs doing because
++  // __arm_za_disable is a private-ZA function and is only
++  // ever entered with ZA state 'off' or 'dormant', so
++  // we can assume PSTATE.ZA=0.
++  mrs x14, TPIDR2_EL0
++  cbz x14, 0f
++
+   // Otherwise, the subroutine behaves as if it did the following:
+   // * Call __arm_tpidr2_save.
+   stp x29, x30, [sp, #-16]!
+-- 
+2.52.0.457.g6b5491de43-goog
+
