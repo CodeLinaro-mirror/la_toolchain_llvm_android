@@ -1,4 +1,12 @@
-FROM ubuntu:24.04
+# Ubuntu 24.04
+# https://hub.docker.com/layers/library/ubuntu/24.04/images
+FROM ubuntu@sha256:c35e29c9450151419d9448b0fd75374fec4fff364a27f176fb458d472dfc9e54
+
+# Pin apt packages date.
+# Ubuntu snapshots requires installing the latest ca-certificates package.
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN echo 'APT::Snapshot "20260101T000000Z";' > /etc/apt/apt.conf.d/50snapshot
+
 RUN apt-get update \
 && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install --no-install-recommends -y \
   # Required to build LLVM and AOSP.
