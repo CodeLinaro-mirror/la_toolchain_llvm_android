@@ -838,6 +838,7 @@ class SwigBuilder(base_builders.AutoconfBuilder):
         env = super().env
         env['BISON'] = paths.BISON_BIN_PATH
         env['M4'] = paths.M4_BIN_PATH
+        env['BISON_PKGDATADIR'] = paths.BISON_PKGDATA_PATH
         return env
 
 
