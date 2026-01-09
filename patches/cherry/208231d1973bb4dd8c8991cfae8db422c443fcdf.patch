@@ -1,0 +1,160 @@
+From 208231d1973bb4dd8c8991cfae8db422c443fcdf Mon Sep 17 00:00:00 2001
+From: Fei Peng <pengfei.02@bytedance.com>
+Date: Mon, 6 Oct 2025 09:51:26 -0700
+Subject: [PATCH] [compiler-rt][TSan] Add support for Android (#147580)
+
+1. Fixed Android setjmp issue. The root cause is that TSan initializes
+before longjmp_xor_key is set up. During __libc_init_vdso, a call to
+strcmp triggers TSan initialization, which occurs before
+__libc_init_setjmp_cookie. The solution is to call
+InitializeLongjmpXorKey on the first use of longjmp_xor_key.
+Additionally, correct LONG_JMP_SP_ENV_SLOT by following the bionic
+source code.
+2. Skip thr object range check on Android. On Android, thr is allocated
+on the heap, causing the check to fail.
+3. Disable intercepting clone on Android. pthread_create internally
+calls clone. Disabling the interception of clone resolves the issue in
+most scenarios.
+4. Use a workaround to recover the thr pointer stored in
+TLS_SLOT_SANITIZER slot, whose value was modified by Skia.
+
+This PR solved the issue from NDK
+https://github.com/android/ndk/issues/1041.
+
+Test project: https://github.com/bytedance/android_tsan_sample/
+---
+ .../lib/tsan/rtl/tsan_interceptors_posix.cpp  |  8 ++-
+ .../lib/tsan/rtl/tsan_platform_linux.cpp      | 49 ++++++++++++++-----
+ compiler-rt/lib/tsan/rtl/tsan_rtl_thread.cpp  |  6 ++-
+ 3 files changed, 49 insertions(+), 14 deletions(-)
+
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+index b46a81031258..28e35229bd5e 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_interceptors_posix.cpp
+@@ -2412,7 +2412,11 @@ TSAN_INTERCEPTOR(int, vfork, int fake) {
+ }
+ #endif
+ 
+-#if SANITIZER_LINUX
++#if SANITIZER_LINUX && !SANITIZER_ANDROID
++// Bionic's pthread_create internally calls clone. When the CLONE_THREAD flag is
++// set, clone does not create a new process but a new thread. This is a
++// workaround for Android. Disabling the interception of clone solves the
++// problem in most scenarios.
+ TSAN_INTERCEPTOR(int, clone, int (*fn)(void *), void *stack, int flags,
+                  void *arg, int *parent_tid, void *tls, pid_t *child_tid) {
+   SCOPED_INTERCEPTOR_RAW(clone, fn, stack, flags, arg, parent_tid, tls,
+@@ -3135,7 +3139,7 @@ void InitializeInterceptors() {
+ 
+   TSAN_INTERCEPT(fork);
+   TSAN_INTERCEPT(vfork);
+-#if SANITIZER_LINUX
++#if SANITIZER_LINUX && !SANITIZER_ANDROID
+   TSAN_INTERCEPT(clone);
+ #endif
+ #if !SANITIZER_ANDROID
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_platform_linux.cpp b/compiler-rt/lib/tsan/rtl/tsan_platform_linux.cpp
+index 4b55aab49a2b..6b6538735beb 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_platform_linux.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_platform_linux.cpp
+@@ -486,8 +486,20 @@ int ExtractRecvmsgFDs(void *msgp, int *fds, int nfd) {
+ 
+ // Reverse operation of libc stack pointer mangling
+ static uptr UnmangleLongJmpSp(uptr mangled_sp) {
+-#if defined(__x86_64__)
+-# if SANITIZER_LINUX
++#    if SANITIZER_ANDROID
++  if (longjmp_xor_key == 0) {
++    // bionic libc initialization process: __libc_init_globals ->
++    // __libc_init_vdso (calls strcmp) -> __libc_init_setjmp_cookie. strcmp is
++    // intercepted by TSan, so during TSan initialization the setjmp_cookie
++    // remains uninitialized. On Android, longjmp_xor_key must be set on first
++    // use.
++    InitializeLongjmpXorKey();
++    CHECK_NE(longjmp_xor_key, 0);
++  }
++#    endif
++
++#    if defined(__x86_64__)
++#      if SANITIZER_LINUX
+   // Reverse of:
+   //   xor  %fs:0x30, %rsi
+   //   rol  $0x11, %rsi
+@@ -542,13 +554,23 @@ static uptr UnmangleLongJmpSp(uptr mangled_sp) {
+ # else
+ #  define LONG_JMP_SP_ENV_SLOT 2
+ # endif
+-#elif SANITIZER_LINUX
+-# ifdef __aarch64__
+-#  define LONG_JMP_SP_ENV_SLOT 13
+-# elif defined(__loongarch__)
+-#  define LONG_JMP_SP_ENV_SLOT 1
+-# elif defined(__mips64)
+-#  define LONG_JMP_SP_ENV_SLOT 1
++#    elif SANITIZER_ANDROID
++#      ifdef __aarch64__
++#        define LONG_JMP_SP_ENV_SLOT 3
++#      elif SANITIZER_RISCV64
++#        define LONG_JMP_SP_ENV_SLOT 3
++#      elif defined(__x86_64__)
++#        define LONG_JMP_SP_ENV_SLOT 6
++#      else
++#        error unsupported
++#      endif
++#    elif SANITIZER_LINUX
++#      ifdef __aarch64__
++#        define LONG_JMP_SP_ENV_SLOT 13
++#      elif defined(__loongarch__)
++#        define LONG_JMP_SP_ENV_SLOT 1
++#      elif defined(__mips64)
++#        define LONG_JMP_SP_ENV_SLOT 1
+ #      elif SANITIZER_RISCV64
+ #        define LONG_JMP_SP_ENV_SLOT 13
+ #      elif defined(__s390x__)
+@@ -556,7 +578,7 @@ static uptr UnmangleLongJmpSp(uptr mangled_sp) {
+ #      else
+ #        define LONG_JMP_SP_ENV_SLOT 6
+ #      endif
+-#endif
++#    endif
+ 
+ uptr ExtractLongJmpSp(uptr *env) {
+   uptr mangled_sp = env[LONG_JMP_SP_ENV_SLOT];
+@@ -653,7 +675,12 @@ ThreadState *cur_thread() {
+     }
+     CHECK_EQ(0, internal_sigprocmask(SIG_SETMASK, &oldset, nullptr));
+   }
+-  return thr;
++
++  // Skia calls mallopt(M_THREAD_DISABLE_MEM_INIT, 1), which sets the least
++  // significant bit of TLS_SLOT_SANITIZER to 1. Scudo allocator uses this bit
++  // as a flag to disable memory initialization. This is a workaround to get the
++  // correct ThreadState pointer.
++  reinterpret_cast<ThreadState*>(addr & ~1ULL);
+ }
+ 
+ void set_cur_thread(ThreadState *thr) {
+diff --git a/compiler-rt/lib/tsan/rtl/tsan_rtl_thread.cpp b/compiler-rt/lib/tsan/rtl/tsan_rtl_thread.cpp
+index b1464ccfddeb..978d853b0bc7 100644
+--- a/compiler-rt/lib/tsan/rtl/tsan_rtl_thread.cpp
++++ b/compiler-rt/lib/tsan/rtl/tsan_rtl_thread.cpp
+@@ -206,10 +206,14 @@ void ThreadStart(ThreadState *thr, Tid tid, ThreadID os_id,
+   }
+ #endif
+ 
+-#if !SANITIZER_GO
++#if !SANITIZER_GO && !SANITIZER_ANDROID
+   // Don't imitate stack/TLS writes for the main thread,
+   // because its initialization is synchronized with all
+   // subsequent threads anyway.
++  // Because thr is created by MmapOrDie, the thr object
++  // is not in tls, the pointer to the thr object is in
++  // TLS_SLOT_SANITIZER slot. So skip this check on
++  // Android platform.
+   if (tid != kMainTid) {
+     if (stk_addr && stk_size) {
+       const uptr pc = StackTrace::GetNextInstructionPc(
+-- 
+2.52.0.457.g6b5491de43-goog
+
