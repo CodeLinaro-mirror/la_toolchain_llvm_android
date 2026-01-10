@@ -1,4 +1,7 @@
 #!/bin/bash
+# Starts a Docker container with the production environment for Android LLVM development.
+# Usage: ./prod_env.sh [tag]
+#   tag: Optional. The image tag to use, e.g. 'r584948'. Defaults to 'prod'.
 set -e
 
 LOCAL_UID=$(id -u)
@@ -11,7 +14,8 @@ WORK_DIR=/tmpfs/src/git/
 echo build:x:${LOCAL_UID}:${LOCAL_GID}:Build:${WORK_DIR}:/bin/bash > /tmp/passwd.docker
 echo build:*:${LOCAL_GID}: > /tmp/group.docker
 
-docker_img=us-docker.pkg.dev/google.com/android-llvm-kokoro/android-llvm/llvm-ubuntu:prod
+tag=${1:-prod}
+docker_img=us-docker.pkg.dev/google.com/android-llvm-kokoro/android-llvm/llvm-ubuntu:${tag}
 
 docker pull ${docker_img}
 docker run -it \

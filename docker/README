@@ -1,7 +1,9 @@
 Docker image that builds the Android LLVM toolchain.
 
 # Build using the production Docker image
-Run prod_env.sh
+Run prod_env.sh. You can optionally specify a tag (e.g. r584948) to use a different image version:
+
+  ./prod_env.sh [tag]
 
 If you see gcloud permission errors, run
 
