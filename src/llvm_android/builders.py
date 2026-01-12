@@ -553,9 +553,6 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
             shutil.copytree(lib_dir, dst_dir, dirs_exist_ok=True)
 
     def install(self) -> None:
-        if self._config.target_arch == hosts.Arch.AARCH64_LFI:
-            return
-
         # Install libfuzzer headers once for all configs.
         header_src = self.src_dir / 'lib' / 'fuzzer'
         header_dst = self.output_toolchain.path / 'prebuilt_include' / 'llvm' / 'lib' / 'Fuzzer'
