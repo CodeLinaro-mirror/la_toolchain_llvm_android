@@ -23,6 +23,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import shutil
 import sys
 from typing import Dict, List, Optional
 import urllib.request
@@ -38,8 +39,8 @@ from llvm_android.utils import check_call, check_output
 def parse_args():
     parser = argparse.ArgumentParser(description="Cherry pick upstream LLVM patches.",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--sha', nargs='+', help='sha of patches to cherry pick')
-    parser.add_argument('--patch-file', help='Use custom patch file for --sha')
+    parser.add_argument('--sha', nargs='+', help="""
+                        sha of patches to cherry pick. It accepts sha:custom_patch_file.""")
     parser.add_argument('--pr', help='Cherry pick from a GitHub PR, e.g., 84422')
     parser.add_argument(
         '--start-version', default='llvm',
@@ -69,15 +70,21 @@ def create_patches_for_sha_list(sha_list: List[str], start_version: int, patch_l
     fetch_upstream()
     result = PatchList()
     for sha in sha_list:
+        custom_patch_file = None
+        if ':' in sha:
+            sha, custom_patch_file = sha.split(':')
         if len(sha) < 40:
             sha = get_full_sha(upstream_dir, sha)
         version = find_version(sha, patch_list, start_version)
         version_name = '' if version == 1 else f'-v{version}'
         rel_patch_path = f'cherry/{sha}' + version_name + '.patch'
         file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
-        with open(file_path, 'w') as fh:
-            check_call(f'git format-patch -1 {sha} --stdout',
-                       stdout=fh, shell=True, cwd=upstream_dir)
+        if custom_patch_file:
+            shutil.copyfile(custom_patch_file, file_path)
+        else:
+            with open(file_path, 'w') as fh:
+                check_call(f'git format-patch -1 {sha} --stdout',
+                           stdout=fh, shell=True, cwd=upstream_dir)
 
         commit_subject = check_output(
             f'git log -n1 --format=%s {sha}', shell=True, cwd=upstream_dir)
@@ -91,35 +98,6 @@ def create_patches_for_sha_list(sha_list: List[str], start_version: int, patch_l
             'until': end_version,
         }
         result.append(PatchItem(metadata, platforms, rel_patch_path, version_range))
-    return result
-
-
-def create_patch_for_sha_with_patch_file(patch_file: Path, sha: str, start_version: int,
-                                         patch_list: PatchList) -> PatchList:
-    """ add patch files for sha"""
-    upstream_dir = paths.TOOLCHAIN_LLVM_PATH
-    result = []
-    assert len(sha) >= 40, f'the length of {sha} is {len(sha)} and it is shorter than 40'
-    version = find_version(sha, patch_list, start_version)
-    version_name = '' if version == 1 else f'-v{version}'
-    rel_patch_path = f'cherry/{sha}' + version_name + '.patch'
-    file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
-    with open(patch_file, 'r') as source, open(file_path, 'w') as dest:
-        for line in source:
-            dest.write(line)
-
-    commit_subject = check_output(
-        f'git log -n1 --format=%s {sha}', shell=True, cwd=upstream_dir)
-    info: Optional[List[str]] = []
-    title = '[UPSTREAM] ' + commit_subject.strip()
-    end_version = sha_to_revision(sha)
-    metadata = {'info': info, 'title': title}
-    platforms = ['android']
-    version_range: Dict[str, Optional[int]] = {
-        'from': start_version,
-        'until': end_version,
-    }
-    result.append(PatchItem(metadata, platforms, rel_patch_path, version_range))
     return result
 
 
@@ -251,13 +229,7 @@ def main() -> bool:
         patch_list.extend(new_patches)
     elif args.sha:
         start_version = parse_start_version(args.start_version)
-        if args.patch_file:
-            assert len(
-                args.sha) == 1,  f'error: --patch-file only requires 1 sha, but the size of sha list is {len(args.sha)}'
-            new_patches = create_patch_for_sha_with_patch_file(
-                args.patch_file, args.sha[0], start_version, patch_list)
-        else:
-            new_patches = create_patches_for_sha_list(args.sha, start_version, patch_list)
+        new_patches = create_patches_for_sha_list(args.sha, start_version, patch_list)
         patch_list.extend(new_patches)
 
     patch_list.sort()
