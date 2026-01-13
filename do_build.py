@@ -357,12 +357,13 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     build_dir = toolchain_builder.install_dir
     host_config = toolchain_builder.config_list[0]
     host = host_config.target_os
+    arch = host_config.target_arch
     build_name = toolchain_builder.build_name
     version = toolchain_builder.installed_toolchain.version
 
     package_name = 'clang-' + build_name
 
-    install_dir = paths.get_package_install_path(host, package_name)
+    install_dir = paths.get_package_install_path(host, arch, package_name)
     install_host_dir = install_dir.parent
 
     # Remove any previously installed toolchain so it doesn't pollute the
@@ -673,8 +674,9 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
 
     # Package up the resulting trimmed install/ directory.
     if create_tar:
-        tag = host.os_tag
-        if isinstance(toolchain_builder.config_list[0], configs.LinuxMuslConfig):
+        tag = hosts.tag(host, arch)
+        if isinstance(toolchain_builder.config_list[0], configs.LinuxMuslConfig) and \
+                arch == hosts.Arch.X86_64:
             tag = host.os_tag_musl
         if builders_package:
             tag += "-builders"

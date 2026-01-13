@@ -16,12 +16,15 @@
 """Starts a script with prebuilt python3."""
 
 import os
+import platform
 import subprocess
 import sys
 
 THIS_DIR = os.path.realpath(os.path.dirname(__file__))
 def get_host_tag():
     if sys.platform.startswith('linux'):
+        if platform.machine() == 'aarch64':
+            return 'linux-arm64'
         return 'linux-x86'
     if sys.platform.startswith('darwin'):
         return 'darwin-x86'

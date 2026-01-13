@@ -35,7 +35,7 @@ TOOLCHAIN_DIR: Path = ANDROID_DIR / 'toolchain'
 TOOLCHAIN_UTILS_DIR: Path = EXTERNAL_DIR / 'toolchain-utils'
 TOOLCHAIN_LLVM_PATH: Path = TOOLCHAIN_DIR / 'llvm-project'
 
-CLANG_PREBUILT_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host' / hosts.build_host().os_tag
+CLANG_PREBUILT_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host' / hosts.build_tag()
                             / constants.CLANG_PREBUILT_VERSION)
 CLANG_PREBUILT_LIBCXX_HEADERS: Path = CLANG_PREBUILT_DIR / 'include' / 'c++' / 'v1'
 WINDOWS_CLANG_PREBUILT_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host' / 'windows-x86'
@@ -47,16 +47,16 @@ CLANG_PREBUILT_LINUX_KLEAF_DIR: Path = (PREBUILTS_DIR / 'clang' / 'host'
 BIONIC_HEADERS: Path = ANDROID_DIR / 'bionic' / 'libc' / 'include'
 BIONIC_KERNEL_HEADERS: Path = ANDROID_DIR / 'bionic' / 'libc' / 'kernel' / 'uapi'
 
-GO_BIN_PATH: Path = PREBUILTS_DIR / 'go' / hosts.build_host().os_tag / 'bin'
-CMAKE_BIN_PATH: Path = PREBUILTS_DIR / 'cmake' / hosts.build_host().os_tag / 'bin' / 'cmake'
+GO_BIN_PATH: Path = PREBUILTS_DIR / 'go' / hosts.build_tag() / 'bin'
+CMAKE_BIN_PATH: Path = PREBUILTS_DIR / 'cmake' / hosts.build_tag() / 'bin' / 'cmake'
 BUILD_TOOLS_DIR: Path = PREBUILTS_DIR / 'build-tools'
-BISON_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_host().os_tag / 'bin' / 'bison'
+BISON_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'bison'
 BISON_PKGDATA_PATH: Path = BUILD_TOOLS_DIR/ 'common' / 'bison'
-M4_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_host().os_tag / 'bin' / 'm4'
-MAKE_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_host().os_tag / 'bin' / 'make'
+M4_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'm4'
+MAKE_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'make'
 # Use the musl version of ninja on Linux, it is statically linked and avoids
 # problems with LD_LIBRARY_PATH causing ninja to use the wrong libc++.so.
-NINJA_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_host().os_tag_musl / 'bin' / 'ninja'
+NINJA_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.musl_build_tag() / 'bin' / 'ninja'
 
 LIBEDIT_SRC_DIR: Path = EXTERNAL_DIR / 'libedit'
 LIBNCURSES_SRC_DIR: Path = EXTERNAL_DIR / 'libncurses'
@@ -67,8 +67,8 @@ ZSTD_SRC_DIR: Path = EXTERNAL_DIR / 'zstd'
 
 NDK_BASE: Path = TOOLCHAIN_DIR / 'prebuilts' / 'ndk' / 'releases' / constants.NDK_VERSION
 
-GCC_ROOT: Path = PREBUILTS_DIR / 'gcc' / hosts.build_host().os_tag
-GO_ROOT: Path = PREBUILTS_DIR / 'go' / hosts.build_host().os_tag
+GCC_ROOT: Path = PREBUILTS_DIR / 'gcc' / 'linux-x86'
+GO_ROOT: Path = PREBUILTS_DIR / 'go' / hosts.build_tag()
 MINGW_ROOT: Path = PREBUILTS_DIR / 'gcc' / 'linux-x86' / 'host' / 'x86_64-w64-mingw32-4.8' / 'x86_64-w64-mingw32'
 
 _WIN_ZLIB_PATH: Path = (PREBUILTS_DIR / 'clang' / 'host' / 'windows-x86' /
@@ -76,9 +76,9 @@ _WIN_ZLIB_PATH: Path = (PREBUILTS_DIR / 'clang' / 'host' / 'windows-x86' /
 WIN_ZLIB_INCLUDE_PATH: Path = _WIN_ZLIB_PATH / 'include'
 WIN_ZLIB_LIB_PATH: Path = _WIN_ZLIB_PATH / 'lib'
 
-KYTHE_RUN_EXTRACTOR = (PREBUILTS_DIR / 'build-tools' / hosts.build_host().os_tag / 'bin' /
+KYTHE_RUN_EXTRACTOR = (PREBUILTS_DIR / 'build-tools' / hosts.build_tag() / 'bin' /
                        'runextractor')
-KYTHE_CXX_EXTRACTOR = (PREBUILTS_DIR / 'clang-tools' / hosts.build_host().os_tag / 'bin' /
+KYTHE_CXX_EXTRACTOR = (PREBUILTS_DIR / 'clang-tools' / hosts.build_tag() / 'bin' /
                        'cxx_extractor')
 KYTHE_OUTPUT_DIR = OUT_DIR / 'kythe-files'
 KYTHE_VNAMES_JSON = SCRIPTS_DIR / 'kythe_vnames.json'
@@ -128,16 +128,16 @@ def mlgo_model(filename: str) -> Optional[Path]:
     return model if model.exists() else None
 
 
-def get_package_install_path(host: hosts.Host, package_name) -> Path:
-    return OUT_DIR / 'install' / host.os_tag / package_name
+def get_package_install_path(host: hosts.Host, arch: hosts.Arch, package_name) -> Path:
+    return OUT_DIR / 'install' / hosts.tag(host, arch) / package_name
 
-def get_python_dir(host: hosts.Host) -> Path:
+def get_python_dir(host: hosts.Host, arch: hosts.Arch) -> Path:
     """Returns the path to python for a host."""
-    return PREBUILTS_DIR / 'python' / host.os_tag
+    return PREBUILTS_DIR / 'python' / hosts.tag(host, arch)
 
 
 def determine_python_ver() -> str:
-    python_path = get_python_dir(hosts.Host.Linux)
+    python_path = get_python_dir(hosts.build_host(), hosts.build_arch())
     versions = list(python_path.glob("include/python*"))
     if len(versions) != 1:
         raise RuntimeError(
@@ -151,36 +151,36 @@ _PYTHON_VER = determine_python_ver()
 _PYTHON_VER_SHORT = _PYTHON_VER.replace('.', '')
 
 
-def get_python_executable(host: hosts.Host) -> Path:
+def get_python_executable(host: hosts.Host, arch: hosts.Arch) -> Path:
     """Returns the path to python executable for a host."""
-    python_root = get_python_dir(host)
+    python_root = get_python_dir(host, arch)
     return {
         hosts.Host.Linux: python_root / 'bin' / f'python{_PYTHON_VER}',
         hosts.Host.Darwin: python_root / 'bin' / f'python{_PYTHON_VER}',
         hosts.Host.Windows: python_root / 'python.exe',
     }[host]
 
-def get_python_include_dir(host: hosts.Host) -> Path:
+def get_python_include_dir(host: hosts.Host, arch: hosts.Arch) -> Path:
     """Returns the path to python include dir for a host."""
-    python_root = get_python_dir(host)
+    python_root = get_python_dir(host, arch)
     return {
         hosts.Host.Linux: python_root / 'include' / f'python{_PYTHON_VER}',
         hosts.Host.Darwin: python_root / 'include' / f'python{_PYTHON_VER}',
         hosts.Host.Windows: python_root / 'include',
     }[host]
 
-def get_python_lib(host: hosts.Host) -> Path:
+def get_python_lib(host: hosts.Host, arch: hosts.Arch) -> Path:
     """Returns the path to python lib for a host."""
-    python_root = get_python_dir(host)
+    python_root = get_python_dir(host, arch)
     return {
         hosts.Host.Linux: python_root / 'lib' / f'libpython{_PYTHON_VER}.so',
         hosts.Host.Darwin: python_root / 'lib' / f'libpython{_PYTHON_VER}.dylib',
         hosts.Host.Windows: python_root / 'libs' / f'python{_PYTHON_VER_SHORT}.lib',
     }[host]
 
-def get_python_dynamic_lib(host: hosts.Host) -> Path:
+def get_python_dynamic_lib(host: hosts.Host, arch: hosts.Arch) -> Path:
     """Returns the path to python runtime dynamic lib for a host."""
-    python_root = get_python_dir(host)
+    python_root = get_python_dir(host, arch)
     return {
         hosts.Host.Linux: python_root / 'lib' / f'libpython{_PYTHON_VER}.so.1.0',
         hosts.Host.Darwin: python_root / 'lib' / f'libpython{_PYTHON_VER}.dylib',

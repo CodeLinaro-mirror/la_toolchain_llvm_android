@@ -195,7 +195,7 @@ def parse_args():
 
 def copy_clang(android_base: Path, clang_path: Path) -> None:
     android_clang_path = (android_base / 'prebuilts' / 'clang' / 'host' /
-                          hosts.build_host().os_tag / 'clang-dev')
+                          hosts.build_tag() / 'clang-dev')
     if android_clang_path.is_symlink() or android_clang_path.is_file():
         android_clang_path.unlink()
     elif android_clang_path.is_dir():
@@ -299,7 +299,7 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
                      with_tidy, no_mlgo)
         if flashall_path is None:
             bin_path = (android_base / 'out' / 'host' /
-                        hosts.build_host().os_tag / 'bin')
+                        hosts.build_tag() / 'bin')
             utils.check_call(
                 ['./adb', '-s', device[0], 'reboot', 'bootloader'],
                 cwd=bin_path)
@@ -399,7 +399,8 @@ def main():
         elif args.skip_tests:
             cmd.append('--skip-tests')
         utils.check_call(cmd)
-        clang_path = paths.get_package_install_path(hosts.build_host(), 'clang-dev')
+        clang_path = paths.get_package_install_path(hosts.build_host(), hosts.build_arch(),
+                                                    'clang-dev')
     clang_version = extract_clang_version(clang_path)
     copy_clang(Path(args.android_path), clang_path)
 

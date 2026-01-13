@@ -15,6 +15,7 @@
 #
 """Constants and helper functions for hosts."""
 import enum
+import platform
 import sys
 
 @enum.unique
@@ -50,15 +51,15 @@ class Host(enum.Enum):
     def os_tag(self) -> str:
         """Returns the os tag of current Host."""
         return {
-            Host.Darwin: 'darwin-x86',
-            Host.Linux: 'linux-x86',
-            Host.Windows: 'windows-x86',
+            Host.Darwin: 'darwin',
+            Host.Linux: 'linux',
+            Host.Windows: 'windows',
         }[self]
 
     @property
     def os_tag_musl(self) -> str:
         """Returns the os tag of current Host, using musl if the Host is Linux."""
-        return 'linux_musl-x86' if self is Host.Linux else self.os_tag
+        return 'linux_musl' if self is Host.Linux else self.os_tag
 
     @property
     def crt_dir(self) -> str:
@@ -90,6 +91,16 @@ class Arch(enum.Enum):
             Arch.I386: 'i686',
             Arch.X86_64: 'x86_64',
             Arch.RISCV64: 'riscv64'
+        }[self]
+
+    @property
+    def arch_tag(self) -> str:
+        """Returns tthe arch tag of current Arch."""
+        return {
+            Arch.AARCH64: 'arm64',
+            Arch.ARM:  'arm',
+            Arch.X86_64: 'x86',
+            Arch.I386: 'x86',
         }[self]
 
 
@@ -126,10 +137,47 @@ def _get_default_host() -> Host:
     raise RuntimeError('Unsupported host: {}'.format(sys.platform))
 
 
-_BUILD_OS_TYPE: Host = _get_default_host()
+def _get_default_arch() -> Arch:
+    """Returns the Arch matching the current machine."""
+    if platform.machine() == 'aarch64':
+        return Arch.AARCH64
+    return Arch.X86_64
 
+
+_BUILD_OS_TYPE: Host = _get_default_host()
+_BUILD_ARCH_TYPE: Arch = _get_default_arch()
 
 def build_host() -> Host:
     """Returns the cached Host matching the current machine."""
     global _BUILD_OS_TYPE  # pylint: disable=global-statement
     return _BUILD_OS_TYPE
+
+
+def build_arch() -> Arch:
+    """Returns the cached Arch matching the current machine."""
+    global _BUILD_ARCH_TYPE  # pylint: disable=global-statement
+    return _BUILD_ARCH_TYPE
+
+
+def build_tag() -> str:
+    """Returns the directory to use for prebuilts for the current machine."""
+    return tag(build_host(), build_arch())
+
+
+def tag(host: Host, arch: Arch) -> str:
+    """Returns the directory to use for prebuilts for the given host and arch."""
+    return host.os_tag + '-' + arch.arch_tag
+
+
+def musl_build_tag() -> str:
+    """Returns the directory use for musl prebuilts for the current machine."""
+    return musl_tag(build_host(), build_arch())
+
+
+def musl_tag(host: Host, arch: Arch) -> str:
+    """Returns the directory use for musl prebuilts for the given host and arch."""
+
+    # X86_64 has separate prebuilts for musl, arm64 always uses musl.
+    if arch == Arch.X86_64:
+        return host.os_tag_musl + '-' + arch.arch_tag
+    return tag(host, arch)
