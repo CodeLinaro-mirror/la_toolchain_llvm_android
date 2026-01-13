@@ -1468,6 +1468,7 @@ class WindowsToolchainBuilder(base_builders.LLVMBuilder):
     build_lldb: bool = True
     lto: bool = False
     profdata_file: Optional[Path] = None
+    ninja_targets: List[str] = ['all', 'lldb-tblgen']
 
     @property
     def _is_msvc(self) -> bool:
