@@ -1,0 +1,211 @@
+From 2859165e871a3bf7c95fd3cc14300b703398704d Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Thu, 28 Aug 2025 19:35:28 +0100
+Subject: [PATCH] [AArch64] Add FeatureFuseCCSelect to a number of CPU
+ configurations. (#153188)
+
+This marks CMP+CSel as fusable according to the SWOGs of
+  cortex-a78
+  cortex-a710
+  cortex-a715
+  cortex-a720
+  cortex-a725
+  cortex-x4
+  cortex-x925
+  neoverse-n2
+  neoverse-n3
+  neoverse-v1
+  neoverse-v2
+  neoverse-v3
+---
+ llvm/lib/Target/AArch64/AArch64Processors.td  | 16 +++++++
+ .../CodeGen/AArch64/misched-fusion-csel.ll    | 43 ++++++++++++++++---
+ 2 files changed, 54 insertions(+), 5 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64Processors.td b/llvm/lib/Target/AArch64/AArch64Processors.td
+index e4a7d83e7f80..31f14a2bc44f 100644
+--- a/llvm/lib/Target/AArch64/AArch64Processors.td
++++ b/llvm/lib/Target/AArch64/AArch64Processors.td
+@@ -134,6 +134,7 @@ def TuneA78 : SubtargetFeature<"a78", "ARMProcFamily", "CortexA78",
+                                FeatureCmpBccFusion,
+                                FeatureFuseAES,
+                                FeatureFuseAdrpAdd,
++                               FeatureFuseCCSelect,
+                                FeatureAddrLSLSlow14,
+                                FeatureALULSLFast,
+                                FeaturePostRAScheduler,
+@@ -146,6 +147,7 @@ def TuneA78AE : SubtargetFeature<"a78ae", "ARMProcFamily",
+                                  FeatureCmpBccFusion,
+                                  FeatureFuseAES,
+                                  FeatureFuseAdrpAdd,
++                                 FeatureFuseCCSelect,
+                                  FeatureAddrLSLSlow14,
+                                  FeatureALULSLFast,
+                                  FeaturePostRAScheduler,
+@@ -158,6 +160,7 @@ def TuneA78C : SubtargetFeature<"a78c", "ARMProcFamily",
+                                 FeatureCmpBccFusion,
+                                 FeatureFuseAES,
+                                 FeatureFuseAdrpAdd,
++                                FeatureFuseCCSelect,
+                                 FeatureAddrLSLSlow14,
+                                 FeatureALULSLFast,
+                                 FeaturePostRAScheduler,
+@@ -169,6 +172,7 @@ def TuneA710    : SubtargetFeature<"a710", "ARMProcFamily", "CortexA710",
+                                    FeatureCmpBccFusion,
+                                    FeatureFuseAES,
+                                    FeatureFuseAdrpAdd,
++                                   FeatureFuseCCSelect,
+                                    FeatureALULSLFast,
+                                    FeaturePostRAScheduler,
+                                    FeatureEnableSelectOptimize,
+@@ -181,6 +185,7 @@ def TuneA715 : SubtargetFeature<"a715", "ARMProcFamily", "CortexA715",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
++                                 FeatureFuseCCSelect,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -191,6 +196,7 @@ def TuneA720 : SubtargetFeature<"a720", "ARMProcFamily", "CortexA720",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
++                                 FeatureFuseCCSelect,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -201,6 +207,7 @@ def TuneA720AE : SubtargetFeature<"a720ae", "ARMProcFamily", "CortexA720",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
++                                 FeatureFuseCCSelect,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -212,6 +219,7 @@ def TuneA725 : SubtargetFeature<"cortex-a725", "ARMProcFamily",
+                                 FeatureCmpBccFusion,
+                                 FeatureALULSLFast,
+                                 FeatureFuseAdrpAdd,
++                                FeatureFuseCCSelect,
+                                 FeatureEnableSelectOptimize,
+                                 FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -262,6 +270,7 @@ def TuneX4 : SubtargetFeature<"cortex-x4", "ARMProcFamily", "CortexX4",
+                               "Cortex-X4 ARM processors", [
+                                FeatureALULSLFast,
+                                FeatureFuseAdrpAdd,
++                               FeatureFuseCCSelect,
+                                FeatureFuseAES,
+                                FeaturePostRAScheduler,
+                                FeatureEnableSelectOptimize,
+@@ -273,6 +282,7 @@ def TuneX925 : SubtargetFeature<"cortex-x925", "ARMProcFamily",
+                                 "CortexX925", "Cortex-X925 ARM processors",[
+                                 FeatureALULSLFast,
+                                 FeatureFuseAdrpAdd,
++                                FeatureFuseCCSelect,
+                                 FeatureFuseAES,
+                                 FeaturePostRAScheduler,
+                                 FeatureEnableSelectOptimize,
+@@ -548,6 +558,7 @@ def TuneNeoverseN2 : SubtargetFeature<"neoversen2", "ARMProcFamily", "NeoverseN2
+                                       "Neoverse N2 ARM processors", [
+                                       FeatureFuseAES,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+@@ -559,6 +570,7 @@ def TuneNeoverseN3 : SubtargetFeature<"neoversen3", "ARMProcFamily", "NeoverseN3
+                                       FeaturePostRAScheduler,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeatureEnableSelectOptimize,
+                                       FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -575,6 +587,7 @@ def TuneNeoverseV1 : SubtargetFeature<"neoversev1", "ARMProcFamily", "NeoverseV1
+                                       "Neoverse V1 ARM processors", [
+                                       FeatureFuseAES,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeatureAddrLSLSlow14,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+@@ -587,6 +600,7 @@ def TuneNeoverseV2 : SubtargetFeature<"neoversev2", "ARMProcFamily", "NeoverseV2
+                                       FeatureFuseAES,
+                                       FeatureCmpBccFusion,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+@@ -600,6 +614,7 @@ def TuneNeoverseV3 : SubtargetFeature<"neoversev3", "ARMProcFamily", "NeoverseV3
+                                       FeatureFuseAES,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+                                       FeatureAvoidLDAPUR,
+@@ -610,6 +625,7 @@ def TuneNeoverseV3AE : SubtargetFeature<"neoversev3AE", "ARMProcFamily", "Neover
+                                       FeatureFuseAES,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
++                                      FeatureFuseCCSelect,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+                                       FeatureAvoidLDAPUR,
+diff --git a/llvm/test/CodeGen/AArch64/misched-fusion-csel.ll b/llvm/test/CodeGen/AArch64/misched-fusion-csel.ll
+index ac0adb7f85d0..8fa60ee93663 100644
+--- a/llvm/test/CodeGen/AArch64/misched-fusion-csel.ll
++++ b/llvm/test/CodeGen/AArch64/misched-fusion-csel.ll
+@@ -1,9 +1,42 @@
+-; RUN: llc %s -o - -mtriple=aarch64-unknown -mattr=fuse-csel | FileCheck %s
+-; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m3  | FileCheck %s
+-; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m4  | FileCheck %s
+-; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m5  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mattr=fuse-csel -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m3 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m4 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=exynos-m5 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a78 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a710 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a715 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a720 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a725 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-x4 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-x925 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-n2 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-n3 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v1 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v2 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v3 -debug-only=machine-scheduler 2>&1 | FileCheck %s
++; REQUIRES: asserts
+ 
+-target triple = "aarch64-unknown"
++; Check that the scheduling model has an edge between the SUBS and the CSEL.
++; CHECK-LABEL: test_sub_cselw:%bb.0
++; CHECK: SU(2):   %3:gpr32common = ADDWri %1:gpr32common, 7, 0
++; CHECK: SU(3):   dead $wzr = SUBSWri %0:gpr32common, 13, 0, implicit-def $nzcv
++; CHECK:   Successors:
++; CHECK:     SU(4): Ord  Latency=0 Cluster
++; CHECK: SU(4):   %5:gpr32 = CSELWr %0:gpr32common, %3:gpr32common, 0, implicit killed $nzcv
++; CHECK:   Predecessors:
++; CHECK:     SU(3): Ord  Latency=0 Cluster
++; CHECK: SU(5):   $w0 = COPY %5:gpr32
++
++
++; CHECK-LABEL: test_sub_cselx:%bb.0
++; CHECK: SU(2):   %3:gpr64common = ADDXri %1:gpr64common, 7, 0
++; CHECK: SU(3):   dead $xzr = SUBSXri %0:gpr64common, 13, 0, implicit-def $nzcv
++; CHECK:   Successors:
++; CHECK:     SU(4): Ord  Latency=0 Cluster
++; CHECK: SU(4):   %5:gpr64 = CSELXr %0:gpr64common, %3:gpr64common, 0, implicit killed $nzcv
++; CHECK:   Predecessors:
++; CHECK:     SU(3): Ord  Latency=0 Cluster
++; CHECK: SU(5):   $x0 = COPY %5:gpr64
+ 
+ define i32 @test_sub_cselw(i32 %a0, i32 %a1, i32 %a2) {
+ entry:
+-- 
+2.52.0.457.g6b5491de43-goog
+

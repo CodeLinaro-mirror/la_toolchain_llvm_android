@@ -128,6 +128,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Define constructive EXT_ZZI pseudo instruction (#152552)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fdd2d4df1212ef6b7c8e0dfbba8f2a24343d2d9d.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 586596
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[lldb] Fallback to expression eval when Dump of variable fails in dwim-print\" (#153824)"
         },
         "platforms": [
@@ -221,6 +235,34 @@
         "version_range": {
             "from": 584948,
             "until": 587658
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Add FeatureFuseCCSelect to a number of CPU configurations. (#153188)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2859165e871a3bf7c95fd3cc14300b703398704d.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 588385
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Add a FeatureFuseCmpCSet (#153189)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f902c5d1caf0d82a3d127806cb28a44c7a74cdd3.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 588394
         }
     },
     {
@@ -408,6 +450,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Initial sched model for Neoverse V3, V3AE (#163932)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a17dcafd9ba33013c648f92839733f58d147c350.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 595363
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64][SME] Disable tail calls for callees that require saving ZT0 (#165371)"
         },
         "platforms": [
@@ -473,6 +529,20 @@
         "version_range": {
             "from": 574158,
             "until": 597042
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Add support for C1 CPUs (#171124)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/23f967ada05760ab65ccf95493a2dc22ebc17c04.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 600781
         }
     },
     {
