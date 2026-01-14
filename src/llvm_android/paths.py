@@ -137,7 +137,7 @@ def get_python_dir(host: hosts.Host, arch: hosts.Arch) -> Path:
 
 
 def determine_python_ver() -> str:
-    python_path = get_python_dir(hosts.build_host(), hosts.build_arch())
+    python_path = get_python_dir(hosts.Host.Linux, hosts.Arch.X86_64)
     versions = list(python_path.glob("include/python*"))
     if len(versions) != 1:
         raise RuntimeError(
