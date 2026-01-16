@@ -1,0 +1,293 @@
+From fdd2d4df1212ef6b7c8e0dfbba8f2a24343d2d9d Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Ga=C3=ABtan=20Bossu?= <gaetan.bossu@arm.com>
+Date: Fri, 15 Aug 2025 09:05:10 +0100
+Subject: [PATCH] [AArch64] Define constructive EXT_ZZI pseudo instruction
+ (#152552)
+
+It will get expanded into MOVPRFX_ZZ and EXT_ZZI by the
+AArch64ExpandPseudo pass. This instruction takes a single Z register as
+input, as opposed to the existing destructive EXT_ZZI instruction.
+
+Note this patch only defines the pseudo, it isn't used in any ISel
+pattern yet. It will later be used for vector.extract.
+---
+ .../AArch64/AArch64ExpandPseudoInsts.cpp      | 11 ++++
+ .../lib/Target/AArch64/AArch64InstrFormats.td |  7 ++-
+ llvm/lib/Target/AArch64/AArch64InstrInfo.h    |  3 +-
+ .../lib/Target/AArch64/AArch64SVEInstrInfo.td |  4 +-
+ llvm/lib/Target/AArch64/AArch64SchedA320.td   |  2 +-
+ llvm/lib/Target/AArch64/AArch64SchedA510.td   |  2 +-
+ .../Target/AArch64/AArch64SchedNeoverseN2.td  |  2 +-
+ .../Target/AArch64/AArch64SchedNeoverseN3.td  |  2 +-
+ .../Target/AArch64/AArch64SchedNeoverseV1.td  |  2 +-
+ .../Target/AArch64/AArch64SchedNeoverseV2.td  |  2 +-
+ llvm/lib/Target/AArch64/SVEInstrFormats.td    | 12 +++-
+ .../AArch64/expand-constructive-zzi.mir       | 61 +++++++++++++++++++
+ 12 files changed, 98 insertions(+), 12 deletions(-)
+ create mode 100644 llvm/test/CodeGen/AArch64/expand-constructive-zzi.mir
+
+diff --git a/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp b/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
+index d6a3d59b7ccf..1d27e2776cba 100644
+--- a/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
+@@ -528,6 +528,11 @@ bool AArch64ExpandPseudo::expand_DestructiveOp(
+       UseRev = true;
+     }
+     break;
++  case AArch64::Destructive2xRegImmUnpred:
++    // EXT_ZZI_CONSTRUCTIVE Zd, Zs, Imm
++    //      ==> MOVPRFX Zd Zs; EXT_ZZI Zd, Zd, Zs, Imm
++    std::tie(DOPIdx, SrcIdx, Src2Idx) = std::make_tuple(1, 1, 2);
++    break;
+   default:
+     llvm_unreachable("Unsupported Destructive Operand type");
+   }
+@@ -548,6 +553,7 @@ bool AArch64ExpandPseudo::expand_DestructiveOp(
+     break;
+   case AArch64::DestructiveUnaryPassthru:
+   case AArch64::DestructiveBinaryImm:
++  case AArch64::Destructive2xRegImmUnpred:
+     DOPRegIsUnique = true;
+     break;
+   case AArch64::DestructiveTernaryCommWithRev:
+@@ -674,6 +680,11 @@ bool AArch64ExpandPseudo::expand_DestructiveOp(
+         .add(MI.getOperand(SrcIdx))
+         .add(MI.getOperand(Src2Idx));
+     break;
++  case AArch64::Destructive2xRegImmUnpred:
++    DOP.addReg(MI.getOperand(DOPIdx).getReg(), DOPRegState)
++        .add(MI.getOperand(SrcIdx))
++        .add(MI.getOperand(Src2Idx));
++    break;
+   }
+ 
+   if (PRFX) {
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrFormats.td b/llvm/lib/Target/AArch64/AArch64InstrFormats.td
+index b033f889fbf6..456b21a70e90 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrFormats.td
++++ b/llvm/lib/Target/AArch64/AArch64InstrFormats.td
+@@ -36,7 +36,12 @@ def DestructiveBinary             : DestructiveInstTypeEnum<5>;
+ def DestructiveBinaryComm         : DestructiveInstTypeEnum<6>;
+ def DestructiveBinaryCommWithRev  : DestructiveInstTypeEnum<7>;
+ def DestructiveTernaryCommWithRev : DestructiveInstTypeEnum<8>;
+-def DestructiveUnaryPassthru      : DestructiveInstTypeEnum<9>;
++
++// 3 inputs unpredicated (reg1, reg2, imm).
++// Can be MOVPRFX'd iff reg1 == reg2.
++def Destructive2xRegImmUnpred     : DestructiveInstTypeEnum<9>;
++
++def DestructiveUnaryPassthru      : DestructiveInstTypeEnum<10>;
+ 
+ class FalseLanesEnum<bits<2> val> {
+   bits<2> Value = val;
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.h b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+index 7c255da333e4..b903cd90c1e7 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.h
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.h
+@@ -820,7 +820,8 @@ enum DestructiveInstType {
+   DestructiveBinaryComm         = TSFLAG_DESTRUCTIVE_INST_TYPE(0x6),
+   DestructiveBinaryCommWithRev  = TSFLAG_DESTRUCTIVE_INST_TYPE(0x7),
+   DestructiveTernaryCommWithRev = TSFLAG_DESTRUCTIVE_INST_TYPE(0x8),
+-  DestructiveUnaryPassthru      = TSFLAG_DESTRUCTIVE_INST_TYPE(0x9),
++  Destructive2xRegImmUnpred     = TSFLAG_DESTRUCTIVE_INST_TYPE(0x9),
++  DestructiveUnaryPassthru      = TSFLAG_DESTRUCTIVE_INST_TYPE(0xa),
+ };
+ 
+ enum FalseLaneType {
+diff --git a/llvm/lib/Target/AArch64/AArch64SVEInstrInfo.td b/llvm/lib/Target/AArch64/AArch64SVEInstrInfo.td
+index 0c4b4f4c3ed8..977523802765 100644
+--- a/llvm/lib/Target/AArch64/AArch64SVEInstrInfo.td
++++ b/llvm/lib/Target/AArch64/AArch64SVEInstrInfo.td
+@@ -1021,7 +1021,9 @@ let Predicates = [HasNonStreamingSVE_or_SME2p2] in {
+ let Predicates = [HasSVE_or_SME] in {
+   defm INSR_ZR : sve_int_perm_insrs<"insr", AArch64insr>;
+   defm INSR_ZV : sve_int_perm_insrv<"insr", AArch64insr>;
+-  defm EXT_ZZI : sve_int_perm_extract_i<"ext", AArch64ext>;
++  defm EXT_ZZI : sve_int_perm_extract_i<"ext", AArch64ext, "EXT_ZZI_CONSTRUCTIVE">;
++
++  def EXT_ZZI_CONSTRUCTIVE : UnpredRegImmPseudo<ZPR8, imm0_255>;
+ 
+   defm RBIT_ZPmZ : sve_int_perm_rev_rbit<"rbit", AArch64rbit_mt>;
+   defm REVB_ZPmZ : sve_int_perm_rev_revb<"revb", AArch64revb_mt>;
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedA320.td b/llvm/lib/Target/AArch64/AArch64SchedA320.td
+index 89ed13389daf..5ec95c707c28 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedA320.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedA320.td
+@@ -847,7 +847,7 @@ def : InstRW<[CortexA320Write<3, CortexA320UnitVALU>], (instregex "^[SU]XTB_ZPmZ
+                                             "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[CortexA320Write<3, CortexA320UnitVALU>], (instrs EXT_ZZI, EXT_ZZI_B)>;
++def : InstRW<[CortexA320Write<3, CortexA320UnitVALU>], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE, EXT_ZZI_B)>;
+ 
+ // Extract narrow saturating
+ def : InstRW<[CortexA320Write<4, CortexA320UnitVALU>], (instregex "^[SU]QXTN[BT]_ZZ_[BHS]",
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedA510.td b/llvm/lib/Target/AArch64/AArch64SchedA510.td
+index 945687894615..b93d67f3091e 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedA510.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedA510.td
+@@ -825,7 +825,7 @@ def : InstRW<[CortexA510Write<3, CortexA510UnitVALU>], (instregex "^[SU]XTB_ZPmZ
+                                             "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[CortexA510Write<3, CortexA510UnitVALU>], (instrs EXT_ZZI, EXT_ZZI_B)>;
++def : InstRW<[CortexA510Write<3, CortexA510UnitVALU>], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE, EXT_ZZI_B)>;
+ 
+ // Extract narrow saturating
+ def : InstRW<[CortexA510Write<4, CortexA510UnitVALU>], (instregex "^[SU]QXTN[BT]_ZZ_[BHS]",
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedNeoverseN2.td b/llvm/lib/Target/AArch64/AArch64SchedNeoverseN2.td
+index 91a707910a7f..e7982226ff3d 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedNeoverseN2.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedNeoverseN2.td
+@@ -1785,7 +1785,7 @@ def : InstRW<[N2Write_2c_1V1], (instregex "^[SU]XTB_ZPmZ_[HSD]",
+                                           "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[N2Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_B)>;
++def : InstRW<[N2Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE, EXT_ZZI_B)>;
+ 
+ // Extract narrow saturating
+ def : InstRW<[N2Write_4c_1V1], (instregex "^[SU]QXTN[BT]_ZZ_[BHS]$",
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedNeoverseN3.td b/llvm/lib/Target/AArch64/AArch64SchedNeoverseN3.td
+index ecfb1249cfc4..e44d40f8d702 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedNeoverseN3.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedNeoverseN3.td
+@@ -1757,7 +1757,7 @@ def : InstRW<[N3Write_2c_1V], (instregex "^[SU]XTB_ZPmZ_[HSD]",
+                                          "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[N3Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_B)>;
++def : InstRW<[N3Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE, EXT_ZZI_B)>;
+ 
+ // Extract narrow saturating
+ def : InstRW<[N3Write_4c_1V1], (instregex "^[SU]QXTN[BT]_ZZ_[BHS]$",
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedNeoverseV1.td b/llvm/lib/Target/AArch64/AArch64SchedNeoverseV1.td
+index 368665467859..44625a2034d9 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedNeoverseV1.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedNeoverseV1.td
+@@ -1575,7 +1575,7 @@ def : InstRW<[V1Write_2c_1V1], (instregex "^[SU]XTB_ZPmZ_[HSD]",
+                                           "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[V1Write_2c_1V01], (instrs EXT_ZZI)>;
++def : InstRW<[V1Write_2c_1V01], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE)>;
+ 
+ // Extract/insert operation, SIMD and FP scalar form
+ def : InstRW<[V1Write_3c_1V1], (instregex "^LAST[AB]_VPZ_[BHSD]$",
+diff --git a/llvm/lib/Target/AArch64/AArch64SchedNeoverseV2.td b/llvm/lib/Target/AArch64/AArch64SchedNeoverseV2.td
+index b2c3da03b4b8..626122008202 100644
+--- a/llvm/lib/Target/AArch64/AArch64SchedNeoverseV2.td
++++ b/llvm/lib/Target/AArch64/AArch64SchedNeoverseV2.td
+@@ -2272,7 +2272,7 @@ def : InstRW<[V2Write_2c_1V13], (instregex "^[SU]XTB_ZPmZ_[HSD]",
+                                            "^[SU]XTW_ZPmZ_[D]")>;
+ 
+ // Extract
+-def : InstRW<[V2Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_B)>;
++def : InstRW<[V2Write_2c_1V], (instrs EXT_ZZI, EXT_ZZI_CONSTRUCTIVE, EXT_ZZI_B)>;
+ 
+ // Extract narrow saturating
+ def : InstRW<[V2Write_4c_1V13], (instregex "^[SU]QXTN[BT]_ZZ_[BHS]",
+diff --git a/llvm/lib/Target/AArch64/SVEInstrFormats.td b/llvm/lib/Target/AArch64/SVEInstrFormats.td
+index a0320f919e8c..a3a7d0f74e1b 100644
+--- a/llvm/lib/Target/AArch64/SVEInstrFormats.td
++++ b/llvm/lib/Target/AArch64/SVEInstrFormats.td
+@@ -809,6 +809,11 @@ let hasNoSchedulingInfo = 1 in {
+     Pseudo<(outs zprty:$Zd), (ins PPR3bAny:$Pg, zprty:$Zs1, zprty:$Zs2, zprty:$Zs3), []> {
+     let FalseLanes = flags;
+   }
++
++  class UnpredRegImmPseudo<ZPRRegOp zprty, Operand immty>
++  : SVEPseudo2Instr<NAME, 0>,
++    Pseudo<(outs zprty:$Zd), (ins zprty:$Zs, immty:$imm), []> {
++  }
+ }
+ 
+ //
+@@ -1885,13 +1890,14 @@ class sve_int_perm_extract_i<string asm>
+   let Inst{4-0}   = Zdn;
+ 
+   let Constraints = "$Zdn = $_Zdn";
+-  let DestructiveInstType = DestructiveOther;
++  let DestructiveInstType = Destructive2xRegImmUnpred;
+   let ElementSize = ElementSizeNone;
+   let hasSideEffects = 0;
+ }
+ 
+-multiclass sve_int_perm_extract_i<string asm, SDPatternOperator op> {
+-  def NAME : sve_int_perm_extract_i<asm>;
++multiclass sve_int_perm_extract_i<string asm, SDPatternOperator op, string Ps> {
++  def NAME : sve_int_perm_extract_i<asm>,
++             SVEPseudo2Instr<Ps, 1>;
+ 
+   def : SVE_3_Op_Imm_Pat<nxv16i8, op, nxv16i8, nxv16i8, i32, imm0_255,
+                          !cast<Instruction>(NAME)>;
+diff --git a/llvm/test/CodeGen/AArch64/expand-constructive-zzi.mir b/llvm/test/CodeGen/AArch64/expand-constructive-zzi.mir
+new file mode 100644
+index 000000000000..55287712b12c
+--- /dev/null
++++ b/llvm/test/CodeGen/AArch64/expand-constructive-zzi.mir
+@@ -0,0 +1,61 @@
++# NOTE: Assertions have been autogenerated by utils/update_mir_test_checks.py UTC_ARGS: --version 5
++# RUN: llc -mtriple=aarch64 -mattr=+sve -run-pass=aarch64-expand-pseudo -verify-machineinstrs %s -o - | FileCheck %s
++
++# Test the expansion of constructive binary operations into their
++# destructive counterparts.
++
++
++# EXT_ZZI_CONSTRUCTIVE
++
++---
++name:            test_ext_zzi_unique
++body:             |
++  bb.0:
++    ; CHECK-LABEL: name: test_ext_zzi_unique
++    ; CHECK: BUNDLE implicit-def $z2, implicit-def $q2, implicit-def $d2, implicit-def $s2, implicit-def $h2, implicit-def $b2, implicit-def $b2_hi, implicit-def $h2_hi, implicit-def $s2_hi, implicit-def $d2_hi, implicit-def $q2_hi, implicit killed $z0 {
++    ; CHECK-NEXT:   $z2 = MOVPRFX_ZZ $z0
++    ; CHECK-NEXT:   $z2 = EXT_ZZI internal killed $z2, killed $z0, 1
++    ; CHECK-NEXT: }
++    ; CHECK-NEXT: RET undef $lr, implicit killed $z2
++    $z2 = EXT_ZZI_CONSTRUCTIVE killed $z0, 1
++    RET_ReallyLR implicit killed $z2
++...
++
++---
++name:            test_ext_zzi_already_destructive
++body:             |
++  bb.0:
++    ; CHECK-LABEL: name: test_ext_zzi_already_destructive
++    ; CHECK: $z2 = EXT_ZZI killed $z2, killed $z2, 1
++    ; CHECK-NEXT: RET undef $lr, implicit killed $z2
++    $z2 = EXT_ZZI_CONSTRUCTIVE killed $z2, 1
++    RET_ReallyLR implicit killed $z2
++...
++
++---
++name:            test_ext_zzi_unique_implicit_ops
++body:             |
++  bb.0:
++    ; CHECK-LABEL: name: test_ext_zzi_unique_implicit_ops
++    ; CHECK: BUNDLE implicit-def $z2, implicit-def $q2, implicit-def $d2, implicit-def $s2, implicit-def $h2, implicit-def $b2, implicit-def $b2_hi, implicit-def $h2_hi, implicit-def $s2_hi, implicit-def $d2_hi, implicit-def $q2_hi, implicit killed $z0, implicit killed $q0 {
++    ; CHECK-NEXT:   $z2 = MOVPRFX_ZZ $z0, implicit killed $q0
++    ; CHECK-NEXT:   $z2 = EXT_ZZI internal killed $z2, killed $z0, 1, implicit-def $q2
++    ; CHECK-NEXT: }
++    ; CHECK-NEXT: RET undef $lr, implicit killed $q2
++    $z2 = EXT_ZZI_CONSTRUCTIVE killed $z0, 1, implicit-def $q2, implicit killed $q0
++    RET_ReallyLR implicit killed $q2
++...
++
++---
++name:            test_ext_zzi_undef
++body:             |
++  bb.0:
++    ; CHECK-LABEL: name: test_ext_zzi_undef
++    ; CHECK: BUNDLE implicit-def $z2, implicit-def $q2, implicit-def $d2, implicit-def $s2, implicit-def $h2, implicit-def $b2, implicit-def $b2_hi, implicit-def $h2_hi, implicit-def $s2_hi, implicit-def $d2_hi, implicit-def $q2_hi, implicit undef $z0 {
++    ; CHECK-NEXT:   $z2 = MOVPRFX_ZZ undef $z0
++    ; CHECK-NEXT:   $z2 = EXT_ZZI internal killed $z2, undef $z0, 1
++    ; CHECK-NEXT: }
++    ; CHECK-NEXT: RET undef $lr, implicit killed $z2
++    $z2 = EXT_ZZI_CONSTRUCTIVE undef $z0, 1
++    RET_ReallyLR implicit killed $z2
++...
+-- 
+2.52.0.457.g6b5491de43-goog
+

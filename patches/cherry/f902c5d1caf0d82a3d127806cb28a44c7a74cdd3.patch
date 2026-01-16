@@ -1,0 +1,399 @@
+From f902c5d1caf0d82a3d127806cb28a44c7a74cdd3 Mon Sep 17 00:00:00 2001
+From: David Green <david.green@arm.com>
+Date: Thu, 28 Aug 2025 21:26:12 +0100
+Subject: [PATCH] [AArch64] Add a FeatureFuseCmpCSet (#153189)
+
+This adds a new feature, FeatureFuseCmpCSet, and adds it to cpus that
+according to the SWOG can fuse cmp+cset. The existing
+FeatureFuseCCSelect was renamed FeatureFuseCmpCSel for consistency.
+---
+ llvm/lib/Target/AArch64/AArch64Features.td    | 10 ++-
+ .../lib/Target/AArch64/AArch64MacroFusion.cpp | 42 ++++++++++++-
+ llvm/lib/Target/AArch64/AArch64Processors.td  | 62 ++++++++++++-------
+ llvm/lib/Target/AArch64/AArch64Subtarget.h    |  4 +-
+ .../test/CodeGen/AArch64/misched-fuse-cset.ll | 43 +++++++++++++
+ 5 files changed, 130 insertions(+), 31 deletions(-)
+ create mode 100644 llvm/test/CodeGen/AArch64/misched-fuse-cset.ll
+
+diff --git a/llvm/lib/Target/AArch64/AArch64Features.td b/llvm/lib/Target/AArch64/AArch64Features.td
+index 00cf039096d3..6904e0907264 100644
+--- a/llvm/lib/Target/AArch64/AArch64Features.td
++++ b/llvm/lib/Target/AArch64/AArch64Features.td
+@@ -732,9 +732,13 @@ def FeatureFuseArithmeticLogic : SubtargetFeature<
+     "fuse-arith-logic", "HasFuseArithmeticLogic", "true",
+     "CPU fuses arithmetic and logic operations">;
+ 
+-def FeatureFuseCCSelect : SubtargetFeature<
+-    "fuse-csel", "HasFuseCCSelect", "true",
+-    "CPU fuses conditional select operations">;
++def FeatureFuseCmpCSel : SubtargetFeature<
++    "fuse-csel", "HasFuseCmpCSel", "true",
++    "CPU can fuse CMP and CSEL operations">;
++
++def FeatureFuseCmpCSet : SubtargetFeature<
++    "fuse-cset", "HasFuseCmpCSet", "true",
++    "CPU can fuse CMP and CSET operations">;
+ 
+ def FeatureFuseCryptoEOR : SubtargetFeature<
+     "fuse-crypto-eor", "HasFuseCryptoEOR", "true",
+diff --git a/llvm/lib/Target/AArch64/AArch64MacroFusion.cpp b/llvm/lib/Target/AArch64/AArch64MacroFusion.cpp
+index ff7a0d1faedf..f4a7f774d477 100644
+--- a/llvm/lib/Target/AArch64/AArch64MacroFusion.cpp
++++ b/llvm/lib/Target/AArch64/AArch64MacroFusion.cpp
+@@ -237,8 +237,8 @@ static bool isAddressLdStPair(const MachineInstr *FirstMI,
+ }
+ 
+ /// Compare and conditional select.
+-static bool isCCSelectPair(const MachineInstr *FirstMI,
+-                           const MachineInstr &SecondMI) {
++static bool isCmpCSelPair(const MachineInstr *FirstMI,
++                          const MachineInstr &SecondMI) {
+   // 32 bits
+   if (SecondMI.getOpcode() == AArch64::CSELWr) {
+     // Assume the 1st instr to be a wildcard if it is unspecified.
+@@ -279,6 +279,40 @@ static bool isCCSelectPair(const MachineInstr *FirstMI,
+   return false;
+ }
+ 
++/// Compare and cset.
++static bool isCmpCSetPair(const MachineInstr *FirstMI,
++                          const MachineInstr &SecondMI) {
++  if ((SecondMI.getOpcode() == AArch64::CSINCWr &&
++       SecondMI.getOperand(1).getReg() == AArch64::WZR &&
++       SecondMI.getOperand(2).getReg() == AArch64::WZR) ||
++      (SecondMI.getOpcode() == AArch64::CSINCXr &&
++       SecondMI.getOperand(1).getReg() == AArch64::XZR &&
++       SecondMI.getOperand(2).getReg() == AArch64::XZR)) {
++    // Assume the 1st instr to be a wildcard if it is unspecified.
++    if (FirstMI == nullptr)
++      return true;
++
++    if (FirstMI->definesRegister(AArch64::WZR, /*TRI=*/nullptr) ||
++        FirstMI->definesRegister(AArch64::XZR, /*TRI=*/nullptr))
++      switch (FirstMI->getOpcode()) {
++      case AArch64::SUBSWrs:
++      case AArch64::SUBSXrs:
++        return !AArch64InstrInfo::hasShiftedReg(*FirstMI);
++      case AArch64::SUBSWrx:
++      case AArch64::SUBSXrx:
++      case AArch64::SUBSXrx64:
++        return !AArch64InstrInfo::hasExtendedReg(*FirstMI);
++      case AArch64::SUBSWri:
++      case AArch64::SUBSWrr:
++      case AArch64::SUBSXri:
++      case AArch64::SUBSXrr:
++        return true;
++      }
++  }
++
++  return false;
++}
++
+ // Arithmetic and logic.
+ static bool isArithmeticLogicPair(const MachineInstr *FirstMI,
+                                   const MachineInstr &SecondMI) {
+@@ -465,7 +499,9 @@ static bool shouldScheduleAdjacent(const TargetInstrInfo &TII,
+     return true;
+   if (ST.hasFuseAddress() && isAddressLdStPair(FirstMI, SecondMI))
+     return true;
+-  if (ST.hasFuseCCSelect() && isCCSelectPair(FirstMI, SecondMI))
++  if (ST.hasFuseCmpCSel() && isCmpCSelPair(FirstMI, SecondMI))
++    return true;
++  if (ST.hasFuseCmpCSet() && isCmpCSetPair(FirstMI, SecondMI))
+     return true;
+   if (ST.hasFuseArithmeticLogic() && isArithmeticLogicPair(FirstMI, SecondMI))
+     return true;
+diff --git a/llvm/lib/Target/AArch64/AArch64Processors.td b/llvm/lib/Target/AArch64/AArch64Processors.td
+index 31f14a2bc44f..d5f4e91ae518 100644
+--- a/llvm/lib/Target/AArch64/AArch64Processors.td
++++ b/llvm/lib/Target/AArch64/AArch64Processors.td
+@@ -134,7 +134,8 @@ def TuneA78 : SubtargetFeature<"a78", "ARMProcFamily", "CortexA78",
+                                FeatureCmpBccFusion,
+                                FeatureFuseAES,
+                                FeatureFuseAdrpAdd,
+-                               FeatureFuseCCSelect,
++                               FeatureFuseCmpCSel,
++                               FeatureFuseCmpCSet,
+                                FeatureAddrLSLSlow14,
+                                FeatureALULSLFast,
+                                FeaturePostRAScheduler,
+@@ -147,7 +148,8 @@ def TuneA78AE : SubtargetFeature<"a78ae", "ARMProcFamily",
+                                  FeatureCmpBccFusion,
+                                  FeatureFuseAES,
+                                  FeatureFuseAdrpAdd,
+-                                 FeatureFuseCCSelect,
++                                 FeatureFuseCmpCSel,
++                                 FeatureFuseCmpCSet,
+                                  FeatureAddrLSLSlow14,
+                                  FeatureALULSLFast,
+                                  FeaturePostRAScheduler,
+@@ -160,7 +162,8 @@ def TuneA78C : SubtargetFeature<"a78c", "ARMProcFamily",
+                                 FeatureCmpBccFusion,
+                                 FeatureFuseAES,
+                                 FeatureFuseAdrpAdd,
+-                                FeatureFuseCCSelect,
++                                FeatureFuseCmpCSel,
++                                FeatureFuseCmpCSet,
+                                 FeatureAddrLSLSlow14,
+                                 FeatureALULSLFast,
+                                 FeaturePostRAScheduler,
+@@ -172,7 +175,8 @@ def TuneA710    : SubtargetFeature<"a710", "ARMProcFamily", "CortexA710",
+                                    FeatureCmpBccFusion,
+                                    FeatureFuseAES,
+                                    FeatureFuseAdrpAdd,
+-                                   FeatureFuseCCSelect,
++                                   FeatureFuseCmpCSel,
++                                   FeatureFuseCmpCSet,
+                                    FeatureALULSLFast,
+                                    FeaturePostRAScheduler,
+                                    FeatureEnableSelectOptimize,
+@@ -185,7 +189,8 @@ def TuneA715 : SubtargetFeature<"a715", "ARMProcFamily", "CortexA715",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
+-                                 FeatureFuseCCSelect,
++                                 FeatureFuseCmpCSel,
++                                 FeatureFuseCmpCSet,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -196,7 +201,8 @@ def TuneA720 : SubtargetFeature<"a720", "ARMProcFamily", "CortexA720",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
+-                                 FeatureFuseCCSelect,
++                                 FeatureFuseCmpCSel,
++                                 FeatureFuseCmpCSet,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -207,7 +213,8 @@ def TuneA720AE : SubtargetFeature<"a720ae", "ARMProcFamily", "CortexA720",
+                                  FeatureCmpBccFusion,
+                                  FeatureALULSLFast,
+                                  FeatureFuseAdrpAdd,
+-                                 FeatureFuseCCSelect,
++                                 FeatureFuseCmpCSel,
++                                 FeatureFuseCmpCSet,
+                                  FeatureEnableSelectOptimize,
+                                  FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -219,7 +226,8 @@ def TuneA725 : SubtargetFeature<"cortex-a725", "ARMProcFamily",
+                                 FeatureCmpBccFusion,
+                                 FeatureALULSLFast,
+                                 FeatureFuseAdrpAdd,
+-                                FeatureFuseCCSelect,
++                                FeatureFuseCmpCSel,
++                                FeatureFuseCmpCSet,
+                                 FeatureEnableSelectOptimize,
+                                 FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -270,7 +278,8 @@ def TuneX4 : SubtargetFeature<"cortex-x4", "ARMProcFamily", "CortexX4",
+                               "Cortex-X4 ARM processors", [
+                                FeatureALULSLFast,
+                                FeatureFuseAdrpAdd,
+-                               FeatureFuseCCSelect,
++                               FeatureFuseCmpCSel,
++                               FeatureFuseCmpCSet,
+                                FeatureFuseAES,
+                                FeaturePostRAScheduler,
+                                FeatureEnableSelectOptimize,
+@@ -282,7 +291,8 @@ def TuneX925 : SubtargetFeature<"cortex-x925", "ARMProcFamily",
+                                 "CortexX925", "Cortex-X925 ARM processors",[
+                                 FeatureALULSLFast,
+                                 FeatureFuseAdrpAdd,
+-                                FeatureFuseCCSelect,
++                                FeatureFuseCmpCSel,
++                                FeatureFuseCmpCSet,
+                                 FeatureFuseAES,
+                                 FeaturePostRAScheduler,
+                                 FeatureEnableSelectOptimize,
+@@ -402,7 +412,7 @@ def TuneAppleA14 : SubtargetFeature<"apple-a14", "ARMProcFamily", "AppleA14",
+                                     FeatureFuseAddress,
+                                     FeatureFuseAES,
+                                     FeatureFuseArithmeticLogic,
+-                                    FeatureFuseCCSelect,
++                                    FeatureFuseCmpCSel,
+                                     FeatureFuseCryptoEOR,
+                                     FeatureFuseLiterals,
+                                     FeatureStorePairSuppress,
+@@ -421,7 +431,7 @@ def TuneAppleA15 : SubtargetFeature<"apple-a15", "ARMProcFamily", "AppleA15",
+                                     FeatureFuseAdrpAdd,
+                                     FeatureFuseAES,
+                                     FeatureFuseArithmeticLogic,
+-                                    FeatureFuseCCSelect,
++                                    FeatureFuseCmpCSel,
+                                     FeatureFuseCryptoEOR,
+                                     FeatureFuseLiterals,
+                                     FeatureStorePairSuppress,
+@@ -440,7 +450,7 @@ def TuneAppleA16 : SubtargetFeature<"apple-a16", "ARMProcFamily", "AppleA16",
+                                     FeatureFuseAdrpAdd,
+                                     FeatureFuseAES,
+                                     FeatureFuseArithmeticLogic,
+-                                    FeatureFuseCCSelect,
++                                    FeatureFuseCmpCSel,
+                                     FeatureFuseCryptoEOR,
+                                     FeatureFuseLiterals,
+                                     FeatureStorePairSuppress,
+@@ -459,7 +469,7 @@ def TuneAppleA17 : SubtargetFeature<"apple-a17", "ARMProcFamily", "AppleA17",
+                                     FeatureFuseAdrpAdd,
+                                     FeatureFuseAES,
+                                     FeatureFuseArithmeticLogic,
+-                                    FeatureFuseCCSelect,
++                                    FeatureFuseCmpCSel,
+                                     FeatureFuseCryptoEOR,
+                                     FeatureFuseLiterals,
+                                     FeatureStorePairSuppress,
+@@ -478,7 +488,7 @@ def TuneAppleM4 : SubtargetFeature<"apple-m4", "ARMProcFamily", "AppleM4",
+                                      FeatureFuseAdrpAdd,
+                                      FeatureFuseAES,
+                                      FeatureFuseArithmeticLogic,
+-                                     FeatureFuseCCSelect,
++                                     FeatureFuseCmpCSel,
+                                      FeatureFuseCryptoEOR,
+                                      FeatureFuseLiterals,
+                                      FeatureZCRegMoveGPR64,
+@@ -492,7 +502,7 @@ def TuneExynosM3 : SubtargetFeature<"exynosm3", "ARMProcFamily", "ExynosM3",
+                                      FeatureForce32BitJumpTables,
+                                      FeatureFuseAddress,
+                                      FeatureFuseAES,
+-                                     FeatureFuseCCSelect,
++                                     FeatureFuseCmpCSel,
+                                      FeatureFuseAdrpAdd,
+                                      FeatureFuseLiterals,
+                                      FeatureStorePairSuppress,
+@@ -510,7 +520,7 @@ def TuneExynosM4 : SubtargetFeature<"exynosm4", "ARMProcFamily", "ExynosM3",
+                                      FeatureFuseAddress,
+                                      FeatureFuseAES,
+                                      FeatureFuseArithmeticLogic,
+-                                     FeatureFuseCCSelect,
++                                     FeatureFuseCmpCSel,
+                                      FeatureFuseAdrpAdd,
+                                      FeatureFuseLiterals,
+                                      FeatureStorePairSuppress,
+@@ -558,7 +568,8 @@ def TuneNeoverseN2 : SubtargetFeature<"neoversen2", "ARMProcFamily", "NeoverseN2
+                                       "Neoverse N2 ARM processors", [
+                                       FeatureFuseAES,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+@@ -570,7 +581,8 @@ def TuneNeoverseN3 : SubtargetFeature<"neoversen3", "ARMProcFamily", "NeoverseN3
+                                       FeaturePostRAScheduler,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeatureEnableSelectOptimize,
+                                       FeaturePredictableSelectIsExpensive]>;
+ 
+@@ -587,7 +599,8 @@ def TuneNeoverseV1 : SubtargetFeature<"neoversev1", "ARMProcFamily", "NeoverseV1
+                                       "Neoverse V1 ARM processors", [
+                                       FeatureFuseAES,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeatureAddrLSLSlow14,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+@@ -600,7 +613,8 @@ def TuneNeoverseV2 : SubtargetFeature<"neoversev2", "ARMProcFamily", "NeoverseV2
+                                       FeatureFuseAES,
+                                       FeatureCmpBccFusion,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeatureALULSLFast,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+@@ -614,7 +628,8 @@ def TuneNeoverseV3 : SubtargetFeature<"neoversev3", "ARMProcFamily", "NeoverseV3
+                                       FeatureFuseAES,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+                                       FeatureAvoidLDAPUR,
+@@ -625,7 +640,8 @@ def TuneNeoverseV3AE : SubtargetFeature<"neoversev3AE", "ARMProcFamily", "Neover
+                                       FeatureFuseAES,
+                                       FeatureALULSLFast,
+                                       FeatureFuseAdrpAdd,
+-                                      FeatureFuseCCSelect,
++                                      FeatureFuseCmpCSel,
++                                      FeatureFuseCmpCSet,
+                                       FeaturePostRAScheduler,
+                                       FeatureEnableSelectOptimize,
+                                       FeatureAvoidLDAPUR,
+diff --git a/llvm/lib/Target/AArch64/AArch64Subtarget.h b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+index 01c0bcc3a6a7..671df35cd379 100644
+--- a/llvm/lib/Target/AArch64/AArch64Subtarget.h
++++ b/llvm/lib/Target/AArch64/AArch64Subtarget.h
+@@ -246,8 +246,8 @@ public:
+   /// Return true if the CPU supports any kind of instruction fusion.
+   bool hasFusion() const {
+     return hasArithmeticBccFusion() || hasArithmeticCbzFusion() ||
+-           hasFuseAES() || hasFuseArithmeticLogic() || hasFuseCCSelect() ||
+-           hasFuseAdrpAdd() || hasFuseLiterals();
++           hasFuseAES() || hasFuseArithmeticLogic() || hasFuseCmpCSel() ||
++           hasFuseCmpCSet() || hasFuseAdrpAdd() || hasFuseLiterals();
+   }
+ 
+   unsigned getEpilogueVectorizationMinVF() const {
+diff --git a/llvm/test/CodeGen/AArch64/misched-fuse-cset.ll b/llvm/test/CodeGen/AArch64/misched-fuse-cset.ll
+new file mode 100644
+index 000000000000..fa729d04a79e
+--- /dev/null
++++ b/llvm/test/CodeGen/AArch64/misched-fuse-cset.ll
+@@ -0,0 +1,43 @@
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mattr=+fuse-cset | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a78  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a710  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a715  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a720  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-a725  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-x4  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=cortex-x925  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-n2  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-n3  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v1  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v2  | FileCheck %s
++; RUN: llc %s -o - -mtriple=aarch64-unknown -mcpu=neoverse-v3  | FileCheck %s
++
++target triple = "aarch64-unknown"
++
++define i32 @test_sub_cselw(i32 %a0, i32 %a1, i32 %a2) {
++entry:
++  %v0 = sub i32 %a0, 13
++  %cond = icmp eq i32 %v0, 0
++  %v1 = add i32 %a1, 7
++  %v2 = select i1 %cond, i32 0, i32 1
++  %v3 = xor i32 %v1, %v2
++  ret i32 %v3
++
++; CHECK-LABEL: test_sub_cselw:
++; CHECK: cmp {{w[0-9]}}, #13
++; CHECK-NEXT: cset {{w[0-9]}}
++}
++
++define i64 @test_sub_cselx(i64 %a0, i64 %a1, i64 %a2) {
++entry:
++  %v0 = sub i64 %a0, 13
++  %cond = icmp eq i64 %v0, 0
++  %v1 = add i64 %a1, 7
++  %v2 = select i1 %cond, i64 0, i64 1
++  %v3 = xor i64 %v1, %v2
++  ret i64 %v3
++
++; CHECK-LABEL: test_sub_cselx:
++; CHECK: cmp {{x[0-9]}}, #13
++; CHECK-NEXT: cset {{w[0-9]}}
++}
+-- 
+2.52.0.457.g6b5491de43-goog
+
