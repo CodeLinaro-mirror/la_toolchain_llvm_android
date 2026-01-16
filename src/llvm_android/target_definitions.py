@@ -79,6 +79,17 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
+        "llvm_linux_arm64": [
+            "toolchain/llvm_android/build.py",
+            "--musl",
+            "--lto",
+            "--lfi",
+            "--create-tar",
+            "--no-build=windows",
+            "--builders-package",
+            "--build-name", BUILD_NAME,
+            "--no-incremental",
+        ],
         "llvm_linux_bootstrap": [
             "toolchain/llvm_android/build.py",
             "--mlgo",
