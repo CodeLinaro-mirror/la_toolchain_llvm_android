@@ -768,5 +768,19 @@
             "from": 584948,
             "until": 584949
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "LFI Support Patch for r596125"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "LFI_Support-Patch-2bc22e.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596126
+        }
     }
 ]
