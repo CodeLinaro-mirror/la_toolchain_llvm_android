@@ -1,4 +1,4 @@
-From 47679934e257b9f59ef1706d0404c2c3dfde61dc Mon Sep 17 00:00:00 2001
+From fb6f9d66704e94eb6c68ac4280fdadac94d54c12 Mon Sep 17 00:00:00 2001
 From: Zachary Yedidia <zyedidia@gmail.com>
 Date: Mon, 13 Oct 2025 13:47:03 -0700
 Subject: [PATCH] AArch64 LFI Rewriter with Guard Elimination
@@ -39,8 +39,8 @@ Subject: [PATCH] AArch64 LFI Rewriter with Guard Elimination
  llvm/lib/Target/AArch64/AArch64Subtarget.h    |    3 +
  .../Target/AArch64/AArch64TargetMachine.cpp   |    5 +
  .../MCTargetDesc/AArch64InstPrinter.cpp       |  360 ----
- .../MCTargetDesc/AArch64MCLFIExpander.cpp     | 1701 +++++++++++++++++
- .../MCTargetDesc/AArch64MCLFIExpander.h       |  116 ++
+ .../MCTargetDesc/AArch64MCLFIExpander.cpp     | 1729 +++++++++++++++++
+ .../MCTargetDesc/AArch64MCLFIExpander.h       |  120 ++
  .../MCTargetDesc/AArch64MCTargetDesc.cpp      |   13 +
  .../AArch64/MCTargetDesc/CMakeLists.txt       |    1 +
  .../Target/AArch64/Utils/AArch64BaseInfo.cpp  |  352 ++++
@@ -58,7 +58,7 @@ Subject: [PATCH] AArch64 LFI Rewriter with Guard Elimination
  llvm/test/MC/AArch64/LFI/sys.s                |   49 +
  llvm/test/MC/AArch64/LFI/tls-reg.s            |   13 +
  llvm/tools/llvm-mc/llvm-mc.cpp                |   14 +
- 54 files changed, 4194 insertions(+), 369 deletions(-)
+ 54 files changed, 4226 insertions(+), 369 deletions(-)
  create mode 100644 clang/lib/Driver/ToolChains/LFILinux.cpp
  create mode 100644 clang/lib/Driver/ToolChains/LFILinux.h
  create mode 100644 llvm/include/llvm/MC/MCLFI.h
@@ -1743,10 +1743,10 @@ index 3c8b5712c1f0..74468e9b6ce5 100644
                                          const MCSubtargetInfo &STI,
 diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.cpp
 new file mode 100644
-index 000000000000..c32bf4f7d9d2
+index 000000000000..3b16746137aa
 --- /dev/null
 +++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.cpp
-@@ -0,0 +1,1701 @@
+@@ -0,0 +1,1729 @@
 +//===- AArch64MCLFIExpander.cpp ---------------------------------*- C++ -*-===//
 +//
 +//                     The LLVM Compiler Infrastructure
@@ -1928,6 +1928,8 @@ index 000000000000..c32bf4f7d9d2
 +void AArch64::AArch64MCLFIExpander::expandReturn(const MCInst &Inst,
 +                                                 MCStreamer &Out,
 +                                                 const MCSubtargetInfo &STI) {
++  if (Inst.getNumOperands() == 0)
++    return Out.getContext().reportError(Inst.getLoc(), "non-basic ret is not supported by LFI");
 +  assert(Inst.getOperand(0).isReg());
 +  if (Inst.getOperand(0).getReg() != AArch64::LR)
 +    expandIndirectBranch(Inst, Out, STI, false);
@@ -1965,13 +1967,12 @@ index 000000000000..c32bf4f7d9d2
 +
 +void AArch64::AArch64MCLFIExpander::expandLRModification(
 +    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
-+  MCRegister Scratch = getScratch();
-+  MCInst New = replaceReg(Inst, Scratch, AArch64::LR);
-+  if (mayLoad(New) || mayStore(New))
-+    expandLoadStore(New, Out, STI);
++  if (mayLoad(Inst) || mayStore(Inst))
++    expandLoadStore(Inst, Out, STI);
 +  else
-+    emitInst(New, Out, STI);
-+  emitAddMask(AArch64::LR, Scratch, Out, STI);
++    emitInst(Inst, Out, STI);
++  // Emit a guard for LR when we reach the end of the basic block.
++  DeferredLRGuard = true;
 +}
 +
 +void AArch64::AArch64MCLFIExpander::expandStackModification(
@@ -2226,6 +2227,14 @@ index 000000000000..c32bf4f7d9d2
 +  emitAddMask(AArch64::LR, Scratch, Out, STI);
 +}
 +
++void AArch64::AArch64MCLFIExpander::expandAutiasp(const MCInst &Inst,
++                                                  MCStreamer &Out,
++                                                  const MCSubtargetInfo &STI) {
++  emitInst(Inst, Out, STI);
++  // force immediate validation
++  emit(AArch64::LDRXui, AArch64::XZR, AArch64::LR, 0, *this, Out, STI);
++}
++
 +void AArch64::AArch64MCLFIExpander::expandSyscall(const MCInst &Inst,
 +                                                  MCStreamer &Out,
 +                                                  const MCSubtargetInfo &STI) {
@@ -2273,6 +2282,11 @@ index 000000000000..c32bf4f7d9d2
 +  return Inst.getOpcode() == AArch64::SVC;
 +}
 +
++static bool isAutiasp(const MCInst &Inst) {
++  return Inst.getOpcode() == AArch64::AUTIASP ||
++    (Inst.getOpcode() == AArch64::HINT && Inst.getOperand(0).getImm() == 29);
++}
++
 +static bool isTLSRead(const MCInst &Inst) {
 +  return Inst.getOpcode() == AArch64::MRS &&
 +         Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
@@ -2292,6 +2306,13 @@ index 000000000000..c32bf4f7d9d2
 +        return Out.getContext().reportError(
 +            Inst.getLoc(), "illegal modification guarded register");
 +
++  // Emit a guard for LR if there is one pending.
++  if (mayAffectControlFlow(Inst))
++    if (DeferredLRGuard) {
++      emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
++      DeferredLRGuard = false;
++    }
++
 +  if (isSyscall(Inst))
 +    return expandSyscall(Inst, Out, STI);
 +
@@ -2300,6 +2321,9 @@ index 000000000000..c32bf4f7d9d2
 +
 +  if (isTLSWrite(Inst))
 +    return expandTLSWrite(Inst, Out, STI);
++
++  if (isAutiasp(Inst))
++    return expandAutiasp(Inst, Out, STI);
 +
 +  if (isReturn(Inst))
 +    return expandReturn(Inst, Out, STI);
@@ -2352,6 +2376,10 @@ index 000000000000..c32bf4f7d9d2
 +                                          const MCSubtargetInfo &STI) {
 +  ActiveBB = false;
 +  ActiveGuard = false;
++  if (DeferredLRGuard) {
++    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
++    DeferredLRGuard = false;
++  }
 +}
 +
 +bool AArch64::AArch64MCLFIExpander::expandInst(const MCInst &Inst,
@@ -3450,10 +3478,10 @@ index 000000000000..c32bf4f7d9d2
 +}
 diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.h
 new file mode 100644
-index 000000000000..0198ae267b84
+index 000000000000..75e3c5cb1806
 --- /dev/null
 +++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIExpander.h
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,120 @@
 +//===- AArch64MCLFIExpander.h -----------------------------------*- C++ -*-===//
 +//
 +// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
@@ -3502,6 +3530,7 @@ index 000000000000..0198ae267b84
 +
 +  bool ActiveBB = false;
 +  bool ActiveGuard = false;
++  bool DeferredLRGuard = false;
 +  MCRegister ActiveGuardReg;
 +
 +  MCRegister getScratch();
@@ -3543,6 +3572,9 @@ index 000000000000..0198ae267b84
 +                          MCStreamer &Out, const MCSubtargetInfo &STI);
 +
 +  void expandSyscall(const MCInst &Inst, MCStreamer &Out,
++                     const MCSubtargetInfo &STI);
++
++  void expandAutiasp(const MCInst &Inst, MCStreamer &Out,
 +                     const MCSubtargetInfo &STI);
 +
 +  void expandTLSRead(const MCInst &Inst, MCStreamer &Out,
@@ -5181,29 +5213,29 @@ index 000000000000..e387ec5ec21e
 +// CHECK-ERROR:        ^
 diff --git a/llvm/test/MC/AArch64/LFI/return.s b/llvm/test/MC/AArch64/LFI/return.s
 new file mode 100644
-index 000000000000..129562613496
+index 000000000000..a5b6045710fd
 --- /dev/null
 +++ b/llvm/test/MC/AArch64/LFI/return.s
 @@ -0,0 +1,19 @@
 +// RUN: llvm-mc -filetype asm -triple aarch64_lfi %s | FileCheck %s
 +
++.bb_start
 +mov x30, x0
-+// CHECK:      mov x26, x0
-+// CHECK-NEXT: add x30, x27, w26, uxtw
++.bb_end
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
 +
++.bb_start
 +ldr x30, [sp]
-+// CHECK:      ldr x26, [sp]
-+// CHECK-NEXT: add x30, x27, w26, uxtw
++.bb_end
++// CHECK:      ldr x30, [sp]
++// CHECK-NEXT: add x30, x27, w30, uxtw
 +
++.bb_start
 +ldp x29, x30, [sp]
-+// CHECK:      ldp x29, x26, [sp]
-+// CHECK-NEXT: add x30, x27, w26, uxtw
-+
-+.scratch x10
-+ldr x30, [sp]
-+// CHECK:      ldr x10, [sp]
-+// CHECK-NEXT: add x30, x27, w10, uxtw
-+.scratch_clear
++.bb_end
++// CHECK:      ldp x29, x30, [sp]
++// CHECK-NEXT: add x30, x27, w30, uxtw
 diff --git a/llvm/test/MC/AArch64/LFI/stack.s b/llvm/test/MC/AArch64/LFI/stack.s
 new file mode 100644
 index 000000000000..bae875071dc7
@@ -5367,5 +5399,5 @@ index f69f7c725c6b..52e15b8df3bf 100644
                                VersionTuple());
    }
 -- 
-2.52.0.107.ga0afd4fd5b-goog
+2.52.0.457.g6b5491de43-goog
 
