@@ -478,6 +478,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] AArch64: Regenerate cost model tests"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/92a1eb37122fa24e3045fbabdea2bf87127cace5.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596128
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [Runtimes][CMake] Add CMake option to enable execute-only code generation on AArch64 (#143698)"
         },
         "platforms": [
@@ -708,20 +722,6 @@
             "android"
         ],
         "rel_patch_path": "Fix-for-x86-ndk-sysroot-define.patch",
-        "version_range": {
-            "from": 574158,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Disable unsigned-integer-overflow checks for std::sort"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Disable-unsigned-integer-overflow-checks-for-s.patch",
         "version_range": {
             "from": 574158,
             "until": null
