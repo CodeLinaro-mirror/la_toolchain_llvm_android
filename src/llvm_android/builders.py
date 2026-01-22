@@ -88,6 +88,8 @@ class Stage1Builder(base_builders.LLVMBuilder):
             # runtime.
             # [1] libc++ in our case, despite the flag saying -static-libstdc++.
             ldflags.append('-static-libstdc++')
+            # Use static-libgcc to fix relocation errors for runtime CPU detection in Lexer.cpp.
+            ldflags.append('-static-libgcc')
 
         return ldflags
 
@@ -184,6 +186,8 @@ class Stage2Builder(base_builders.LLVMBuilder):
         ldflags = super().ldflags
         if self._config.target_os.is_linux:
             ldflags.append(f'-Wl,-rpath,\\$ORIGIN:\\$ORIGIN/../lib/{self._config.llvm_triple}')
+            # Use static-libgcc to fix relocation errors for runtime CPU detection in Lexer.cpp.
+            ldflags.append('-static-libgcc')
         # '$ORIGIN/../lib' is added by llvm's CMake rules.
         if self.bolt_optimize or self.bolt_instrument:
             ldflags.append('-Wl,-q')
