@@ -23,11 +23,17 @@ from typing import Optional
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 
 from llvm_android.toolchain_errors import ToolchainErrorCode, ToolchainError
 from llvm_android import android_version, hosts, paths, utils
+
+
+LLVM_PROJECT_GIT_URL: str = 'https://github.com/llvm/llvm-project.git'
+if socket.getfqdn().endswith('.corp.google.com') or socket.getfqdn().endswith('.c.googlers.com'):
+    LLVM_PROJECT_GIT_URL = 'sso://github/llvm/llvm-project'
 
 
 def logger():
@@ -198,13 +204,13 @@ def setup_temp_llvm_project(tmp_source_dir, git_am, llvm_rev) -> None:
             cmd = ['cp', '-Rf', '-L', copy_from_git, tmp_out_git_dir]
             subprocess.check_call(cmd)
     else:
-        logger().info(f'Fetching {llvm_rev} from https://github.com/llvm/llvm-project.git')
+        logger().info(f'Fetching {llvm_rev} from {LLVM_PROJECT_GIT_URL}')
         if not os.path.exists(tmp_source_dir):
             os.makedirs(tmp_source_dir)
         with utils.chdir_context(tmp_source_dir):
             cmd = ['git', 'init']
             subprocess.check_call(cmd)
-            cmd = ['git', 'remote', 'add', 'origin', 'https://github.com/llvm/llvm-project.git']
+            cmd = ['git', 'remote', 'add', 'origin', LLVM_PROJECT_GIT_URL]
             subprocess.check_call(cmd)
             cmd = ['git', 'fetch', '--depth=1', 'origin', llvm_rev]
             subprocess.check_call(cmd)
