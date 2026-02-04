@@ -16,8 +16,10 @@
 """Target Definitions for Android LLVM Toolchain builds"""
 
 import os
+import sys
 
 BUILD_NAME = os.environ.get("BUILD_NAME", "dev")
+PYTHON = sys.executable
 
 # Flags Order (based on how the flags were in original GCL):
 # toolchain/llvm_android/build.py
@@ -58,6 +60,7 @@ BUILD_NAME = os.environ.get("BUILD_NAME", "dev")
 TARGET_DEFS: dict[str, dict[str, list[str]]] = {
     "git_main-llvm-toolchain": {
         "llvm_darwin_mac": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--lto",
             "--pgo",
@@ -67,6 +70,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--lto",
@@ -80,6 +84,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_arm64": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--musl",
             "--lto",
@@ -91,6 +96,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_bootstrap": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--mlgo",
             "--lfi",
@@ -99,6 +105,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_builders": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--lfi",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
@@ -109,6 +116,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_debug": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--lfi",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
@@ -122,6 +130,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_fastbuild": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--mlgo",
@@ -132,6 +141,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_linux_musl": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--musl",
             "--lto",
@@ -143,12 +153,14 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_windows_x86": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--no-build=linux,windows-x86-64",
             "--build-name", BUILD_NAME,
             "--no-incremental",
         ],
         "llvm_windows_x86_64": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--lto",
@@ -160,6 +172,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "llvm_windows_x86_64_fastbuild": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--create-tar",
@@ -171,6 +184,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
 
     "git_main-plus-llvm": {
         "aosp_cf_arm64_phone-eng": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_cf_arm64_phone-trunk_staging-eng",
@@ -181,6 +195,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "aosp_cf_arm64_phone-userdebug": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_cf_arm64_phone-trunk_staging-userdebug",
@@ -191,6 +206,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "aosp_cf_riscv64_phone-userdebug": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_cf_riscv64_phone-trunk_staging-userdebug",
@@ -204,6 +220,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "aosp_cf_x86_64_phone-userdebug": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_cf_x86_64_phone-trunk_staging-userdebug",
@@ -215,6 +232,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "Clang-PGO": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_raven-trunk_staging-userdebug",
@@ -223,6 +241,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "Clang-BOLT": [
+            PYTHON,
             "toolchain/llvm_android/test_compiler.py",
             "--build-only",
             "--target", "aosp_raven-trunk_staging-userdebug",
@@ -231,12 +250,14 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "./",
         ],
         "linux_bootstrap": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--mlgo",
             "--bootstrap-build-only",
             "--no-incremental",
         ],
         "linux_fastbuild": [
+            PYTHON,
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--mlgo",
@@ -246,6 +267,7 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-incremental",
         ],
         "LLVM-Kythe": [
+            PYTHON,
             "toolchain/llvm_android/kythe_xref.py",
             BUILD_NAME,
         ]
