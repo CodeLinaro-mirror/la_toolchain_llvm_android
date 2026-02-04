@@ -1645,15 +1645,10 @@ index 3d9e7f62757c..d17e25355669 100644
  
      case tok::pp_warning:
        if (LangOpts.CPlusPlus)
-@@ -1490,8 +1400,8 @@ void Preprocessor::HandleDirective(Token &Result) {
-     case tok::pp_embed: {
-       if (PreprocessorLexer *CurrentFileLexer = getCurrentFileLexer())
-         if (OptionalFileEntryRef FERef = CurrentFileLexer->getFileEntry())
--          return HandleEmbedDirective(Introducer.getLocation(), Result, *FERef);
--      return HandleEmbedDirective(Introducer.getLocation(), Result, nullptr);
-+          return HandleEmbedDirective(SavedHash.getLocation(), Result, *FERef);
-+      return HandleEmbedDirective(SavedHash.getLocation(), Result, nullptr);
-     }
+@@ -1490,4 +1400,4 @@ void Preprocessor::HandleDirective(Token &Result) {
+     case tok::pp_embed:
+-      return HandleEmbedDirective(Introducer.getLocation(), Result);
++      return HandleEmbedDirective(SavedHash.getLocation(), Result);
      case tok::pp_assert:
        //isExtension = true;  // FIXME: implement #assert
 @@ -1520,7 +1430,7 @@ void Preprocessor::HandleDirective(Token &Result) {
