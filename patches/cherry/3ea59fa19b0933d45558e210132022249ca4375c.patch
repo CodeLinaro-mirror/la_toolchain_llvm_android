@@ -1,0 +1,257 @@
+From 3ea59fa19b0933d45558e210132022249ca4375c Mon Sep 17 00:00:00 2001
+From: Nikolas Klauser <nikolasklauser@berlin.de>
+Date: Wed, 27 Aug 2025 15:59:01 +0200
+Subject: [PATCH] [libc++] Remove zero size branch from memmove (#155419)
+
+This can significantly reduce the generated code, since it avoids a
+branch the optimizer has to see through. At least with our benchmarks
+there isn't a significant change in performance. There might be a bit of
+an improvement, but it's inconclusive IMO:
+```
+--------------------------------------------------------------------------------------------
+Benchmark                                                                old             new
+--------------------------------------------------------------------------------------------
+BM_StringFindNoMatch/10                                              1.48 ns         1.46 ns
+BM_StringFindNoMatch/64                                              2.30 ns         2.19 ns
+BM_StringFindNoMatch/512                                             9.80 ns         9.62 ns
+BM_StringFindNoMatch/4096                                            76.3 ns         74.0 ns
+BM_StringFindNoMatch/32768                                            509 ns          496 ns
+BM_StringFindNoMatch/131072                                          2038 ns         1998 ns
+BM_StringFindAllMatch/1                                              3.51 ns         3.16 ns
+BM_StringFindAllMatch/8                                              3.09 ns         2.87 ns
+BM_StringFindAllMatch/64                                             3.25 ns         2.97 ns
+BM_StringFindAllMatch/512                                            11.7 ns         10.6 ns
+BM_StringFindAllMatch/4096                                           83.6 ns         85.0 ns
+BM_StringFindAllMatch/32768                                           566 ns          583 ns
+BM_StringFindAllMatch/131072                                         2327 ns         2312 ns
+BM_StringFindMatch1/1                                                1001 ns          981 ns
+BM_StringFindMatch1/8                                                1002 ns          980 ns
+BM_StringFindMatch1/64                                               1004 ns          981 ns
+BM_StringFindMatch1/512                                              1012 ns          989 ns
+BM_StringFindMatch1/4096                                             1088 ns         1058 ns
+BM_StringFindMatch1/32768                                            1637 ns         1577 ns
+BM_StringFindMatch2/1                                                1006 ns          984 ns
+BM_StringFindMatch2/8                                                1007 ns          988 ns
+BM_StringFindMatch2/64                                               1005 ns          989 ns
+BM_StringFindMatch2/512                                              1015 ns          996 ns
+BM_StringFindMatch2/4096                                             1087 ns         1067 ns
+BM_StringFindMatch2/32768                                            1612 ns         1593 ns
+BM_StringCtorDefault                                                0.373 ns        0.340 ns
+BM_StringConstructDestroyCStr_Empty_Opaque                           1.84 ns         2.66 ns
+BM_StringConstructDestroyCStr_Empty_Transparent                     0.456 ns        0.248 ns
+BM_StringConstructDestroyCStr_Small_Opaque                           3.13 ns         2.80 ns
+BM_StringConstructDestroyCStr_Small_Transparent                     0.388 ns        0.388 ns
+BM_StringConstructDestroyCStr_Large_Opaque                           18.1 ns         17.9 ns
+BM_StringConstructDestroyCStr_Large_Transparent                      12.5 ns         12.1 ns
+BM_StringConstructDestroyCStr_Huge_Opaque                             155 ns          151 ns
+BM_StringConstructDestroyCStr_Huge_Transparent                       61.6 ns         61.3 ns
+BM_StringAssignStr_Empty_Opaque                                     0.729 ns        0.719 ns
+BM_StringAssignStr_Empty_Transparent                                0.555 ns        0.532 ns
+BM_StringAssignStr_Small_Opaque                                     0.766 ns        0.754 ns
+BM_StringAssignStr_Small_Transparent                                0.539 ns        0.531 ns
+BM_StringAssignStr_Large_Opaque                                      11.4 ns         11.6 ns
+BM_StringAssignStr_Large_Transparent                                 11.6 ns         11.9 ns
+BM_StringAssignStr_Huge_Opaque                                        248 ns          242 ns
+BM_StringAssignStr_Huge_Transparent                                   247 ns          243 ns
+BM_StringAssignAsciiz_Empty_Opaque                                   2.82 ns         3.50 ns
+BM_StringAssignAsciiz_Empty_Transparent                             0.375 ns        0.369 ns
+BM_StringAssignAsciiz_Small_Opaque                                   3.81 ns         3.54 ns
+BM_StringAssignAsciiz_Small_Transparent                             0.488 ns        0.487 ns
+BM_StringAssignAsciiz_Large_Opaque                                   13.9 ns         13.5 ns
+BM_StringAssignAsciiz_Large_Transparent                              13.7 ns         13.5 ns
+BM_StringAssignAsciiz_Huge_Opaque                                     298 ns          291 ns
+BM_StringAssignAsciiz_Huge_Transparent                                289 ns          282 ns
+BM_StringAssignAsciizMix_Opaque                                      6.25 ns         5.90 ns
+BM_StringAssignAsciizMix_Transparent                                 3.50 ns         3.55 ns
+BM_StringCopy_Empty                                                 0.649 ns        0.632 ns
+BM_StringCopy_Small                                                 0.658 ns        0.633 ns
+BM_StringCopy_Large                                                  8.14 ns         8.00 ns
+BM_StringCopy_Huge                                                    109 ns          112 ns
+BM_StringMove_Empty                                                  1.31 ns         1.28 ns
+BM_StringMove_Small                                                  1.31 ns         1.28 ns
+BM_StringMove_Large                                                  1.31 ns         1.28 ns
+BM_StringMove_Huge                                                   1.31 ns         1.28 ns
+BM_StringDestroy_Empty                                              0.854 ns        0.739 ns
+BM_StringDestroy_Small                                              0.863 ns        0.742 ns
+BM_StringDestroy_Large                                               9.62 ns         9.62 ns
+BM_StringDestroy_Huge                                                15.3 ns         15.0 ns
+BM_StringEraseToEnd_Empty_Opaque                                     1.05 ns         1.04 ns
+BM_StringEraseToEnd_Empty_Transparent                               0.377 ns        0.373 ns
+BM_StringEraseToEnd_Small_Opaque                                     1.04 ns         1.03 ns
+BM_StringEraseToEnd_Small_Transparent                               0.458 ns        0.451 ns
+BM_StringEraseToEnd_Large_Opaque                                     1.26 ns         1.22 ns
+BM_StringEraseToEnd_Large_Transparent                                1.04 ns         1.00 ns
+BM_StringEraseToEnd_Huge_Opaque                                      1.36 ns         1.36 ns
+BM_StringEraseToEnd_Huge_Transparent                                 1.14 ns         1.14 ns
+BM_StringEraseWithMove_Empty_Opaque                                  1.33 ns         1.31 ns
+BM_StringEraseWithMove_Empty_Transparent                             1.05 ns         1.03 ns
+BM_StringEraseWithMove_Small_Opaque                                  3.35 ns         3.33 ns
+BM_StringEraseWithMove_Small_Transparent                             3.75 ns         3.51 ns
+BM_StringEraseWithMove_Large_Opaque                                  3.15 ns         3.17 ns
+BM_StringEraseWithMove_Large_Transparent                             2.94 ns         2.96 ns
+BM_StringEraseWithMove_Huge_Opaque                                   42.4 ns         41.9 ns
+BM_StringEraseWithMove_Huge_Transparent                              39.2 ns         39.0 ns
+BM_StringRelational_Eq_Empty_Empty_Control                           2.35 ns         2.13 ns
+BM_StringRelational_Eq_Empty_Small_Control                          0.511 ns        0.516 ns
+BM_StringRelational_Eq_Empty_Large_Control                          0.516 ns        0.504 ns
+BM_StringRelational_Eq_Empty_Huge_Control                           0.500 ns        0.499 ns
+BM_StringRelational_Eq_Small_Small_Control                           2.43 ns         2.47 ns
+BM_StringRelational_Eq_Small_Small_ChangeFirst                       1.78 ns         1.89 ns
+BM_StringRelational_Eq_Small_Small_ChangeMiddle                      1.98 ns         1.84 ns
+BM_StringRelational_Eq_Small_Small_ChangeLast                        2.64 ns         2.54 ns
+BM_StringRelational_Eq_Small_Large_Control                          0.502 ns        0.502 ns
+BM_StringRelational_Eq_Small_Huge_Control                           0.513 ns        0.509 ns
+BM_StringRelational_Eq_Large_Large_Control                           2.19 ns         2.17 ns
+BM_StringRelational_Eq_Large_Large_ChangeFirst                       1.66 ns         1.74 ns
+BM_StringRelational_Eq_Large_Large_ChangeMiddle                      1.86 ns         1.87 ns
+BM_StringRelational_Eq_Large_Large_ChangeLast                        2.14 ns         2.13 ns
+BM_StringRelational_Eq_Large_Huge_Control                           0.510 ns        0.514 ns
+BM_StringRelational_Eq_Huge_Huge_Control                              101 ns          101 ns
+BM_StringRelational_Eq_Huge_Huge_ChangeFirst                         1.73 ns         1.67 ns
+BM_StringRelational_Eq_Huge_Huge_ChangeMiddle                        58.3 ns         57.5 ns
+BM_StringRelational_Eq_Huge_Huge_ChangeLast                           102 ns          102 ns
+BM_StringRelational_Less_Empty_Empty_Control                         2.42 ns         2.16 ns
+BM_StringRelational_Less_Empty_Small_Control                         2.20 ns         2.09 ns
+BM_StringRelational_Less_Empty_Large_Control                         2.43 ns         2.10 ns
+BM_StringRelational_Less_Empty_Huge_Control                          2.43 ns         2.07 ns
+BM_StringRelational_Less_Small_Empty_Control                         2.42 ns         2.20 ns
+BM_StringRelational_Less_Small_Small_Control                         2.36 ns         2.35 ns
+BM_StringRelational_Less_Small_Small_ChangeFirst                     1.73 ns         1.73 ns
+BM_StringRelational_Less_Small_Small_ChangeMiddle                    1.73 ns         1.73 ns
+BM_StringRelational_Less_Small_Small_ChangeLast                      2.47 ns         2.46 ns
+BM_StringRelational_Less_Small_Large_Control                         2.39 ns         2.33 ns
+BM_StringRelational_Less_Small_Huge_Control                          2.23 ns         2.34 ns
+BM_StringRelational_Less_Large_Empty_Control                         2.16 ns         2.12 ns
+BM_StringRelational_Less_Large_Small_Control                         2.33 ns         2.40 ns
+BM_StringRelational_Less_Large_Large_Control                         2.37 ns         2.29 ns
+BM_StringRelational_Less_Large_Large_ChangeFirst                     1.49 ns         1.49 ns
+BM_StringRelational_Less_Large_Large_ChangeMiddle                    1.74 ns         1.74 ns
+BM_StringRelational_Less_Large_Large_ChangeLast                      2.03 ns         2.11 ns
+BM_StringRelational_Less_Large_Huge_Control                          2.21 ns         2.20 ns
+BM_StringRelational_Less_Huge_Empty_Control                          2.27 ns         2.15 ns
+BM_StringRelational_Less_Huge_Small_Control                          2.32 ns         2.43 ns
+BM_StringRelational_Less_Huge_Large_Control                          2.24 ns         2.16 ns
+BM_StringRelational_Less_Huge_Huge_Control                            101 ns         98.6 ns
+BM_StringRelational_Less_Huge_Huge_ChangeFirst                       1.49 ns         1.49 ns
+BM_StringRelational_Less_Huge_Huge_ChangeMiddle                      57.1 ns         58.8 ns
+BM_StringRelational_Less_Huge_Huge_ChangeLast                         102 ns          102 ns
+BM_StringRelational_Compare_Empty_Empty_Control                      2.16 ns         1.91 ns
+BM_StringRelational_Compare_Empty_Small_Control                      1.80 ns         1.85 ns
+BM_StringRelational_Compare_Empty_Large_Control                      1.81 ns         2.15 ns
+BM_StringRelational_Compare_Empty_Huge_Control                       1.96 ns         1.82 ns
+BM_StringRelational_Compare_Small_Empty_Control                      2.14 ns         1.86 ns
+BM_StringRelational_Compare_Small_Small_Control                      1.98 ns         1.98 ns
+BM_StringRelational_Compare_Small_Small_ChangeFirst                  1.73 ns         1.73 ns
+BM_StringRelational_Compare_Small_Small_ChangeMiddle                 1.73 ns         1.73 ns
+BM_StringRelational_Compare_Small_Small_ChangeLast                   2.24 ns         2.44 ns
+BM_StringRelational_Compare_Small_Large_Control                      1.98 ns         1.98 ns
+BM_StringRelational_Compare_Small_Huge_Control                       2.23 ns         1.98 ns
+BM_StringRelational_Compare_Large_Empty_Control                      2.14 ns         2.05 ns
+BM_StringRelational_Compare_Large_Small_Control                      2.23 ns         2.04 ns
+BM_StringRelational_Compare_Large_Large_Control                      2.12 ns         1.95 ns
+BM_StringRelational_Compare_Large_Large_ChangeFirst                  1.41 ns         1.49 ns
+BM_StringRelational_Compare_Large_Large_ChangeMiddle                 1.74 ns         1.74 ns
+BM_StringRelational_Compare_Large_Large_ChangeLast                   2.24 ns         2.04 ns
+BM_StringRelational_Compare_Large_Huge_Control                       2.13 ns         2.12 ns
+BM_StringRelational_Compare_Huge_Empty_Control                       1.85 ns         2.16 ns
+BM_StringRelational_Compare_Huge_Small_Control                       2.23 ns         2.22 ns
+BM_StringRelational_Compare_Huge_Large_Control                       2.08 ns         2.15 ns
+BM_StringRelational_Compare_Huge_Huge_Control                        98.3 ns          101 ns
+BM_StringRelational_Compare_Huge_Huge_ChangeFirst                    1.36 ns         1.49 ns
+BM_StringRelational_Compare_Huge_Huge_ChangeMiddle                   57.6 ns         58.0 ns
+BM_StringRelational_Compare_Huge_Huge_ChangeLast                      102 ns          111 ns
+BM_StringRelationalLiteral_Eq_Empty_Empty_Control                   0.356 ns        0.351 ns
+BM_StringRelationalLiteral_Eq_Empty_Empty_ChangeFirst               0.321 ns        0.319 ns
+BM_StringRelationalLiteral_Eq_Empty_Empty_ChangeMiddle              0.321 ns        0.319 ns
+BM_StringRelationalLiteral_Eq_Empty_Empty_ChangeLast                0.322 ns        0.319 ns
+BM_StringRelationalLiteral_Eq_Empty_Small_Control                   0.651 ns        0.634 ns
+BM_StringRelationalLiteral_Eq_Empty_Large_Control                   0.472 ns        0.464 ns
+BM_StringRelationalLiteral_Eq_Small_Empty_Control                   0.389 ns        0.358 ns
+BM_StringRelationalLiteral_Eq_Small_Small_Control                   0.604 ns        0.723 ns
+BM_StringRelationalLiteral_Eq_Small_Small_ChangeFirst               0.696 ns        0.696 ns
+BM_StringRelationalLiteral_Eq_Small_Small_ChangeMiddle              0.673 ns        0.598 ns
+BM_StringRelationalLiteral_Eq_Small_Small_ChangeLast                0.735 ns        0.690 ns
+BM_StringRelationalLiteral_Eq_Small_Large_Control                   0.469 ns        0.465 ns
+BM_StringRelationalLiteral_Eq_Large_Empty_Control                   0.841 ns        0.858 ns
+BM_StringRelationalLiteral_Eq_Large_Small_Control                   0.628 ns        0.613 ns
+BM_StringRelationalLiteral_Eq_Large_Large_Control                   0.917 ns        0.911 ns
+BM_StringRelationalLiteral_Eq_Large_Large_ChangeFirst               0.915 ns        0.903 ns
+BM_StringRelationalLiteral_Eq_Large_Large_ChangeMiddle              0.909 ns        0.911 ns
+BM_StringRelationalLiteral_Eq_Large_Large_ChangeLast                0.914 ns        0.911 ns
+BM_StringRelationalLiteral_Less_Empty_Empty_Control                 0.457 ns        0.226 ns
+BM_StringRelationalLiteral_Less_Empty_Empty_ChangeFirst             0.456 ns        0.226 ns
+BM_StringRelationalLiteral_Less_Empty_Empty_ChangeMiddle            0.455 ns        0.225 ns
+BM_StringRelationalLiteral_Less_Empty_Empty_ChangeLast              0.454 ns        0.224 ns
+BM_StringRelationalLiteral_Less_Empty_Small_Control                  2.15 ns         2.13 ns
+BM_StringRelationalLiteral_Less_Empty_Large_Control                  2.05 ns         2.11 ns
+BM_StringRelationalLiteral_Less_Small_Empty_Control                 0.228 ns        0.225 ns
+BM_StringRelationalLiteral_Less_Small_Small_Control                  2.46 ns         2.20 ns
+BM_StringRelationalLiteral_Less_Small_Small_ChangeFirst              1.98 ns         1.88 ns
+BM_StringRelationalLiteral_Less_Small_Small_ChangeMiddle             1.98 ns         1.86 ns
+BM_StringRelationalLiteral_Less_Small_Small_ChangeLast               2.68 ns         2.53 ns
+BM_StringRelationalLiteral_Less_Small_Large_Control                  2.44 ns         2.34 ns
+BM_StringRelationalLiteral_Less_Large_Empty_Control                 0.228 ns        0.225 ns
+BM_StringRelationalLiteral_Less_Large_Small_Control                  2.36 ns         2.32 ns
+BM_StringRelationalLiteral_Less_Large_Large_Control                  2.21 ns         2.26 ns
+BM_StringRelationalLiteral_Less_Large_Large_ChangeFirst              1.65 ns         1.69 ns
+BM_StringRelationalLiteral_Less_Large_Large_ChangeMiddle             1.89 ns         1.89 ns
+BM_StringRelationalLiteral_Less_Large_Large_ChangeLast               2.06 ns         1.98 ns
+BM_StringRelationalLiteral_Compare_Empty_Empty_Control              0.396 ns        0.394 ns
+BM_StringRelationalLiteral_Compare_Empty_Empty_ChangeFirst          0.399 ns        0.398 ns
+BM_StringRelationalLiteral_Compare_Empty_Empty_ChangeMiddle         0.389 ns        0.394 ns
+BM_StringRelationalLiteral_Compare_Empty_Empty_ChangeLast           0.397 ns        0.396 ns
+BM_StringRelationalLiteral_Compare_Empty_Small_Control               1.87 ns         1.85 ns
+BM_StringRelationalLiteral_Compare_Empty_Large_Control               1.83 ns         1.77 ns
+BM_StringRelationalLiteral_Compare_Small_Empty_Control              0.396 ns        0.391 ns
+BM_StringRelationalLiteral_Compare_Small_Small_Control               1.98 ns         1.98 ns
+BM_StringRelationalLiteral_Compare_Small_Small_ChangeFirst           1.49 ns         1.48 ns
+BM_StringRelationalLiteral_Compare_Small_Small_ChangeMiddle          1.48 ns         1.48 ns
+BM_StringRelationalLiteral_Compare_Small_Small_ChangeLast            2.23 ns         2.19 ns
+BM_StringRelationalLiteral_Compare_Small_Large_Control               1.98 ns         1.97 ns
+BM_StringRelationalLiteral_Compare_Large_Empty_Control              0.391 ns        0.391 ns
+BM_StringRelationalLiteral_Compare_Large_Small_Control               1.98 ns         1.97 ns
+BM_StringRelationalLiteral_Compare_Large_Large_Control               1.89 ns         1.91 ns
+BM_StringRelationalLiteral_Compare_Large_Large_ChangeFirst           1.49 ns         1.24 ns
+BM_StringRelationalLiteral_Compare_Large_Large_ChangeMiddle          1.58 ns         1.68 ns
+BM_StringRelationalLiteral_Compare_Large_Large_ChangeLast            1.93 ns         1.78 ns
+BM_StringRead_Hot_Shallow_Empty                                     0.497 ns        0.496 ns
+BM_StringRead_Hot_Shallow_Small                                     0.498 ns        0.500 ns
+BM_StringRead_Hot_Shallow_Large                                     0.501 ns        0.742 ns
+BM_StringRead_Hot_Deep_Empty                                        0.496 ns        0.503 ns
+BM_StringRead_Hot_Deep_Small                                        0.497 ns        0.498 ns
+BM_StringRead_Hot_Deep_Large                                        0.743 ns        0.976 ns
+BM_StringRead_Cold_Shallow_Empty                                     1.32 ns         1.35 ns
+BM_StringRead_Cold_Shallow_Small                                     1.35 ns         1.38 ns
+BM_StringRead_Cold_Shallow_Large                                     2.03 ns         2.07 ns
+BM_StringRead_Cold_Deep_Empty                                        1.40 ns         1.40 ns
+BM_StringRead_Cold_Deep_Small                                        1.40 ns         1.41 ns
+BM_StringRead_Cold_Deep_Large                                        2.16 ns         2.25 ns
+```
+---
+ libcxx/include/__string/constexpr_c_functions.h | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/libcxx/include/__string/constexpr_c_functions.h b/libcxx/include/__string/constexpr_c_functions.h
+index 119669e16bbc..160d2af10950 100644
+--- a/libcxx/include/__string/constexpr_c_functions.h
++++ b/libcxx/include/__string/constexpr_c_functions.h
+@@ -22,7 +22,6 @@
+ #include <__type_traits/is_equality_comparable.h>
+ #include <__type_traits/is_integral.h>
+ #include <__type_traits/is_same.h>
+-#include <__type_traits/is_trivially_copyable.h>
+ #include <__type_traits/is_trivially_lexicographically_comparable.h>
+ #include <__type_traits/remove_cv.h>
+ #include <__utility/element_count.h>
+@@ -225,6 +224,8 @@ __constexpr_memmove(_Tp* __dest, _Up* __src, __element_count __n) {
+           std::__assign_trivially_copyable(__dest[__i], __src[__i]);
+       }
+     }
++  } else if _LIBCPP_CONSTEXPR (sizeof(_Tp) == __datasizeof_v<_Tp>) {
++    ::__builtin_memmove(__dest, __src, __count * sizeof(_Tp));
+   } else if (__count > 0) {
+     ::__builtin_memmove(__dest, __src, (__count - 1) * sizeof(_Tp) + __datasizeof_v<_Tp>);
+   }
+-- 
+2.53.0.rc2.204.g2597b5adb4-goog
+
