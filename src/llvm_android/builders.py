@@ -506,6 +506,7 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
             defines['CMAKE_C_COMPILER_TARGET'] = self._config.llvm_triple
             defines['CMAKE_CXX_COMPILER_TARGET'] = self._config.llvm_triple
             defines['COMPILER_RT_DEFAULT_TARGET_ONLY'] = 'TRUE'
+            defines['CMAKE_CXX_COMPILER_WORKS'] = 'TRUE'
         return defines
 
     @property

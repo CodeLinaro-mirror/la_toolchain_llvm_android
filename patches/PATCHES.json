@@ -1320,6 +1320,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Remove zero size branch from memmove (#155419)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3ea59fa19b0933d45558e210132022249ca4375c.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 588145
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64] Add FeatureFuseCCSelect to a number of CPU configurations. (#153188)"
         },
         "platforms": [
@@ -1945,6 +1959,20 @@
         "version_range": {
             "from": 584948,
             "until": 584949
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "LFI Support Patch for r596125"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "LFI_Support-Patch-2bc22e.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596126
         }
     }
 ]
