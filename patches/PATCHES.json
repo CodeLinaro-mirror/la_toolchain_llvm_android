@@ -570,6 +570,20 @@
         "rel_patch_path": "cherry/23f967ada05760ab65ccf95493a2dc22ebc17c04.patch",
         "version_range": {
             "from": 584948,
+            "until": 596124
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Add support for C1 CPUs (#171124)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/23f967ada05760ab65ccf95493a2dc22ebc17c04-v2.patch",
+        "version_range": {
+            "from": 596125,
             "until": 600781
         }
     },
