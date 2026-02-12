@@ -292,7 +292,11 @@ class Stage2Builder(base_builders.LLVMBuilder):
         if isinstance(self._config, configs.LinuxMuslConfig):
             # musl cannot run check-cxx yet
             with timer.Timer('stage2_test'):
-                self._ninja(['check-clang', 'check-llvm'])
+                self._ninja(['check-clang', 'check-llvm'],
+                            # ProgramEnvTest.TestExecuteEmptyEnvironment doesn't work for musl with
+                            # relinterp enabled because LD_LIBRARY_PATH has to be set to find
+                            # libc_musl.so.
+                            {'GTEST_FILTER': '-ProgramEnvTest.TestExecuteEmptyEnvironment'})
                 # TUSchedulerTests.PreambleThrottle is flaky on buildbots for musl build.
                 # So disable it.
                 self._ninja(['check-clang-tools'],
