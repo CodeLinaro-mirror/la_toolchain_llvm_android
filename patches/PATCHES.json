@@ -716,6 +716,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [MC] Reorder TARGETInstrTable to shrink MCInstrDesc::ImplicitOffset (#171199)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/857b68f112ecb61c43a9aa5bc50fc1e0e7dcaf57.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 600081
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64] Add support for C1 CPUs (#171124)"
         },
         "platforms": [

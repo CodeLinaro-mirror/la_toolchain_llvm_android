@@ -1,0 +1,124 @@
+From 2d5344eb108ba37aab548fd12f994214dac36874 Mon Sep 17 00:00:00 2001
+From: Jay Foad <jay.foad@amd.com>
+Date: Wed, 10 Dec 2025 07:17:58 +0000
+Subject: [PATCH] Reorder TARGETInstrTable to shrink
+ MCInstrDesc::ImplicitOffset (#171199)
+
+Put ImplicitOps[] before OperandInfo[] in the generated
+TARGETInstrTable. This means that offsets to entries into the (small)
+ImplicitOps table do not need to skip over the (large) OperandInfo
+table.
+
+This allows shrinking ImplicitOffset from 32 bits to 16 bits
+(effectively reverting #138127) which will allow expanding Opcode
+instead without increasing the size of MCInstrDesc.
+---
+ llvm/include/llvm/MC/MCInstrDesc.h       |  2 +-
+ llvm/utils/TableGen/InstrInfoEmitter.cpp | 45 ++++++++++++++++--------
+ 2 files changed, 31 insertions(+), 16 deletions(-)
+
+diff --git a/llvm/include/llvm/MC/MCInstrDesc.h b/llvm/include/llvm/MC/MCInstrDesc.h
+index c2f15b81da02..1898c802f6e8 100644
+--- a/llvm/include/llvm/MC/MCInstrDesc.h
++++ b/llvm/include/llvm/MC/MCInstrDesc.h
+@@ -222,7 +222,7 @@ public:
+   unsigned char NumImplicitUses; // Num of regs implicitly used
+   unsigned char NumImplicitDefs; // Num of regs implicitly defined
+   unsigned short OpInfoOffset;   // Offset to info about operands
+-  unsigned int ImplicitOffset;   // Offset to start of implicit op list
++  unsigned short ImplicitOffset; // Offset to start of implicit op list
+   uint64_t Flags;                // Flags identifying machine instr class
+   uint64_t TSFlags;              // Target Specific Flag values
+ 
+diff --git a/llvm/utils/TableGen/InstrInfoEmitter.cpp b/llvm/utils/TableGen/InstrInfoEmitter.cpp
+index 0b90f9104208..30c585c723ce 100644
+--- a/llvm/utils/TableGen/InstrInfoEmitter.cpp
++++ b/llvm/utils/TableGen/InstrInfoEmitter.cpp
+@@ -942,12 +942,19 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
+ 
+   OS << "struct " << TargetName << "InstrTable {\n";
+   OS << "  MCInstrDesc Insts[" << NumberedInstructions.size() << "];\n";
++  OS << "  static_assert(alignof(MCInstrDesc) >= alignof(MCPhysReg), "
++        "\"Unwanted padding between Insts and ImplicitOps\");\n";
++  OS << "  MCPhysReg ImplicitOps[" << std::max(ImplicitListSize, 1U)
++     << "];\n";
++  // Emit enough padding to make ImplicitOps plus Padding add up to the size
++  // of a whole number of MCOperandInfo structs. This allows us to index into
++  // the OperandInfo array starting from the end of the Insts array, by
++  // biasing the indices by the OpInfoBase value calculated below.
++  OS << "  char Padding[sizeof(MCOperandInfo) - sizeof ImplicitOps % "
++        "sizeof(MCOperandInfo)];\n";
+   OS << "  static_assert(alignof(MCInstrDesc) >= alignof(MCOperandInfo), "
+         "\"Unwanted padding between Insts and OperandInfo\");\n";
+   OS << "  MCOperandInfo OperandInfo[" << OperandInfoSize << "];\n";
+-  OS << "  static_assert(alignof(MCOperandInfo) >= alignof(MCPhysReg), "
+-        "\"Unwanted padding between OperandInfo and ImplicitOps\");\n";
+-  OS << "  MCPhysReg ImplicitOps[" << std::max(ImplicitListSize, 1U) << "];\n";
+   OS << "};\n\n";
+ 
+   OS << "} // end namespace llvm\n";
+@@ -960,9 +967,12 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
+ 
+   // Emit all of the MCInstrDesc records in reverse ENUM ordering.
+   Timer.startTimer("Emit InstrDesc records");
+-  OS << "static_assert(sizeof(MCOperandInfo) % sizeof(MCPhysReg) == 0);\n";
+-  OS << "static constexpr unsigned " << TargetName << "ImpOpBase = sizeof "
+-     << TargetName << "InstrTable::OperandInfo / (sizeof(MCPhysReg));\n\n";
++  OS << "static_assert((sizeof " << TargetName
++     << "InstrTable::ImplicitOps + sizeof " << TargetName
++     << "InstrTable::Padding) % sizeof(MCOperandInfo) == 0);\n";
++  OS << "static constexpr unsigned " << TargetName << "OpInfoBase = (sizeof "
++     << TargetName << "InstrTable::ImplicitOps + sizeof " << TargetName
++     << "InstrTable::Padding) / sizeof(MCOperandInfo);\n\n";
+ 
+   OS << "extern const " << TargetName << "InstrTable " << TargetName
+      << "Descs = {\n  {\n";
+@@ -977,12 +987,6 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
+ 
+   OS << "  }, {\n";
+ 
+-  // Emit all of the operand info records.
+-  Timer.startTimer("Emit operand info");
+-  EmitOperandInfo(OS, OperandInfoList);
+-
+-  OS << "  }, {\n";
+-
+   // Emit all of the instruction's implicit uses and defs.
+   Timer.startTimer("Emit uses/defs");
+   for (auto &List : ImplicitLists) {
+@@ -992,6 +996,17 @@ void InstrInfoEmitter::run(raw_ostream &OS) {
+     OS << '\n';
+   }
+ 
++  OS << "  }, {\n";
++
++  // Emit the padding.
++  OS << "    0\n";
++
++  OS << "  }, {\n";
++
++  // Emit all of the operand info records.
++  Timer.startTimer("Emit operand info");
++  EmitOperandInfo(OS, OperandInfoList);
++
+   OS << "  }\n};\n\n";
+ 
+   // Emit the array of instruction names.
+@@ -1275,11 +1290,11 @@ void InstrInfoEmitter::emitRecord(
+ 
+   // Emit the operand info offset.
+   OperandInfoTy OperandInfo = GetOperandInfo(Inst);
+-  OS << OperandInfoMap.find(OperandInfo)->second << ",\t";
++  OS << Target.getName() << "OpInfoBase + "
++     << OperandInfoMap.find(OperandInfo)->second << ",\t";
+ 
+   // Emit implicit operand base.
+-  OS << Target.getName() << "ImpOpBase + " << EmittedLists[ImplicitOps]
+-     << ",\t0";
++  OS << EmittedLists[ImplicitOps] << ",\t0";
+ 
+   // Emit all of the target independent flags...
+   if (Inst.isPreISelOpcode)
+-- 
+2.53.0.335.g19a08e0c02-goog
+
