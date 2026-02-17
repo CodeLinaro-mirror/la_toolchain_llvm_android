@@ -319,6 +319,7 @@ def main():
     os.chdir(download_dir)
 
     targets_map = {'darwin-x86': 'llvm_darwin_mac',
+                   'linux-arm64': 'llvm_linux_arm64',
                    'linux-x86': 'llvm_linux',
                    'windows-x86': 'llvm_windows_x86_64'}
     hosts = [args.host] if args.host else targets_map.keys()
