@@ -1,0 +1,77 @@
+From b21949eb34037aa1811cc55609ab46c577feab63 Mon Sep 17 00:00:00 2001
+From: Han-Chung Wang <hanhan0912@gmail.com>
+Date: Tue, 4 Nov 2025 13:49:46 -0800
+Subject: [PATCH] Revert "[mlir][memref]: Collapse strided unit dim even if
+ strides are dynamic" (#166448)
+
+Reverts llvm/llvm-project#157330
+
+The original revision introduces a bug in `isGuaranteedCollapsible`. The
+`memref<3x3x1x96xf32, strided<[288, 96, 96, 1], offset: 864>>` is no
+longer collapsable with the change. The revision reverts the change to
+bring back correct behavior. `stride` should be computed as `96` like
+the old behavior in the failed iteration.
+
+
+https://github.com/llvm/llvm-project/blob/92a1eb37122fa24e3045fbabdea2bf87127cace5/mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp#L2597-L2605
+---
+ mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp | 10 +++++-----
+ mlir/test/Dialect/MemRef/ops.mlir        |  7 +------
+ 2 files changed, 6 insertions(+), 11 deletions(-)
+
+diff --git a/mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp b/mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp
+index e271ac58db32..1c21a2f270da 100644
+--- a/mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp
++++ b/mlir/lib/Dialect/MemRef/IR/MemRefOps.cpp
+@@ -2568,11 +2568,6 @@ computeCollapsedLayoutMap(MemRefType srcType,
+     auto trailingReassocs = ArrayRef<int64_t>(reassoc).drop_front();
+     auto stride = SaturatedInteger::wrap(resultStrides[resultStrideIndex--]);
+     for (int64_t idx : llvm::reverse(trailingReassocs)) {
+-      // Dimensions of size 1 should be skipped, because their strides are
+-      // meaningless and could have any arbitrary value.
+-      if (srcShape[idx - 1] == 1)
+-        continue;
+-
+       stride = stride * SaturatedInteger::wrap(srcShape[idx]);
+ 
+       // Both source and result stride must have the same static value. In that
+@@ -2587,6 +2582,11 @@ computeCollapsedLayoutMap(MemRefType srcType,
+       if (strict && (stride.saturated || srcStride.saturated))
+         return failure();
+ 
++      // Dimensions of size 1 should be skipped, because their strides are
++      // meaningless and could have any arbitrary value.
++      if (srcShape[idx - 1] == 1)
++        continue;
++
+       if (!stride.saturated && !srcStride.saturated && stride != srcStride)
+         return failure();
+     }
+diff --git a/mlir/test/Dialect/MemRef/ops.mlir b/mlir/test/Dialect/MemRef/ops.mlir
+index b1db99bb3ad0..a90c9505a840 100644
+--- a/mlir/test/Dialect/MemRef/ops.mlir
++++ b/mlir/test/Dialect/MemRef/ops.mlir
+@@ -440,8 +440,7 @@ func.func @expand_collapse_shape_dynamic(%arg0: memref<?x?x?xf32>,
+          %arg4: index,
+          %arg5: index,
+          %arg6: index,
+-         %arg7: memref<4x?x4xf32>,
+-         %arg8: memref<1x1x18x?xsi8, strided<[?, ?, ?, 1], offset: ?>>) {
++         %arg7: memref<4x?x4xf32>) {
+ //       CHECK:   memref.collapse_shape {{.*}} {{\[}}[0, 1], [2]]
+ //  CHECK-SAME:     memref<?x?x?xf32> into memref<?x?xf32>
+   %0 = memref.collapse_shape %arg0 [[0, 1], [2]] :
+@@ -490,10 +489,6 @@ func.func @expand_collapse_shape_dynamic(%arg0: memref<?x?x?xf32>,
+ //       CHECK:   memref.expand_shape {{.*}} {{\[}}[0, 1], [2], [3, 4]]
+   %4 = memref.expand_shape %arg7 [[0, 1], [2], [3, 4]] output_shape [2, 2, %arg4, 2, 2]
+         : memref<4x?x4xf32> into memref<2x2x?x2x2xf32>
+-
+-//       CHECK:   memref.collapse_shape {{.*}} {{\[}}[0, 1], [2], [3]]
+-//  CHECK-SAME:     memref<1x1x18x?xsi8, strided<[?, ?, ?, 1], offset: ?>> into memref<1x18x?xsi8, strided<[?, ?, 1], offset: ?>>
+-  %5 = memref.collapse_shape %arg8 [[0, 1], [2], [3]] : memref<1x1x18x?xsi8, strided<[?, ?, ?, 1], offset: ?>> into memref<1x18x?xsi8, strided<[?, ?, 1], offset: ?>>
+   return
+ }
+ 
+-- 
+2.53.0.310.g728cabbaf7-goog
+

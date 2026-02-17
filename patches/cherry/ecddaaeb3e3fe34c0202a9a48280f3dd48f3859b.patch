@@ -1,0 +1,90 @@
+From ecddaaeb3e3fe34c0202a9a48280f3dd48f3859b Mon Sep 17 00:00:00 2001
+From: Farzon Lotfi <farzonlotfi@microsoft.com>
+Date: Thu, 6 Nov 2025 14:05:30 -0500
+Subject: [PATCH] [DirectX] Remove llvm.assume intrinsic (#166697)
+
+fixes #165051
+
+This change reverts the experiment we did for #165311
+
+While some backends seem to support llvm.assume without validation The
+validator itself does not so it makes more sense to just remove it.
+---
+ llvm/lib/Target/DirectX/DXILIntrinsicExpansion.cpp |  4 ++++
+ llvm/lib/Target/DirectX/DXILOpLowering.cpp         |  2 --
+ llvm/test/CodeGen/DirectX/llvm_assume.ll           |  9 +++++++++
+ llvm/test/tools/dxil-dis/llvm_assume.ll            | 11 -----------
+ 4 files changed, 13 insertions(+), 13 deletions(-)
+ create mode 100644 llvm/test/CodeGen/DirectX/llvm_assume.ll
+ delete mode 100644 llvm/test/tools/dxil-dis/llvm_assume.ll
+
+diff --git a/llvm/lib/Target/DirectX/DXILIntrinsicExpansion.cpp b/llvm/lib/Target/DirectX/DXILIntrinsicExpansion.cpp
+index ebb7c2607c0c..e0d2dbde9215 100644
+--- a/llvm/lib/Target/DirectX/DXILIntrinsicExpansion.cpp
++++ b/llvm/lib/Target/DirectX/DXILIntrinsicExpansion.cpp
+@@ -197,6 +197,7 @@ static Value *expand16BitIsNormal(CallInst *Orig) {
+ 
+ static bool isIntrinsicExpansion(Function &F) {
+   switch (F.getIntrinsicID()) {
++  case Intrinsic::assume:
+   case Intrinsic::abs:
+   case Intrinsic::atan2:
+   case Intrinsic::exp:
+@@ -988,6 +989,9 @@ static bool expandIntrinsic(Function &F, CallInst *Orig) {
+   case Intrinsic::abs:
+     Result = expandAbs(Orig);
+     break;
++  case Intrinsic::assume:
++    Orig->eraseFromParent();
++    return true;
+   case Intrinsic::atan2:
+     Result = expandAtan2Intrinsic(Orig);
+     break;
+diff --git a/llvm/lib/Target/DirectX/DXILOpLowering.cpp b/llvm/lib/Target/DirectX/DXILOpLowering.cpp
+index 8720460cceb2..e46a393e5090 100644
+--- a/llvm/lib/Target/DirectX/DXILOpLowering.cpp
++++ b/llvm/lib/Target/DirectX/DXILOpLowering.cpp
+@@ -904,8 +904,6 @@ public:
+       case Intrinsic::dx_resource_casthandle:
+       // NOTE: llvm.dbg.value is supported as is in DXIL.
+       case Intrinsic::dbg_value:
+-      // NOTE: llvm.assume is supported as is in DXIL.
+-      case Intrinsic::assume:
+       case Intrinsic::not_intrinsic:
+         if (F.use_empty())
+           F.eraseFromParent();
+diff --git a/llvm/test/CodeGen/DirectX/llvm_assume.ll b/llvm/test/CodeGen/DirectX/llvm_assume.ll
+new file mode 100644
+index 000000000000..d739592b75d7
+--- /dev/null
++++ b/llvm/test/CodeGen/DirectX/llvm_assume.ll
+@@ -0,0 +1,9 @@
++; RUN: opt -S -dxil-intrinsic-expansion -mtriple=dxil-pc-shadermodel6.3-library %s | FileCheck %s
++
++define void @test_llvm_assume(i1 %0)  {
++; CHECK-LABEL: test_llvm_assume
++; CHECK-NEXT: ret void
++tail call void @llvm.assume(i1 %0)
++ret void
++}
++
+diff --git a/llvm/test/tools/dxil-dis/llvm_assume.ll b/llvm/test/tools/dxil-dis/llvm_assume.ll
+deleted file mode 100644
+index f5be66c0d192..000000000000
+--- a/llvm/test/tools/dxil-dis/llvm_assume.ll
++++ /dev/null
+@@ -1,11 +0,0 @@
+-; RUN: llc --filetype=obj %s -o - | dxil-dis -o - | FileCheck %s
+-
+-target triple = "dxil-pc-shadermodel6.7-library"
+-
+-define void @test_llvm_assume(i1 %0)  {
+-; CHECK-LABEL: test_llvm_assume
+-; CHECK-NEXT: tail call void @llvm.assume(i1 %0)
+-tail call void @llvm.assume(i1 %0)
+-ret void
+-}
+-
+-- 
+2.53.0.310.g728cabbaf7-goog
+

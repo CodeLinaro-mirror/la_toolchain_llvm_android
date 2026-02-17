@@ -492,6 +492,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AArch64] Add support for C1 CPUs (#171124)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/23f967ada05760ab65ccf95493a2dc22ebc17c04.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 596124
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] AArch64: Regenerate cost model tests"
         },
         "platforms": [
@@ -501,6 +515,48 @@
         "version_range": {
             "from": 596125,
             "until": 596128
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[mlir][memref]: Collapse strided unit dim even if strides are dynamic\" (#166448)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b21949eb34037aa1811cc55609ab46c577feab63.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596150
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"IR: Remove null UseList checks in hasNUses methods (#165929)\" (#166500)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/044e0f041d5c02ae3b4e44bab4647008ff497d9f.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596190
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [DirectX] Remove llvm.assume intrinsic (#166697)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ecddaaeb3e3fe34c0202a9a48280f3dd48f3859b.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596438
         }
     },
     {
@@ -548,6 +604,62 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"Ignore trailing NullStmts in StmtExprs for GCC compatibility.\" (#166036)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d9c7c762695e8b73d71dbc8dbedcc033030e25eb.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596533
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [PGO][Offload] Fix missing names bug in GPU PGO (#166444)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/38cade7cc6e599bb6bc8f0af98eb91cba9ceb5df.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596771
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[DFAJumpThreading] Enable DFAJumpThread by default.\" (#167352)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7e043364cf1f267380b2be955901b28ede9ca8eb.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596871
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [MachineCopyPropagation] Remove logic to recognise and delete no-op moves produced after forwarded uses (#167336)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a314b3b401b5f9e6218d863bfcc29393e1b6f447.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596943
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] ValueMapper: Delete unused initializers of replaced appending globals."
         },
         "platforms": [
@@ -562,15 +674,29 @@
     {
         "metadata": {
             "info": [],
-            "title": "[UPSTREAM] [AArch64] Add support for C1 CPUs (#171124)"
+            "title": "[UPSTREAM] Revert \"[ubsan_minimal] Allow UBSan handler from Minimal runtime to accept arguments (#152192)\" (#168812)"
         },
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/23f967ada05760ab65ccf95493a2dc22ebc17c04.patch",
+        "rel_patch_path": "cherry/af098e009695c07d5f56d1d8a1f9c8380919f26d.patch",
         "version_range": {
-            "from": 584948,
-            "until": 596124
+            "from": 596125,
+            "until": 598173
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[FMV][AArch64] Add initial AT_HWCAP3 / AT_HWCAP4 support (#161595)\" (#171071)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b0e98426f390c3f0d86c3a2c860a6d980a91e5de.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 599761
         }
     },
     {
@@ -590,6 +716,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [X86] Avoid assertion failure with implicit immediates for AMX tile dimensions (#174128)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f270256b4393bd2406a503f1fa5d7a8f9a51f91b.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 601944
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [compiler-rt][AArch64] Exit early from __arm_za_disable. (#174942)"
         },
         "platforms": [
@@ -599,6 +739,34 @@
         "version_range": {
             "from": 584948,
             "until": 602499
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libclc] Remove llvm-link --override flag and make implementation self-contained (#175134)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ee8a4bc9d76fd69a65d4186a329914df3bd750cf.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 602837
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [lldb][CMake] Don't condition libc++ requirement on LLDB_ENFORCE_STRICT_TEST_REQUIREMENTS (#175955)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c25c22427a5d2bd50188aabdb3f78394cdf5270e.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 603606
         }
     },
     {
