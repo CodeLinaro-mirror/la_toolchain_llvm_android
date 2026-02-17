@@ -677,7 +677,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         tag = hosts.tag(host, arch)
         if isinstance(toolchain_builder.config_list[0], configs.LinuxMuslConfig) and \
                 arch == hosts.Arch.X86_64:
-            tag = host.os_tag_musl
+            tag = hosts.musl_tag(host, arch)
         if builders_package:
             tag += "-builders"
         tarball_name = package_name + '-' + tag + '.tar.xz'
