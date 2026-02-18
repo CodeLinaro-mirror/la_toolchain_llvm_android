@@ -1,0 +1,49 @@
+From 274354348e3bcc538bc2c9f59e4a40ad9e8141de Mon Sep 17 00:00:00 2001
+From: Michael Jones <michaelrj@google.com>
+Date: Fri, 14 Nov 2025 14:17:37 -0800
+Subject: [PATCH] [mlir][bazel] Add apfloat test library (#168115)
+
+The apfloat code was added in #167848, and some bazel was added
+in #167916 but the runtime library for test-apfloat-emulation.mlir was
+missed. This patch adds the appropriate target.
+---
+ .../llvm-project-overlay/mlir/BUILD.bazel     | 23 +++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/utils/bazel/llvm-project-overlay/mlir/BUILD.bazel b/utils/bazel/llvm-project-overlay/mlir/BUILD.bazel
+index 89413d6ccbaa..effcd615786b 100644
+--- a/utils/bazel/llvm-project-overlay/mlir/BUILD.bazel
++++ b/utils/bazel/llvm-project-overlay/mlir/BUILD.bazel
+@@ -9794,6 +9794,29 @@ cc_binary(
+     deps = [":mlir_float16_utils"],
+ )
+ 
++cc_library(
++    name = "_mlir_apfloat_utils",
++    srcs = ["lib/ExecutionEngine/APFloatWrappers.cpp"],
++    defines = ["mlir_apfloat_wrappers_EXPORTS"],
++    includes = ["include"],
++    deps = [
++        "//llvm:Support",
++    ],
++)
++
++# Indirection to avoid 'libmlir_apfloat_utils.so' filename clash.
++alias(
++    name = "mlir_apfloat_utils",
++    actual = "_mlir_apfloat_utils",
++)
++
++cc_binary(
++    name = "libmlir_apfloat_utils.so",
++    linkshared = True,
++    linkstatic = False,
++    deps = [":mlir_apfloat_utils"],
++)
++
+ # Unlike mlir_float16_utils, mlir_c_runner_utils, etc, we do *not* make
+ # this a shared library: because on the CMake side, doing so causes issues
+ # when building on Windows.  In particular, various functions take/return
+-- 
+2.53.0.335.g19a08e0c02-goog
+

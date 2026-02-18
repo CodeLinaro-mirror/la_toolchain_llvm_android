@@ -688,6 +688,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [mlir][bazel] Add apfloat test library (#168115)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/274354348e3bcc538bc2c9f59e4a40ad9e8141de.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 597453
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Fix __hash_table::erase(iterator, iterator) to update the bucket list correctly when erasing the last bucket (#167865)"
         },
         "platforms": [
