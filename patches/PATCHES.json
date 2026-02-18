@@ -688,6 +688,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Fix __hash_table::erase(iterator, iterator) to update the bucket list correctly when erasing the last bucket (#167865)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a9633aac31cb1ec42153fb3ada815aa1572eb58f.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 597639
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[ubsan_minimal] Allow UBSan handler from Minimal runtime to accept arguments (#152192)\" (#168812)"
         },
         "platforms": [
