@@ -674,6 +674,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[LICM] Sink unused l-invariant loads in preheader. #157559\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7ee0e0f956ac2c9e601132a9efbb163f5a81893f.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 597375
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[ubsan_minimal] Allow UBSan handler from Minimal runtime to accept arguments (#152192)\" (#168812)"
         },
         "platforms": [
