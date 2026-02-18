@@ -1,0 +1,236 @@
+From ee8a4bc9d76fd69a65d4186a329914df3bd750cf Mon Sep 17 00:00:00 2001
+From: Wenju He <wenju.he@intel.com>
+Date: Mon, 12 Jan 2026 10:00:10 +0800
+Subject: [PATCH] [libclc] Remove llvm-link --override flag and make
+ implementation self-contained (#175134)
+
+Revert --override flag added in 28d9255aa7c0 and avoid defining the same
+symbol across multiple files of a target, simplifying the build and
+easing the transition to CMake add_library for libclc.
+
+amdgcn ldexp now uses __builtin_elementwise_ldexp.
+
+No functional changes to clc_sqrt or clc_rsqrt.
+---
+ libclc/clc/lib/amdgcn/SOURCES                 |  2 +-
+ libclc/clc/lib/amdgcn/math/clc_ldexp.cl       | 15 +++++++++
+ .../clc/lib/amdgcn/math/clc_ldexp_override.cl | 33 -------------------
+ libclc/clc/lib/amdgpu/SOURCES                 |  2 +-
+ .../math/{clc_sqrt_fp64.cl => clc_sqrt.cl}    | 21 ++++++++++--
+ libclc/clc/lib/r600/SOURCES                   |  2 +-
+ .../{clc_rsqrt_override.cl => clc_rsqrt.cl}   | 12 ++-----
+ libclc/cmake/modules/AddLibclc.cmake          | 20 ++---------
+ 8 files changed, 41 insertions(+), 66 deletions(-)
+ create mode 100644 libclc/clc/lib/amdgcn/math/clc_ldexp.cl
+ delete mode 100644 libclc/clc/lib/amdgcn/math/clc_ldexp_override.cl
+ rename libclc/clc/lib/amdgpu/math/{clc_sqrt_fp64.cl => clc_sqrt.cl} (78%)
+ rename libclc/clc/lib/r600/math/{clc_rsqrt_override.cl => clc_rsqrt.cl} (77%)
+
+diff --git a/libclc/clc/lib/amdgcn/SOURCES b/libclc/clc/lib/amdgcn/SOURCES
+index 53bbe388f7df..5040bf115867 100644
+--- a/libclc/clc/lib/amdgcn/SOURCES
++++ b/libclc/clc/lib/amdgcn/SOURCES
+@@ -1,4 +1,4 @@
+-math/clc_ldexp_override.cl
++math/clc_ldexp.cl
+ mem_fence/clc_mem_fence.cl
+ synchronization/clc_work_group_barrier.cl
+ workitem/clc_get_global_offset.cl
+diff --git a/libclc/clc/lib/amdgcn/math/clc_ldexp.cl b/libclc/clc/lib/amdgcn/math/clc_ldexp.cl
+new file mode 100644
+index 000000000000..bc6028ed13b2
+--- /dev/null
++++ b/libclc/clc/lib/amdgcn/math/clc_ldexp.cl
+@@ -0,0 +1,15 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#include <clc/internal/clc.h>
++#include <clc/math/clc_ldexp.h>
++
++#define __CLC_FUNCTION __clc_ldexp
++#define __CLC_IMPL_FUNCTION(x) __builtin_elementwise_ldexp
++#define __CLC_BODY <clc/shared/binary_def_with_int_second_arg.inc>
++#include <clc/math/gentype.inc>
+diff --git a/libclc/clc/lib/amdgcn/math/clc_ldexp_override.cl b/libclc/clc/lib/amdgcn/math/clc_ldexp_override.cl
+deleted file mode 100644
+index 611f60d1f563..000000000000
+--- a/libclc/clc/lib/amdgcn/math/clc_ldexp_override.cl
++++ /dev/null
+@@ -1,33 +0,0 @@
+-//===----------------------------------------------------------------------===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-
+-#include <clc/internal/clc.h>
+-#include <clc/math/clc_ldexp.h>
+-
+-#define __CLC_FUNCTION __clc_ldexp
+-#define __CLC_ARG2_TYPE int
+-#define __CLC_MIN_VECSIZE 1
+-
+-#ifdef __HAS_LDEXPF__
+-// This defines all the ldexp(floatN, intN) variants.
+-#define __CLC_FLOAT_ONLY
+-#define __CLC_IMPL_FUNCTION __builtin_amdgcn_ldexpf
+-#define __CLC_BODY <clc/shared/binary_def_scalarize.inc>
+-#include <clc/math/gentype.inc>
+-#undef __CLC_IMPL_FUNCTION
+-#endif
+-
+-#ifdef cl_khr_fp64
+-#pragma OPENCL EXTENSION cl_khr_fp64 : enable
+-// This defines all the ldexp(doubleN, intN) variants.
+-#define __CLC_DOUBLE_ONLY
+-#define __CLC_IMPL_FUNCTION __builtin_amdgcn_ldexp
+-#define __CLC_BODY <clc/shared/binary_def_scalarize.inc>
+-#include <clc/math/gentype.inc>
+-#undef __CLC_IMPL_FUNCTION
+-#endif
+diff --git a/libclc/clc/lib/amdgpu/SOURCES b/libclc/clc/lib/amdgpu/SOURCES
+index 83b13bad9a4f..dfa1a2b54007 100644
+--- a/libclc/clc/lib/amdgpu/SOURCES
++++ b/libclc/clc/lib/amdgpu/SOURCES
+@@ -10,4 +10,4 @@ math/clc_half_sqrt.cl
+ math/clc_native_exp2.cl
+ math/clc_native_exp.cl
+ math/clc_native_log10.cl
+-math/clc_sqrt_fp64.cl
++math/clc_sqrt.cl
+diff --git a/libclc/clc/lib/amdgpu/math/clc_sqrt_fp64.cl b/libclc/clc/lib/amdgpu/math/clc_sqrt.cl
+similarity index 78%
+rename from libclc/clc/lib/amdgpu/math/clc_sqrt_fp64.cl
+rename to libclc/clc/lib/amdgpu/math/clc_sqrt.cl
+index 3a4310baa224..143afa5ece56 100644
+--- a/libclc/clc/lib/amdgpu/math/clc_sqrt_fp64.cl
++++ b/libclc/clc/lib/amdgpu/math/clc_sqrt.cl
+@@ -10,6 +10,8 @@
+ #include <clc/math/clc_fma.h>
+ #include <clc/math/clc_ldexp.h>
+ 
++#define __CLC_FUNCTION __clc_sqrt
++
+ #ifdef cl_khr_fp64
+ 
+ #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+@@ -43,8 +45,23 @@ _CLC_OVERLOAD _CLC_DEF double __clc_sqrt(double x) {
+ }
+ 
+ #define __CLC_DOUBLE_ONLY
+-#define __CLC_FUNCTION __clc_sqrt
+ #define __CLC_BODY <clc/shared/unary_def_scalarize.inc>
+ #include <clc/math/gentype.inc>
+ 
+-#endif
++#endif // cl_khr_fp64
++
++#undef __CLC_IMPL_FUNCTION
++#define __CLC_IMPL_FUNCTION(x) __builtin_elementwise_sqrt
++
++#define __CLC_FLOAT_ONLY
++#define __CLC_BODY <clc/shared/unary_def.inc>
++#include <clc/math/gentype.inc>
++
++#ifdef cl_khr_fp16
++#pragma OPENCL EXTENSION cl_khr_fp16 : enable
++
++#define __CLC_HALF_ONLY
++#define __CLC_BODY <clc/shared/unary_def.inc>
++#include <clc/math/gentype.inc>
++
++#endif // cl_khr_fp16
+diff --git a/libclc/clc/lib/r600/SOURCES b/libclc/clc/lib/r600/SOURCES
+index 8d5caf167aa4..4bb95e444112 100644
+--- a/libclc/clc/lib/r600/SOURCES
++++ b/libclc/clc/lib/r600/SOURCES
+@@ -1,2 +1,2 @@
+ math/clc_native_rsqrt.cl
+-math/clc_rsqrt_override.cl
++math/clc_rsqrt.cl
+diff --git a/libclc/clc/lib/r600/math/clc_rsqrt_override.cl b/libclc/clc/lib/r600/math/clc_rsqrt.cl
+similarity index 77%
+rename from libclc/clc/lib/r600/math/clc_rsqrt_override.cl
+rename to libclc/clc/lib/r600/math/clc_rsqrt.cl
+index 5ef9ad541afb..806ee678e00e 100644
+--- a/libclc/clc/lib/r600/math/clc_rsqrt_override.cl
++++ b/libclc/clc/lib/r600/math/clc_rsqrt.cl
+@@ -12,12 +12,6 @@ _CLC_OVERLOAD _CLC_DEF float __clc_rsqrt(float x) {
+   return __builtin_r600_recipsqrt_ieeef(x);
+ }
+ 
+-#define __CLC_FLOAT_ONLY
+-#define __CLC_FUNCTION __clc_rsqrt
+-#define __CLC_BODY <clc/shared/unary_def_scalarize.inc>
+-#include <clc/math/gentype.inc>
+-#undef __CLC_FUNCTION
+-
+ #ifdef cl_khr_fp64
+ 
+ #pragma OPENCL EXTENSION cl_khr_fp64 : enable
+@@ -26,10 +20,8 @@ _CLC_OVERLOAD _CLC_DEF double __clc_rsqrt(double x) {
+   return __builtin_r600_recipsqrt_ieee(x);
+ }
+ 
+-#define __CLC_DOUBLE_ONLY
++#endif // cl_khr_fp64
++
+ #define __CLC_FUNCTION __clc_rsqrt
+ #define __CLC_BODY <clc/shared/unary_def_scalarize.inc>
+ #include <clc/math/gentype.inc>
+-#undef __CLC_FUNCTION
+-
+-#endif
+diff --git a/libclc/cmake/modules/AddLibclc.cmake b/libclc/cmake/modules/AddLibclc.cmake
+index 16e81d02bc86..b1471890e1b1 100644
+--- a/libclc/cmake/modules/AddLibclc.cmake
++++ b/libclc/cmake/modules/AddLibclc.cmake
+@@ -96,35 +96,19 @@ function(link_bc)
+     ${ARGN}
+   )
+ 
+-  if( ARG_INTERNALIZE )
+-    set( inputs_with_flag ${ARG_INPUTS} )
+-  else()
+-    # Add the --override flag for non-generic bitcode files so that their
+-    # symbols can override definitions in generic bitcode files.
+-    set( inputs_with_flag )
+-    foreach( file IN LISTS ARG_INPUTS )
+-      string( FIND ${file} "/generic/" is_generic )
+-      if( is_generic LESS 0 )
+-        list( APPEND inputs_with_flag "--override" )
+-      endif()
+-      list( APPEND inputs_with_flag ${file} )
+-    endforeach()
+-  endif()
+-
++  set( LINK_INPUT_ARG ${ARG_INPUTS} )
+   if( WIN32 OR CYGWIN )
+     # Create a response file in case the number of inputs exceeds command-line
+     # character limits on certain platforms.
+     file( TO_CMAKE_PATH ${LIBCLC_ARCH_OBJFILE_DIR}/${ARG_TARGET}.rsp RSP_FILE )
+     # Turn it into a space-separate list of input files
+-    list( JOIN inputs_with_flag " " RSP_INPUT )
++    list( JOIN ARG_INPUTS " " RSP_INPUT )
+     file( GENERATE OUTPUT ${RSP_FILE} CONTENT ${RSP_INPUT} )
+     # Ensure that if this file is removed, we re-run CMake
+     set_property( DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+       ${RSP_FILE}
+     )
+     set( LINK_INPUT_ARG "@${RSP_FILE}" )
+-  else()
+-    set( LINK_INPUT_ARG ${inputs_with_flag} )
+   endif()
+ 
+   if( ARG_INTERNALIZE )
+-- 
+2.53.0.310.g728cabbaf7-goog
+
