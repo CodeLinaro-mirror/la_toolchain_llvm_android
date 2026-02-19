@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 #
 # Copyright (C) 2025 The Android Open Source Project
 #
@@ -21,16 +22,27 @@ import itertools
 from functools import lru_cache
 import json
 import math
+import os
 
-import pandas as pd
-import numpy as np
-from scipy import stats
+try:
+    import pandas as pd
+    import numpy as np
+    from scipy import stats
 
-from bokeh import layouts
-from bokeh import plotting
-from bokeh import transform
-from bokeh import models
-from bokeh.models import ranges
+    from bokeh import layouts
+    from bokeh import plotting
+    from bokeh import transform
+    from bokeh import models
+    from bokeh.models import ranges
+except ImportError:
+    missingImportString = """
+  Missing necessary libraries. Try doing the following:
+  1. Setup and activate a python venv using go/local-python.
+  2. Install pandas, scipy, numpy, bokeh inside the virtualenv.
+  3. Run the script inside the virtualenv.
+"""
+    raise ImportError(missingImportString)
+
 
 __doc__ = (
     "This program can be used to better discover and document improvements and"
@@ -75,11 +87,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-o",
         "--output-dir-path",
-        default=Path(__file__).parent.resolve(),
-        help=(
-            "Directory path to output analysis to. Defaults to"
-            f" {Path(__file__).parent.resolve()}"
-        ),
+        default=Path(os.getcwd()),
+        help="Directory path to output analysis to. Defaults to os.getcwd().",
     )
     parser.add_argument(
         "-g",
