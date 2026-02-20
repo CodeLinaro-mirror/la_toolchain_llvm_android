@@ -1,0 +1,30 @@
+From f31383c7d706f54b6167394722c7e932495dd611 Mon Sep 17 00:00:00 2001
+From: Muhammad Qureshi <muhammadq@google.com>
+Date: Tue, 10 Feb 2026 13:22:44 -0800
+Subject: [PATCH] Replace module annotation usages with module_name
+
+Bug: 477963061
+Test: TreeHugger
+Flag: EXEMPT TEST_ONLY
+Change-Id: I60252572690d3a0c4d5024369526172105b515e7
+---
+ stats/aidl/vts/java/test_vendor_atom.proto | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto b/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
+index c7145a3..71040f6 100644
+--- a/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
++++ b/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
+@@ -27,8 +27,7 @@ import "frameworks/proto_logging/stats/atom_field_options.proto";
+ message Atom {
+     oneof pushed {
+         TestVendorAtomReported test_vendor_atom_reported = 109999
+-            [(android.os.statsd.module) = "istatsvts"];
+-    }
++            [(android.os.statsd.module_name) = "istatsvts"];    }
+ }
+ 
+ message TestVendorAtomNestedMessage {
+-- 
+2.53.0.345.g96ddfc5eaa-goog
+
