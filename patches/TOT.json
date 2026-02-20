@@ -1,16 +1,1 @@
-[
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert Reapply [C++20][Modules] Implement P1857R3 Modules"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-Reapply-C-20-Modules-Implement-P1857R3-Module.patch",
-        "version_range": {
-            "from": 603933,
-            "until": null
-        }
-    }
-]
+[]

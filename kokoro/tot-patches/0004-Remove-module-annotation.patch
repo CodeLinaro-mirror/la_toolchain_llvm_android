@@ -1,0 +1,51 @@
+From 7588df9aa1b1e571f4444dcdb4403a22c79588f4 Mon Sep 17 00:00:00 2001
+From: Muhammad Qureshi <muhammadq@google.com>
+Date: Tue, 10 Feb 2026 16:38:35 -0800
+Subject: [PATCH] Remove module annotation
+
+Update stats-log-api-gen to stop reading module annotation.
+Only module_name is parsed.
+
+Bug: 477963061
+Test: stats-log-api-gen-test
+Flag: EXEMPT HOST_MODE
+Change-Id: I32a8c7ee14f1519049a9684feab14f4f2da62d91
+---
+ stats/atom_field_options.proto        | 2 +-
+ stats/stats_log_api_gen/Collation.cpp | 7 -------
+ 2 files changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/frameworks/proto_logging/stats/atom_field_options.proto b/frameworks/proto_logging/stats/atom_field_options.proto
+index c700824d8..4e64c7af7 100644
+--- a/frameworks/proto_logging/stats/atom_field_options.proto
++++ b/frameworks/proto_logging/stats/atom_field_options.proto
+@@ -160,7 +160,7 @@ extend google.protobuf.FieldOptions {
+ 
+     optional LogMode log_mode = 50002 [default = MODE_AUTOMATIC];
+ 
+-    repeated string module = 50004 [deprecated = true];
++    // reserved 50004; module has been moved to module_name
+ 
+     optional bool truncate_timestamp = 50005 [default = false];
+ 
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp b/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
+index 3156fd24b..73c2f092e 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
+@@ -623,13 +623,6 @@ static bool is_atom_in_module(const FieldDescriptor& atomField, const string& mo
+         }
+     }
+ 
+-    const int moduleCount = atomField.options().ExtensionSize(os::statsd::module);
+-    for (int j = 0; j < moduleCount; ++j) {
+-        if (atomField.options().GetExtension(os::statsd::module, j) == moduleName) {
+-            return true;
+-        }
+-    }
+-
+     return false;
+ }
+ 
+-- 
+2.53.0.345.g96ddfc5eaa-goog
+
