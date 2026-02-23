@@ -737,7 +737,7 @@ class LibUnwindBuilder(base_builders.LLVMRuntimeBuilder):
 
 class LibOMPBuilder(base_builders.LLVMRuntimeBuilder):
     name: str = 'libomp'
-    src_dir: Path = paths.LLVM_PATH / 'openmp'
+    src_dir: Path = paths.LLVM_PATH / 'runtimes'
 
     config_list: List[configs.Config] = (
         configs.android_configs(platform=True, extra_config={'is_shared': False}) +
@@ -758,15 +758,28 @@ class LibOMPBuilder(base_builders.LLVMRuntimeBuilder):
     @property
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
+        defines['LLVM_ENABLE_RUNTIMES'] = 'openmp'
         defines['OPENMP_ENABLE_LIBOMPTARGET'] = 'FALSE'
         defines['OPENMP_ENABLE_OMPT_TOOLS'] = 'FALSE'
         defines['LIBOMP_ENABLE_SHARED'] = 'TRUE' if self.is_shared else 'FALSE'
         return defines
 
+    # With the change to building openmp through runtimes, it will try to build
+    # libruntimes_gtest which ends up looking for fseeko and ftello but cannot
+    # find it correctly for API level 21. I am forcing it to build only omp for
+    # Arm32 and i386 to avoid building libruntimes_gtest
+    # TODO: Remove this if we stopped building for Arm32 and i386 or the NDK's API level >= 24
+    def _ninja(self, args: list[str], add_env: Optional[Dict[str, str]] = None) -> None:
+        if self._config.target_arch == hosts.Arch.ARM or self._config.target_arch == hosts.Arch.I386:
+            args = ["omp"]
+
+        # Still run normal build_config
+        super()._ninja(args, add_env)
+
     def install_config(self) -> None:
         # We need to install libomp manually.
         libname = 'libomp.' + ('so' if self.is_shared else 'a')
-        src_lib = self.output_dir / 'runtime' / 'src' / libname
+        src_lib = self.output_dir / 'openmp' / 'runtime' / 'src' / libname
         dst_dir = self.install_dir
         dst_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src_lib, dst_dir / libname)
@@ -774,7 +787,7 @@ class LibOMPBuilder(base_builders.LLVMRuntimeBuilder):
         # install omp.h, omp-tools.h (it's enough to do for just one config).
         if self._config.target_arch == hosts.Arch.AARCH64:
             for header in ['omp.h', 'omp-tools.h']:
-                shutil.copy2(self.output_dir / 'runtime' / 'src' / header,
+                shutil.copy2(self.output_dir / 'openmp' / 'runtime' / 'src' / header,
                              self.output_toolchain.clang_builtin_header_dir)
 
 
