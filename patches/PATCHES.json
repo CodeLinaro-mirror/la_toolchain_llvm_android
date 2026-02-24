@@ -842,6 +842,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[InstCombine] Allow freezing multiple operands (#154336)\" (#182769)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bd3b163dce306040e2fa8d3bf5eef2385fc0bb37.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 608033
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
