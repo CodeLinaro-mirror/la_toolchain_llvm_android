@@ -1,43 +1,30 @@
-From d576ff2f4e6ee045ff122e5443e689ec42e5b7aa Mon Sep 17 00:00:00 2001
+From f31383c7d706f54b6167394722c7e932495dd611 Mon Sep 17 00:00:00 2001
 From: Muhammad Qureshi <muhammadq@google.com>
-Date: Tue, 10 Feb 2026 13:24:24 -0800
+Date: Tue, 10 Feb 2026 13:22:44 -0800
 Subject: [PATCH] Replace module annotation usages with module_name
 
 Bug: 477963061
 Test: TreeHugger
-Flag: EXEMPT UNSUPPORTED_LANGUAGE
-Change-Id: I2987ad93bd5a0055412a7a6a6e9e2e9eb06833d5
+Flag: EXEMPT TEST_ONLY
+Change-Id: I60252572690d3a0c4d5024369526172105b515e7
 ---
- core/chre_metrics_with_atom.proto | 12 ++++++------
- 1 file changed, 6 insertions(+), 6 deletions(-)
+ stats/aidl/vts/java/test_vendor_atom.proto | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
 
-diff --git a/system/chre/core/chre_metrics_with_atom.proto b/system/chre/core/chre_metrics_with_atom.proto
-index afd436de8..06b088600 100644
---- a/system/chre/core/chre_metrics_with_atom.proto
-+++ b/system/chre/core/chre_metrics_with_atom.proto
-@@ -35,16 +35,16 @@ message Atom {
-   oneof pushed {
-     // AOSP atom ID range starts at 105000
-     ChreHalNanoappLoadFailed chre_hal_nanoapp_load_failed = 105031
--        [(android.os.statsd.module) = "chre"];
-+        [(android.os.statsd.module_name) = "chre"];
-     ChrePalOpenFailed chre_pal_open_failed = 105032
--        [(android.os.statsd.module) = "chre"];
-+        [(android.os.statsd.module_name) = "chre"];
-     ChreApiErrorCodeDistributionTaken chre_api_error_code_distribution_taken =
--        105033 [(android.os.statsd.module) = "chre"];
-+        105033 [(android.os.statsd.module_name) = "chre"];
-     ChreDynamicMemorySnapshotReported chre_dynamic_memory_snapshot_reported =
--        105034 [(android.os.statsd.module) = "chre"];
-+        105034 [(android.os.statsd.module_name) = "chre"];
-     ChreEventQueueSnapshotReported chre_event_queue_snapshot_reported = 105035
--        [(android.os.statsd.module) = "chre"];
-+        [(android.os.statsd.module_name) = "chre"];
-     ChreApWakeUpOccurred chre_ap_wake_up_occurred = 105036
--        [(android.os.statsd.module) = "chre"];
-+        [(android.os.statsd.module_name) = "chre"];
-   }
+diff --git a/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto b/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
+index c7145a3..71040f6 100644
+--- a/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
++++ b/frameworks/hardware/interfaces/stats/aidl/vts/java/test_vendor_atom.proto
+@@ -27,8 +27,7 @@ import "frameworks/proto_logging/stats/atom_field_options.proto";
+ message Atom {
+     oneof pushed {
+         TestVendorAtomReported test_vendor_atom_reported = 109999
+-            [(android.os.statsd.module) = "istatsvts"];
+-    }
++            [(android.os.statsd.module_name) = "istatsvts"];    }
  }
+ 
+ message TestVendorAtomNestedMessage {
 -- 
 2.53.0.345.g96ddfc5eaa-goog
 

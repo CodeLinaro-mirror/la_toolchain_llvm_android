@@ -1,0 +1,232 @@
+From eadb37004483971b5f6aecc7ddad37101c57f333 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Wed, 25 Feb 2026 22:45:15 +0000
+Subject: [PATCH] Revised version of Add module_name annotation
+
+Change-Id: I09aedbddd6908138ecb5c6e9a388978d1d91b8b9
+---
+ stats/atom_field_options.proto              | 42 ++++++++++++++++++-
+ stats/stats_log_api_gen/Collation.cpp       | 45 ++++++++++++---------
+ stats/stats_log_api_gen/test.proto          |  1 +
+ stats/stats_log_api_gen/test_api_gen.cpp    |  5 ++-
+ stats/stats_log_api_gen/test_collation.cpp  | 10 ++---
+ stats/stats_log_api_gen/test_external.proto |  1 +
+ 6 files changed, 78 insertions(+), 26 deletions(-)
+
+diff --git a/frameworks/proto_logging/stats/atom_field_options.proto b/frameworks/proto_logging/stats/atom_field_options.proto
+index 776f3e4f3..4e5233649 100644
+--- a/frameworks/proto_logging/stats/atom_field_options.proto
++++ b/frameworks/proto_logging/stats/atom_field_options.proto
+@@ -151,6 +151,39 @@ message HistogramBinOption {
+     }
+ }
+ 
++// Measurement units usable by performance monitoring tools.
++// Atom fields annotated with the unit will have proper axis labels (and for
++// some units auto-scaled values) when visualized.
++enum Unit {
++  UNIT_UNKNOWN = 0;
++
++  // --------- Time ---------
++  UNIT_NANOSECONDS = 1;
++  UNIT_MICROSECONDS = 2;
++  UNIT_MILLISECONDS = 3;
++  UNIT_SECONDS = 4;
++  UNIT_MINUTES = 5;
++  UNIT_HOURS = 6;
++
++  // --------- Data ---------
++  UNIT_BYTES = 100;
++  UNIT_KILOBYTES = 101;
++  UNIT_MEGABYTES = 102;
++  UNIT_GIGABYTES = 103;
++
++  // --------- Power ---------
++  UNIT_MILLI_AMPS = 200;
++  UNIT_MILL_AMP_HOURS = 201;
++
++  UNIT_MILLI_WATTS = 210;
++  UNIT_MILLI_WATT_HOURS = 211;
++
++  // --------- Other ---------
++  UNIT_COUNT = 10000;
++  // This should be used for data in the range [0..1] meaning 0.1 = 10%.
++  UNIT_PERCENTAGE = 10001;
++}
++
+ extend google.protobuf.FieldOptions {
+     // Flags to decorate an atom that presents a state change.
+     optional StateAtomFieldOption state_field_option = 50000;
+@@ -160,7 +193,7 @@ extend google.protobuf.FieldOptions {
+ 
+     optional LogMode log_mode = 50002 [default = MODE_AUTOMATIC];
+ 
+-    repeated string module = 50004;
++    repeated string module = 50004 [deprecated = true];
+ 
+     optional bool truncate_timestamp = 50005 [default = false];
+ 
+@@ -169,4 +202,11 @@ extend google.protobuf.FieldOptions {
+     optional FieldRestrictionOption field_restriction_option = 50007;
+ 
+     optional HistogramBinOption histogram_bin_option = 50008;
++
++    // Measurement units usable by performance monitoring tools.
++    // Atom fields with the unit annotated will have proper axis labels (and for
++    // some units auto-scaled values) when visualized.
++    optional Unit unit = 50009;
++
++    repeated string module_name = 50010;
+ }
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp b/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
+index cab8238d4..3156fd24b 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/Collation.cpp
+@@ -611,29 +611,38 @@ static AtomType getAtomType(const FieldDescriptor& atomField) {
+     }
+ }
+ 
++static bool is_atom_in_module(const FieldDescriptor& atomField, const string& moduleName) {
++    if (moduleName == DEFAULT_MODULE_NAME) {
++        return true;
++    }
++
++    const int moduleNameCount = atomField.options().ExtensionSize(os::statsd::module_name);
++    for (int j = 0; j < moduleNameCount; ++j) {
++        if (atomField.options().GetExtension(os::statsd::module_name, j) == moduleName) {
++            return true;
++        }
++    }
++
++    const int moduleCount = atomField.options().ExtensionSize(os::statsd::module);
++    for (int j = 0; j < moduleCount; ++j) {
++        if (atomField.options().GetExtension(os::statsd::module, j) == moduleName) {
++            return true;
++        }
++    }
++
++    return false;
++}
++
+ static int collate_from_field_descriptor(const FieldDescriptor& atomField, const string& moduleName,
+                                          Atoms& atoms) {
+     int errorCount = 0;
+ 
+-    if (moduleName != DEFAULT_MODULE_NAME) {
+-        const int moduleCount = atomField.options().ExtensionSize(os::statsd::module);
+-        bool moduleFound = false;
+-        for (int j = 0; j < moduleCount; ++j) {
+-            const string atomModuleName = atomField.options().GetExtension(os::statsd::module, j);
+-            if (atomModuleName == moduleName) {
+-                moduleFound = true;
+-                break;
+-            }
+-        }
+-
+-        // This atom is not in the module we're interested in; skip it.
+-        if (!moduleFound) {
+-            if (dbg) {
+-                printf("   Skipping %s (%d)\n", std::string(atomField.name()).c_str(),
+-                       atomField.number());
+-            }
+-            return errorCount;
++    if (!is_atom_in_module(atomField, moduleName)) {
++        if (dbg) {
++            printf("   Skipping %s (%d)\n", std::string(atomField.name()).c_str(),
++                   atomField.number());
+         }
++        return errorCount;
+     }
+ 
+     if (dbg) {
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/test.proto b/frameworks/proto_logging/stats/stats_log_api_gen/test.proto
+index 889a906c6..cab14614f 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/test.proto
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/test.proto
+@@ -314,6 +314,7 @@ message ModuleAtoms {
+                 (android.os.statsd.module) = "module1", (android.os.statsd.module) = "module2"
+         ];
+         NoModuleAtom no_module_atom = 4;
++        ModuleOneAtom module_name_one_atom = 5 [(android.os.statsd.module_name) = "module1"];
+     }
+ }
+ 
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/test_api_gen.cpp b/frameworks/proto_logging/stats/stats_log_api_gen/test_api_gen.cpp
+index 8ffb440d7..f39c49f7a 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/test_api_gen.cpp
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/test_api_gen.cpp
+@@ -26,8 +26,9 @@ namespace stats_log_api_gen {
+ TEST(ApiGenAtomTest, AtomIdConstantsTest) {
+     // For reference from the atoms.proto
+     // BleScanStateChanged ble_scan_state_changed = 2
+-    //         [(module) = "bluetooth", (module) = "statsdtest"];
+-    // ProcessStateChanged process_state_changed = 3 [(module) = "framework", deprecated = true];
++    //         [(module_name) = "bluetooth", (module_name) = "statsdtest"];
++    // ProcessStateChanged process_state_changed = 3
++    //         [(module_name) = "framework", deprecated = true];
+     EXPECT_EQ(android::util::BLE_SCAN_STATE_CHANGED, 2);
+     EXPECT_EQ(android::util::PROCESS_STATE_CHANGED, 3);
+     EXPECT_EQ(android::util::BOOT_SEQUENCE_REPORTED, 57);
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/test_collation.cpp b/frameworks/proto_logging/stats/stats_log_api_gen/test_collation.cpp
+index e8bb667ec..220bb5ab0 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/test_collation.cpp
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/test_collation.cpp
+@@ -355,14 +355,14 @@ TEST_P(CollationTest, PassOnLogFromModuleAtom) {
+     Atoms atoms;
+     const int errorCount = collate_atoms(*mModuleAtoms, DEFAULT_MODULE_NAME, atoms);
+     EXPECT_EQ(errorCount, 0);
+-    EXPECT_EQ(atoms.decls.size(), 4ul);
++    EXPECT_EQ(atoms.decls.size(), 5ul);
+ }
+ 
+ TEST_P(CollationTest, RecognizeModuleAtom) {
+     Atoms atoms;
+     const int errorCount = collate_atoms(*mModuleAtoms, DEFAULT_MODULE_NAME, atoms);
+     EXPECT_EQ(errorCount, 0);
+-    EXPECT_EQ(atoms.decls.size(), 4ul);
++    EXPECT_EQ(atoms.decls.size(), 5ul);
+     EXPECT_EQ(atoms.signatureInfoMap.size(), 2u);
+     EXPECT_MAP_CONTAINS_SIGNATURE(atoms.signatureInfoMap, JAVA_TYPE_INT);
+     EXPECT_MAP_CONTAINS_SIGNATURE(atoms.signatureInfoMap, JAVA_TYPE_STRING);
+@@ -389,7 +389,7 @@ TEST_P(CollationTest, RecognizeModuleAtom) {
+     fieldNumberToAtomDeclSetIt = fieldNumberToAtomDeclSet->begin();
+     EXPECT_EQ(1, fieldNumberToAtomDeclSetIt->first);
+     atomDeclSet = &fieldNumberToAtomDeclSetIt->second;
+-    EXPECT_EQ(2ul, atomDeclSet->size());
++    EXPECT_EQ(3ul, atomDeclSet->size());
+     atomDeclSetIt = atomDeclSet->begin();
+     atomDecl = atomDeclSetIt->get();
+     EXPECT_EQ(1, atomDecl->code);
+@@ -433,7 +433,7 @@ TEST_P(CollationTest, RecognizeModule1Atom) {
+     const string moduleName = "module1";
+     const int errorCount = collate_atoms(*mModuleAtoms, moduleName, atoms);
+     EXPECT_EQ(errorCount, 0);
+-    EXPECT_EQ(atoms.decls.size(), 2ul);
++    EXPECT_EQ(atoms.decls.size(), 3ul);
+     EXPECT_EQ(atoms.signatureInfoMap.size(), 1u);
+     EXPECT_MAP_CONTAINS_SIGNATURE(atoms.signatureInfoMap, JAVA_TYPE_INT);
+ 
+@@ -459,7 +459,7 @@ TEST_P(CollationTest, RecognizeModule1Atom) {
+     fieldNumberToAtomDeclSetIt = fieldNumberToAtomDeclSet->begin();
+     EXPECT_EQ(1, fieldNumberToAtomDeclSetIt->first);
+     atomDeclSet = &fieldNumberToAtomDeclSetIt->second;
+-    EXPECT_EQ(2ul, atomDeclSet->size());
++    EXPECT_EQ(3ul, atomDeclSet->size());
+     atomDeclSetIt = atomDeclSet->begin();
+     atomDecl = atomDeclSetIt->get();
+     EXPECT_EQ(1, atomDecl->code);
+diff --git a/frameworks/proto_logging/stats/stats_log_api_gen/test_external.proto b/frameworks/proto_logging/stats/stats_log_api_gen/test_external.proto
+index a31f2c713..308a090bb 100644
+--- a/frameworks/proto_logging/stats/stats_log_api_gen/test_external.proto
++++ b/frameworks/proto_logging/stats/stats_log_api_gen/test_external.proto
+@@ -314,6 +314,7 @@ message ModuleAtoms {
+                 (android.os.statsd.module) = "module1", (android.os.statsd.module) = "module2"
+         ];
+         NoModuleAtom no_module_atom = 4;
++        ModuleOneAtom module_name_one_atom = 5 [(android.os.statsd.module_name) = "module1"];
+     }
+ }
+ 
+-- 
+2.53.0.414.gf7e9f6c205-goog
+

@@ -1,25 +1,19 @@
-From 7588df9aa1b1e571f4444dcdb4403a22c79588f4 Mon Sep 17 00:00:00 2001
-From: Muhammad Qureshi <muhammadq@google.com>
-Date: Tue, 10 Feb 2026 16:38:35 -0800
-Subject: [PATCH] Remove module annotation
+From 23251a5f11273cb7e9682395f8974207add60cec Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Wed, 25 Feb 2026 22:49:42 +0000
+Subject: [PATCH] Revised version of Remove module annotation
 
-Update stats-log-api-gen to stop reading module annotation.
-Only module_name is parsed.
-
-Bug: 477963061
-Test: stats-log-api-gen-test
-Flag: EXEMPT HOST_MODE
-Change-Id: I32a8c7ee14f1519049a9684feab14f4f2da62d91
+Change-Id: Ic2130690a544033880c0d52d35c40a27b358b9d0
 ---
  stats/atom_field_options.proto        | 2 +-
  stats/stats_log_api_gen/Collation.cpp | 7 -------
  2 files changed, 1 insertion(+), 8 deletions(-)
 
 diff --git a/frameworks/proto_logging/stats/atom_field_options.proto b/frameworks/proto_logging/stats/atom_field_options.proto
-index c700824d8..4e64c7af7 100644
+index 4e5233649..2b64dfc60 100644
 --- a/frameworks/proto_logging/stats/atom_field_options.proto
 +++ b/frameworks/proto_logging/stats/atom_field_options.proto
-@@ -160,7 +160,7 @@ extend google.protobuf.FieldOptions {
+@@ -193,7 +193,7 @@ extend google.protobuf.FieldOptions {
  
      optional LogMode log_mode = 50002 [default = MODE_AUTOMATIC];
  
@@ -47,5 +41,5 @@ index 3156fd24b..73c2f092e 100644
  }
  
 -- 
-2.53.0.345.g96ddfc5eaa-goog
+2.53.0.414.gf7e9f6c205-goog
 
