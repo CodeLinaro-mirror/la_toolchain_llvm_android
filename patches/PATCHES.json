@@ -856,6 +856,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] fix transformation of substituted constant template parameters of partial specializations (#183348)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/72daf0c02303c64dbd27f3e93667319829b05519.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 608652
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
