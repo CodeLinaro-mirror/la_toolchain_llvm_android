@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import xml.etree.ElementTree as ET
 
 import context  # pylint: disable=unused-import
 from llvm_android import utils, paths
@@ -191,8 +192,39 @@ def format_bug(bug):
     return bug
 
 
+def rewrite_manifest(manifest: str, aosp_manifest: str):
+    """Rewrites the manifest to use the aosp remote and mirror branches."""
+    tree = ET.parse(manifest)
+    root = tree.getroot()
+
+    remote = root.find('remote')
+    if remote is None or remote.get('name') != 'goog':
+        raise ValueError("Expected remote 'goog'")
+    remote.set('name', 'aosp')
+    remote.set('fetch', 'https://android.googlesource.com/')
+    remote.set('review', 'https://android.googlesource.com/')
+
+    default = root.find('default')
+    if default is not None:
+        default.set('remote', 'aosp')
+        revision = default.get('revision')
+        if not revision:
+            raise ValueError("revision attribute not found")
+        default.set('revision', f'mirror-goog-{revision}')
+
+    for project in root.findall('project'):
+        project.set('remote', 'aosp')
+        upstream = project.get('upstream')
+        if not upstream:
+            raise ValueError("upstream attribute not found")
+        project.set('upstream', f'mirror-goog-{upstream}')
+
+    ET.indent(tree, space="  ", level=0)
+    tree.write(aosp_manifest, encoding='utf-8', xml_declaration=True)
+
+
 def update_clang(prebuilt_dir: Path, host, build_number, use_current_branch,
-                 download_dir, bug, manifest, overwrite, do_validity_check,
+                 download_dir, bug, manifest, aosp_manifest, overwrite, do_validity_check,
                  is_testing):
     prebuilt_dir = prebuilt_dir / 'clang' / 'host' / host
     os.chdir(prebuilt_dir)
@@ -212,6 +244,7 @@ def update_clang(prebuilt_dir: Path, host, build_number, use_current_branch,
 
     build_info_file = f'{download_dir}/BUILD_INFO-{host}'
     manifest_file = f'{download_dir}/{manifest}'
+    aosp_manifest_file = f'{download_dir}/{aosp_manifest}'
 
     utils.extract_tarball(prebuilt_dir, package)
 
@@ -263,6 +296,7 @@ def update_clang(prebuilt_dir: Path, host, build_number, use_current_branch,
 
     shutil.copy(build_info_file, str(prebuilt_dir / install_subdir / 'BUILD_INFO'))
     shutil.copy(manifest_file, str(prebuilt_dir / install_subdir))
+    shutil.copy(aosp_manifest_file, str(prebuilt_dir / install_subdir))
 
     utils.check_call(['git', 'add', install_subdir])
 
@@ -330,6 +364,7 @@ def main():
     build_info = 'BUILD_INFO'
     clang_pattern = 'clang-*.tar.xz'
     manifest = f'manifest_{args.build}.xml'
+    aosp_manifest = f'aosp_{manifest}'
 
     branch = args.branch
     if branch is None:
@@ -348,6 +383,7 @@ def main():
     try:
         if do_fetch:
             utils.fetch_artifact(branch, targets[0], args.build, manifest)
+            rewrite_manifest(manifest, aosp_manifest)
             for host in hosts:
                 target = targets_map[host]
                 utils.fetch_artifact(branch, target, args.build, build_info)
@@ -361,7 +397,7 @@ def main():
             prebuilt_dir = paths.PREBUILTS_DIR
         for host in hosts:
             update_clang(prebuilt_dir, host, args.build, args.use_current_branch,
-                         download_dir, args.bug, manifest, args.overwrite,
+                         download_dir, args.bug, manifest, aosp_manifest, args.overwrite,
                          not args.no_validity_check, is_testing)
 
         if args.repo_upload:
