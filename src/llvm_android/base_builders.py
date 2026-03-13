@@ -934,6 +934,11 @@ class LLVMBuilder(LLVMBaseBuilder):
         if self.enable_mlgo:
             defines['TENSORFLOW_AOT_PATH'] = paths.get_tensorflow_path()
 
+        # TensorFlow's XLA AOT runtime has a cmake_minimum_required < 3.5,
+        # which is no longer supported by CMake since 4.0.
+        # TODO: Remove this once we upgrade past tensorflow 2.21.0.
+        defines['CMAKE_POLICY_VERSION_MINIMUM'] = '3.5'
+
         return defines
 
     def _build_config(self) -> None:
