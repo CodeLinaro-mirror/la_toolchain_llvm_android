@@ -870,6 +870,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] use canonical arguments for checking function template constraints (#186889)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/83965ad10c1e8af42fba460152f7c90c0e2aa6f0.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 611027
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Use an unknown size for memcpy ops with non-constant sizes. (#187445)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/441790b31f06ed2300e0e8d74f3bdf446bc105aa.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 611580
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
