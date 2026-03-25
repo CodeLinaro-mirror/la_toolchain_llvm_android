@@ -5,7 +5,7 @@ FROM ubuntu@sha256:c35e29c9450151419d9448b0fd75374fec4fff364a27f176fb458d472dfc9
 # Pin apt packages date.
 # Ubuntu snapshots requires installing the latest ca-certificates package.
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN echo 'APT::Snapshot "20260101T000000Z";' > /etc/apt/apt.conf.d/50snapshot
+RUN echo 'APT::Snapshot "20260325T000000Z";' > /etc/apt/apt.conf.d/50snapshot
 
 RUN apt-get update \
 && DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get install --no-install-recommends -y \
@@ -28,6 +28,8 @@ RUN apt-get update \
   # Necessary to test 32-bit runtimes.
   gcc-multilib \
   libc6-dev-i386-cross \
+  # mingw build
+  lbzip2 \
 && rm -rf /var/lib/apt/lists/*
 
 # Install TensorFlow
