@@ -1,0 +1,234 @@
+From 9a1ebae0296b544a3b5a5f2bbaee8e8803427de9 Mon Sep 17 00:00:00 2001
+From: Ard Biesheuvel <ardb@kernel.org>
+Date: Wed, 25 Mar 2026 16:57:12 +0100
+Subject: [PATCH] [AARCH64] Support TPIDR_EL0 and TPIDRRO_EL0 as stack
+ protector sysregs (#188054)
+
+Even though the command line option suggests that arbitrary system
+registers may be chosen, the sysreg option for the stack protector guard
+currently only permits SP_EL0, as this is what the Linux kernel uses.
+
+While it makes no sense to permit arbitrary system registers here (which
+usually have side effects), there is a desire to switch to TPIDR_EL0 or
+TPIDRRO_EL0 from the Linux side, both of which are part of the base v8.0
+AArch64 ISA, and can hold arbitrary 64-bit values without side effects.
+
+So add TPIDR_EL0 and TPIDRRO_EL0 to the set of accepted arguments for
+the -mstack-protected-guard-reg= command line option. For good measure,
+add TPIDR_EL1, TPIDR_EL2, FAR_EL1 and FAR_EL2 as well, all of which
+could potentially be useful to privileged software such as the Linux
+kernel to stash a per-thread pointer to the stack protector guard value.
+
+Signed-off-by: Ard Biesheuvel <ardb@kernel.org>
+---
+ clang/lib/Driver/ToolChains/Clang.cpp         | 11 ++++-
+ clang/test/CodeGen/stack-protector-guard.c    | 28 +++++++++++-
+ clang/test/Driver/stack-protector-guard.c     |  7 ++-
+ .../CodeGen/AArch64/stack-guard-sysreg.ll     | 43 +++++++++++++------
+ 4 files changed, 72 insertions(+), 17 deletions(-)
+
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index 6416baf9126f..d2dcc8a80076 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -3588,8 +3588,15 @@ static void RenderSSPOptions(const Driver &D, const ToolChain &TC,
+           << A->getOption().getName() << Value << "fs gs";
+       return;
+     }
+-    if (EffectiveTriple.isAArch64() && Value != "sp_el0") {
+-      D.Diag(diag::err_drv_invalid_value) << A->getOption().getName() << Value;
++    if (EffectiveTriple.isAArch64() &&
++        llvm::StringSwitch<bool>(Value)
++            .Cases({"sp_el0", "tpidrro_el0", "tpidr_el0", "tpidr_el1",
++                    "tpidr_el2", "far_el1", "far_el2"},
++                   false)
++            .Default(true)) {
++      D.Diag(diag::err_drv_invalid_value_with_suggestion)
++          << A->getOption().getName() << Value
++          << "{sp_el0, tpidrro_el0, tpidr_el[012], far_el[12]}";
+       return;
+     }
+     if (EffectiveTriple.isRISCV() && Value != "tp") {
+diff --git a/clang/test/CodeGen/stack-protector-guard.c b/clang/test/CodeGen/stack-protector-guard.c
+index 0a4da13eed95..7bffa2a1107a 100644
+--- a/clang/test/CodeGen/stack-protector-guard.c
++++ b/clang/test/CodeGen/stack-protector-guard.c
+@@ -8,7 +8,25 @@
+ // RUN:   -mstack-protector-guard-offset=1024 -emit-llvm %s -o - | FileCheck %s
+ // RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
+ // RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=sp_el0 \
+-// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-SP
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=tpidrro_el0 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-TPIDRRO
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=tpidr_el0 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-TPIDR-EL0
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=tpidr_el1 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-TPIDR-EL1
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=tpidr_el2 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-TPIDR-EL2
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=far_el1 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-FAR-EL1
++// RUN: %clang_cc1 -mstack-protector-guard=sysreg -triple aarch64-linux-gnu \
++// RUN:   -mstack-protector-guard-offset=1024 -mstack-protector-guard-reg=far_el2 \
++// RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=AARCH64 --check-prefix=AARCH64-FAR-EL2
+ // RUN: %clang_cc1 -mstack-protector-guard=tls -triple riscv64-unknown-elf \
+ // RUN:   -mstack-protector-guard-offset=44 -mstack-protector-guard-reg=tp \
+ // RUN:   -emit-llvm %s -o - | FileCheck %s --check-prefix=RISCV
+@@ -30,7 +48,13 @@ void bar(int x) {
+ 
+ // AARCH64: !llvm.module.flags = !{{{.*}}[[ATTR1:![0-9]+]], [[ATTR2:![0-9]+]], [[ATTR3:![0-9]+]]}
+ // AARCH64: [[ATTR1]] = !{i32 1, !"stack-protector-guard", !"sysreg"}
+-// AARCH64: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"sp_el0"}
++// AARCH64-SP: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"sp_el0"}
++// AARCH64-TPIDRRO: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"tpidrro_el0"}
++// AARCH64-TPIDR-EL0: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"tpidr_el0"}
++// AARCH64-TPIDR-EL1: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"tpidr_el1"}
++// AARCH64-TPIDR-EL2: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"tpidr_el2"}
++// AARCH64-FAR-EL1: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"far_el1"}
++// AARCH64-FAR-EL2: [[ATTR2]] = !{i32 1, !"stack-protector-guard-reg", !"far_el2"}
+ // AARCH64: [[ATTR3]] = !{i32 1, !"stack-protector-guard-offset", i32 1024}
+ 
+ // RISCV: !llvm.module.flags = !{{{.*}}[[ATTR1:![0-9]+]], [[ATTR2:![0-9]+]], [[ATTR3:![0-9]+]], [[ATTR4:![0-9]+]]}
+diff --git a/clang/test/Driver/stack-protector-guard.c b/clang/test/Driver/stack-protector-guard.c
+index 666c83079e51..a31eeefa36dd 100644
+--- a/clang/test/Driver/stack-protector-guard.c
++++ b/clang/test/Driver/stack-protector-guard.c
+@@ -81,10 +81,15 @@
+ // RUN:   -mstack-protector-guard-reg=foo \
+ // RUN:   -mstack-protector-guard-offset=0 %s 2>&1 | \
+ // RUN: FileCheck -check-prefix=INVALID-REG-AARCH64 %s
++// RUN: %clang -### -target aarch64-linux-gnu -mstack-protector-guard=sysreg \
++// RUN:   -mstack-protector-guard-reg=tpidr_el0 \
++// RUN:   -mstack-protector-guard-offset=0 %s 2>&1 | \
++// RUN: FileCheck -check-prefix=CHECK-AARCH64-TPIDR %s
+ 
+ // CHECK-AARCH64: "-cc1" {{.*}}"-mstack-protector-guard=sysreg" "-mstack-protector-guard-offset=0" "-mstack-protector-guard-reg=sp_el0"
+ // INVALID-VALUE-AARCH64: error: invalid value 'tls' in 'mstack-protector-guard=', expected one of: sysreg global
+-// INVALID-REG-AARCH64: error: invalid value 'foo' in 'mstack-protector-guard-reg='
++// INVALID-REG-AARCH64: error: invalid value 'foo' in 'mstack-protector-guard-reg=', expected one of: {sp_el0, tpidrro_el0, tpidr_el[012], far_el[12]}
++// CHECK-AARCH64-TPIDR: "-cc1" {{.*}}"-mstack-protector-guard=sysreg" "-mstack-protector-guard-offset=0" "-mstack-protector-guard-reg=tpidr_el0"
+ 
+ // RUN: %clang -### -target riscv64-unknown-elf -mstack-protector-guard=tls -mstack-protector-guard-offset=24 -mstack-protector-guard-reg=tp %s 2>&1 | \
+ // RUN:   FileCheck -v -check-prefix=CHECK-TLS-RISCV %s
+diff --git a/llvm/test/CodeGen/AArch64/stack-guard-sysreg.ll b/llvm/test/CodeGen/AArch64/stack-guard-sysreg.ll
+index 60e8823934d1..44bd69664011 100644
+--- a/llvm/test/CodeGen/AArch64/stack-guard-sysreg.ll
++++ b/llvm/test/CodeGen/AArch64/stack-guard-sysreg.ll
+@@ -10,19 +10,19 @@
+ ; RUN: cat %t/main.ll %t/i.ll > %t/i2.ll
+ ; RUN: cat %t/main.ll %t/j.ll > %t/j2.ll
+ ; RUN: llc %t/a2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-NO-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-SP --check-prefix=CHECK-NO-OFFSET %s
+ ; RUN: llc %t/b2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-POSITIVE-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-TPIDRRO --check-prefix=CHECK-POSITIVE-OFFSET %s
+ ; RUN: llc %t/c2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-NEGATIVE-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-TPIDR0 --check-prefix=CHECK-NEGATIVE-OFFSET %s
+ ; RUN: llc %t/d2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-NPOT-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-TPIDR1 --check-prefix=CHECK-NPOT-OFFSET %s
+ ; RUN: llc %t/e2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-NPOT-NEG-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK --check-prefix=CHECK-TPIDR2 --check-prefix=CHECK-NPOT-NEG-OFFSET %s
+ ; RUN: llc %t/f2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK-ADD --check-prefix=CHECK-257-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK-ADD --check-prefix=CHECK-FAR1 --check-prefix=CHECK-257-OFFSET %s
+ ; RUN: llc %t/g2.ll -verify-machineinstrs -o - | \
+-; RUN: FileCheck --check-prefix=CHECK-ADD --check-prefix=CHECK-MINUS-257-OFFSET %s
++; RUN: FileCheck --check-prefix=CHECK-ADD --check-prefix=CHECK-FAR2 --check-prefix=CHECK-MINUS-257-OFFSET %s
+ 
+ ; XFAIL
+ ; RUN: not --crash llc %t/h2.ll -o - 2>&1 | \
+@@ -50,7 +50,11 @@ define dso_local void @foo(i64 %t) local_unnamed_addr #0 {
+ ; CHECK-NEXT:    .cfi_offset w29, -16
+ ; CHECK-NEXT:    .cfi_remember_state
+ ; CHECK-NEXT:    sub     sp, sp, #16
+-; CHECK-NEXT:    mrs     x8, SP_EL0
++; CHECK-SP:      mrs     x8, SP_EL0
++; CHECK-TPIDRRO: mrs     x8, TPIDRRO_EL0
++; CHECK-TPIDR0:  mrs     x8, TPIDR_EL0
++; CHECK-TPIDR1:  mrs     x8, TPIDR_EL1
++; CHECK-TPIDR2:  mrs     x8, TPIDR_EL2
+ ; CHECK-NEXT:    lsl     x9, x0, #2
+ ; CHECK-NO-OFFSET: ldr     x8, [x8]
+ ; CHECK-POSITIVE-OFFSET: ldr x8, [x8, #8]
+@@ -64,7 +68,11 @@ define dso_local void @foo(i64 %t) local_unnamed_addr #0 {
+ ; CHECK-NEXT     sub     x0, x8, x9
+ ; CHECK-NEXT     mov     sp, x0
+ ; CHECK-NEXT     bl      baz
+-; CHECK-NEXT     mrs     x8, SP_EL0
++; CHECK-SP:      mrs     x8, SP_EL0
++; CHECK-TPIDRRO: mrs     x8, TPIDRRO_EL0
++; CHECK-TPIDR0:  mrs     x8, TPIDR_EL0
++; CHECK-TPIDR1:  mrs     x8, TPIDR_EL1
++; CHECK-TPIDR2:  mrs     x8, TPIDR_EL2
+ ; CHECK-NO-OFFSET:       ldr x8, [x8]
+ ; CHECK-POSITIVE-OFFSET: ldr x8, [x8, #8]
+ ; CHECK-NEGATIVE-OFFSET: ldur x8, [x8, #-8]
+@@ -99,7 +107,8 @@ define dso_local void @foo(i64 %t) local_unnamed_addr #0 {
+ ; CHECK-ADD-NEXT:        .cfi_offset w29, -16
+ ; CHECK-ADD-NEXT:        .cfi_remember_state
+ ; CHECK-ADD-NEXT:        sub     sp, sp, #16
+-; CHECK-ADD-NEXT:        mrs     x8, SP_EL0
++; CHECK-FAR1:            mrs     x8, FAR_EL1
++; CHECK-FAR2:            mrs     x8, FAR_EL2
+ ; CHECK-ADD-NEXT:        lsl     x9, x0, #2
+ ; CHECK-MINUS-257-OFFSET: sub     x8, x8, #257
+ ; CHECK-257-OFFSET:      add     x8, x8, #257
+@@ -111,7 +120,8 @@ define dso_local void @foo(i64 %t) local_unnamed_addr #0 {
+ ; CHECK-ADD-NEXT:        sub     x0, x8, x9
+ ; CHECK-ADD-NEXT:        mov     sp, x0
+ ; CHECK-ADD-NEXT:        bl      baz
+-; CHECK-ADD-NEXT:        mrs     x8, SP_EL0
++; CHECK-FAR1:            mrs     x8, FAR_EL1
++; CHECK-FAR2:            mrs     x8, FAR_EL2
+ ; CHECK-257-OFFSET:      add     x8, x8, #257
+ ; CHECK-MINUS-257-OFFSET: sub     x8, x8, #257
+ ; CHECK-ADD-NEXT:         ldr     x8, [x8]
+@@ -148,25 +158,34 @@ attributes #0 = { sspstrong uwtable }
+ !llvm.module.flags = !{!1, !2, !3}
+ 
+ !1 = !{i32 2, !"stack-protector-guard", !"sysreg"}
+-!2 = !{i32 2, !"stack-protector-guard-reg", !"sp_el0"}
+ 
+ ;--- a.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"sp_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 0}
+ ;--- b.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"tpidrro_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 8}
+ ;--- c.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"tpidr_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 -8}
+ ;--- d.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"tpidr_el1"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 1}
+ ;--- e.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"tpidr_el2"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 -1}
+ ;--- f.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"far_el1"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 257}
+ ;--- g.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"far_el2"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 -257}
+ ;--- h.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"sp_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 32761}
+ ;--- i.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"sp_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 -4096}
+ ;--- j.ll
++!2 = !{i32 2, !"stack-protector-guard-reg", !"sp_el0"}
+ !3 = !{i32 2, !"stack-protector-guard-offset", i32 4097}
+-- 
+2.53.0.1018.g2bb0e51243-goog
+
