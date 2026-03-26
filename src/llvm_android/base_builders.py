@@ -970,7 +970,7 @@ class LLVMBuilder(LLVMBaseBuilder):
             check_env = {'LIT_FILTER_OUT': 'clangd|sys_info.zdump.pass.cpp'}
             if hosts.build_host().is_darwin:
                 # b/298489611, b/326166097
-                check_env = {'LIT_FILTER_OUT': 'clangd|clang-tidy|xpc|tools\/lto|LineEditor|Interpreter|ClangIncludeCleaner|ClangPseudo'}
+                check_env = {'LIT_FILTER_OUT': 'clangd|clang-tidy|xpc|tools/lto|LineEditor|Interpreter|ClangIncludeCleaner|ClangPseudo'}
                 checks.remove('check-llvm')
                 # b/360147931 Darwin build bots are at capacity so it is hard
                 # to discover and disable the exact set of flaky tests.
