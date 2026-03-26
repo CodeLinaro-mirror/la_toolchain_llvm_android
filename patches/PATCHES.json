@@ -926,6 +926,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [AARCH64] Support TPIDR_EL0 and TPIDRRO_EL0 as stack protector sysregs (#188054)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9a1ebae0296b544a3b5a5f2bbaee8e8803427de9.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 612185
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
