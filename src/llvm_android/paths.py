@@ -54,9 +54,7 @@ BISON_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'bison'
 BISON_PKGDATA_PATH: Path = BUILD_TOOLS_DIR/ 'common' / 'bison'
 M4_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'm4'
 MAKE_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.build_tag() / 'bin' / 'make'
-# Use the musl version of ninja on Linux, it is statically linked and avoids
-# problems with LD_LIBRARY_PATH causing ninja to use the wrong libc++.so.
-NINJA_BIN_PATH: Path = BUILD_TOOLS_DIR / hosts.musl_build_tag() / 'bin' / 'ninja'
+NINJA_BIN_PATH: Path = PREBUILTS_DIR / 'ninja' / hosts.build_tag() / 'ninja'
 
 LIBEDIT_SRC_DIR: Path = EXTERNAL_DIR / 'libedit'
 LIBNCURSES_SRC_DIR: Path = EXTERNAL_DIR / 'libncurses'
