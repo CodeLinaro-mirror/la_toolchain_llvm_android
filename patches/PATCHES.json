@@ -1375,7 +1375,7 @@
     },
     {
         "metadata": {
-            "info": [],        
+            "info": [],
             "title": "[UPSTREAM] [AArch64][SME] Disable tail calls for callees that require saving ZT0 (#165371)"
         },
         "platforms": [
@@ -1399,6 +1399,34 @@
         "version_range": {
             "from": 574158,
             "until": 597042
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ARM] Update and extend neon-dot-product.ll. NFC"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/7635474d26f82e7fd109746f754564ade78d1a51.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 602300
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ARM] Add tablegen patterns for vsdot and vudot high index. (#174728)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2f43659011be6287bb57f2c43f988727c100ccc2.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 603250
         }
     },
     {
