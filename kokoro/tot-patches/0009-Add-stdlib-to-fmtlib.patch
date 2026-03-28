@@ -1,0 +1,22 @@
+diff --git a/external/fmtlib/include/fmt/core.h b/external/fmtlib/include/fmt/core.h
+index 8ca735f..0365817 100644
+--- a/external/fmtlib/include/fmt/core.h
++++ b/external/fmtlib/include/fmt/core.h
+@@ -2,4 +2,5 @@
+ // versions. Use fmt/base.h if you don't need fmt::format and fmt/format.h
+ // otherwise.
+ 
++#include <stdlib.h>
+ #include "format.h"
+diff --git a/external/fmtlib/include/fmt/format.h b/external/fmtlib/include/fmt/format.h
+index ffe4fe0..7e38c2d 100644
+--- a/external/fmtlib/include/fmt/format.h
++++ b/external/fmtlib/include/fmt/format.h
+@@ -43,6 +43,7 @@
+ #ifndef FMT_MODULE
+ #  include <cmath>             // std::signbit
+ #  include <cstddef>           // std::byte
++#  include <cstdlib>
+ #  include <cstdint>           // uint32_t
+ #  include <cstring>           // std::memcpy
+ #  include <initializer_list>  // std::initializer_list
