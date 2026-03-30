@@ -2,6 +2,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "Revert [MC] Fuse relaxation and layout into a single forward pass"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-MC-Fuse-relaxation-and-layout-into-a-single-f.patch",
+        "version_range": {
+            "from": 609268,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Revert [SampleFDO] Check pseudo probe descriptors for unused profile in stale profile matching"
         },
         "platforms": [
