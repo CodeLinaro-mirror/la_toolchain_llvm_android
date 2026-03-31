@@ -1,7 +1,7 @@
-diff --git a/services/inputflinger/reader/mapper/TouchInputMapper.cpp b/services/inputflinger/reader/mapper/TouchInputMapper.cpp
+diff --git a/frameworks/native/services/inputflinger/reader/mapper/TouchInputMapper.cpp b/frameworks/native/services/inputflinger/reader/mapper/TouchInputMapper.cpp
 index a6dea4e..c4a1008 100644
---- a/services/inputflinger/reader/mapper/TouchInputMapper.cpp
-+++ b/services/inputflinger/reader/mapper/TouchInputMapper.cpp
+--- a/frameworks/native/services/inputflinger/reader/mapper/TouchInputMapper.cpp
++++ b/frameworks/native/services/inputflinger/reader/mapper/TouchInputMapper.cpp
 @@ -83,13 +83,6 @@ static std::string toString(const InputDeviceUsiVersion& v) {
      return base::StringPrintf("%d.%d", v.majorVersion, v.minorVersion);
  }
