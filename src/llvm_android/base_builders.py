@@ -901,6 +901,7 @@ class LLVMBuilder(LLVMBaseBuilder):
                 for base in ('BUILTINS', 'RUNTIMES'):
                     if _config.sysroot:
                         defines[f'{base}_{triple}_CMAKE_SYSROOT'] = _config.sysroot
+                    defines[f'{base}_{triple}_CMAKE_ASM_FLAGS'] = cflags_str
                     defines[f'{base}_{triple}_CMAKE_C_FLAGS'] = cflags_str
                     defines[f'{base}_{triple}_CMAKE_CXX_FLAGS'] = cxxflags_str
                     defines[f'{base}_{triple}_CMAKE_EXE_LINKER_FLAGS'] = ldflags_str
