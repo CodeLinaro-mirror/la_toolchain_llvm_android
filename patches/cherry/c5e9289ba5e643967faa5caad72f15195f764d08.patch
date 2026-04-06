@@ -1,0 +1,38 @@
+From c5e9289ba5e643967faa5caad72f15195f764d08 Mon Sep 17 00:00:00 2001
+From: Aiden Grossman <aidengrossman@google.com>
+Date: Tue, 2 Dec 2025 16:36:29 -0800
+Subject: [PATCH] [llvm-exegesis] Make rvv/filter.test deterministic
+
+This should prevent the flaky failures that have been plaguing the
+buildbots since the test was introduced and allow for offline
+investigation without disrupting CI.
+
+Reviewers: topperc, mshockwave
+
+Reviewed By: mshockwave
+
+Pull Request: https://github.com/llvm/llvm-project/pull/170014
+---
+ llvm/test/tools/llvm-exegesis/RISCV/rvv/filter.test | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/llvm/test/tools/llvm-exegesis/RISCV/rvv/filter.test b/llvm/test/tools/llvm-exegesis/RISCV/rvv/filter.test
+index 858569e4b0ef..3815e281876e 100644
+--- a/llvm/test/tools/llvm-exegesis/RISCV/rvv/filter.test
++++ b/llvm/test/tools/llvm-exegesis/RISCV/rvv/filter.test
+@@ -1,7 +1,9 @@
++# TODO(mshockwave): We use a fixed seed for this test because sometimes it
++# will fail to generate any snippet because it is unable to assign unique
++# def and use registers.
+ # RUN: llvm-exegesis -mtriple=riscv64 -mcpu=sifive-x280 -benchmark-phase=assemble-measured-code --mode=inverse_throughput --opcode-name=PseudoVNCLIPU_WX_M1_MASK \
+-# RUN:    --riscv-filter-config='vtype = {VXRM: rod, AVL: VLMAX, SEW: e(8|16), Policy: ta/mu}' --max-configs-per-opcode=1000 --min-instructions=10 | FileCheck %s
+-# Sometimes it'll fail to generate any snippet because it's unable to assign unique def and use registers.
+-# ALLOW_RETRIES: 2
++# RUN:    --riscv-filter-config='vtype = {VXRM: rod, AVL: VLMAX, SEW: e(8|16), Policy: ta/mu}' --max-configs-per-opcode=1000 --min-instructions=10 \
++# RUN:    -random-generator-seed=5 | FileCheck %s
+ 
+ # CHECK: config:          'vtype = {VXRM: rod, AVL: VLMAX, SEW: e8, Policy: ta/mu}'
+ # CHECK: config:          'vtype = {VXRM: rod, AVL: VLMAX, SEW: e16, Policy: ta/mu}'
+-- 
+2.53.0.1213.gd9a14994de-goog
+

@@ -730,6 +730,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [llvm-exegesis] Add CLI Option to set Fixed RNG seed"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/73889c35713ecc659935445ef066fa74ae62f3fa.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 598988
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [llvm-exegesis] Make rvv/filter.test deterministic"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c5e9289ba5e643967faa5caad72f15195f764d08.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 599228
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[FMV][AArch64] Add initial AT_HWCAP3 / AT_HWCAP4 support (#161595)\" (#171071)"
         },
         "platforms": [
@@ -935,6 +963,20 @@
         "version_range": {
             "from": 596125,
             "until": 612185
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [lld][COFF] Restore `lto-embed-bitcode` and `-fembed-bitcode` Bitcode Embedding Features (#188398)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1e99c9e4c7e82c8417e4bdb0d1cb3b86e6640c6c.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 612750
         }
     },
     {
