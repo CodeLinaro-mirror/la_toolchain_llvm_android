@@ -1,0 +1,81 @@
+From 73889c35713ecc659935445ef066fa74ae62f3fa Mon Sep 17 00:00:00 2001
+From: Aiden Grossman <aidengrossman@google.com>
+Date: Mon, 1 Dec 2025 07:12:40 -0800
+Subject: [PATCH] [llvm-exegesis] Add CLI Option to set Fixed RNG seed
+
+The primary motivation for this is to set a fixed RNG seed for flaky
+tests. This also has the bonus of adding debug logging for what seed
+gets used which can make it much easier to reproduce issues that only
+happen occasionally and are seed-dependent.
+
+Reviewers: sjoerdmeijer, davemgreen, mshockwave
+
+Reviewed By: davemgreen
+
+Pull Request: https://github.com/llvm/llvm-project/pull/170013
+---
+ .../X86/snippet-generator-seed.test              | 16 ++++++++++++++++
+ .../tools/llvm-exegesis/lib/SnippetGenerator.cpp | 14 +++++++++++++-
+ 2 files changed, 29 insertions(+), 1 deletion(-)
+ create mode 100644 llvm/test/tools/llvm-exegesis/X86/snippet-generator-seed.test
+
+diff --git a/llvm/test/tools/llvm-exegesis/X86/snippet-generator-seed.test b/llvm/test/tools/llvm-exegesis/X86/snippet-generator-seed.test
+new file mode 100644
+index 000000000000..54a0e4946fcd
+--- /dev/null
++++ b/llvm/test/tools/llvm-exegesis/X86/snippet-generator-seed.test
+@@ -0,0 +1,16 @@
++# REQUIRES: exegesis-can-measure-latency, x86_64-linux
++
++# Check that the snippet we generate is exactly the same between runs when we
++# use a fixed RNG seed.
++
++# RUN: llvm-exegesis -mtriple=x86_64-unknown-unknown -mode=latency -opcode-name=ADD64rr --benchmark-phase=prepare-snippet -random-generator-seed=5 | FileCheck %s
++
++# CHECK: ---
++# CHECK: mode:            latency
++# CHECK: key:
++# CHECK:   instructions:
++# CHECK:     - 'ADD64rr RCX RCX RAX'
++# CHECK:   config:          ''
++# CHECK:   register_initial_values:
++# CHECK:     - 'RCX=0x0'
++# CHECK:     - 'RAX=0x0'
+diff --git a/llvm/tools/llvm-exegesis/lib/SnippetGenerator.cpp b/llvm/tools/llvm-exegesis/lib/SnippetGenerator.cpp
+index 7023f1bfae19..86d4e197b606 100644
+--- a/llvm/tools/llvm-exegesis/lib/SnippetGenerator.cpp
++++ b/llvm/tools/llvm-exegesis/lib/SnippetGenerator.cpp
+@@ -21,9 +21,17 @@
+ #include "llvm/Support/FormatVariadic.h"
+ #include "llvm/Support/Program.h"
+ 
++#define DEBUG_TYPE "snippet-generator"
++
+ namespace llvm {
+ namespace exegesis {
+ 
++static cl::opt<unsigned>
++    RandomGeneratorSeed("random-generator-seed",
++                        cl::desc("The seed value to use for the random number "
++                                 "generator when generating snippets."),
++                        cl::init(0));
++
+ std::vector<CodeTemplate> getSingleton(CodeTemplate &&CT) {
+   std::vector<CodeTemplate> Result;
+   Result.push_back(std::move(CT));
+@@ -188,7 +196,11 @@ generateUnconstrainedCodeTemplates(const InstructionTemplate &Variant,
+ 
+ std::mt19937 &randomGenerator() {
+   static std::random_device RandomDevice;
+-  static std::mt19937 RandomGenerator(RandomDevice());
++  unsigned RandomSeed = RandomGeneratorSeed.getNumOccurrences()
++                            ? RandomGeneratorSeed
++                            : RandomDevice();
++  LLVM_DEBUG(dbgs() << "Using random seed " << RandomSeed << ".\n");
++  static std::mt19937 RandomGenerator(RandomSeed);
+   return RandomGenerator;
+ }
+ 
+-- 
+2.53.0.1213.gd9a14994de-goog
+
