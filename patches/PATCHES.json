@@ -1292,6 +1292,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [InstSimplify] Fix Compilation Hang in simplifyExtractValueInst (#190279)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4a6adf42d80a91f79c9c7c8d0c7801f9575d40dd.patch",
+        "version_range": {
+            "from": 563880,
+            "until": 613667
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
