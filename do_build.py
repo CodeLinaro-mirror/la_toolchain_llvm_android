@@ -386,6 +386,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         'clang' + ext,
         'clang++' + ext,
         'clang-' + version.major_version() + ext,
+        'clang-apply-replacements' + ext,
         'clang-check' + ext,
         'clang-cl' + ext,
         'clang-format' + ext,
@@ -431,6 +432,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         'llvm-windres' + ext,
         'merge-fdata' + ext,
         'perf2bolt' + ext,
+        'run-clang-tidy',  # No extension here
         'sancov' + ext,
         'sanstats' + ext,
         'scan-build' + ext,
@@ -470,6 +472,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         # merge-fdata is built with relocation, strip -S would fail. Treat it as
         # a script and do not strip as a workaround.
         'merge-fdata' + ext,
+        'run-clang-tidy',
         'scan-build',
         'scan-view',
     }
