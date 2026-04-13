@@ -996,6 +996,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[SimplifyCFG] Extend jump-threading to allow live local defs \u2026 (#190269)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a76750e6de6aba2223097dc505578556ec245d50.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 613309
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
