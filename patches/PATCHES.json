@@ -1328,5 +1328,19 @@
             "from": 596125,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "add Android libcxx hardening handler"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "libcxx-hardening-assertion-handler.patch",
+        "version_range": {
+            "from": 596125,
+            "until": null
+        }
     }
 ]

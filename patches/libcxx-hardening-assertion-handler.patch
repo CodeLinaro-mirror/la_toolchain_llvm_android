@@ -1,0 +1,63 @@
+From db35b36712633a97709b5bfb270b6fa3740c83d9 Mon Sep 17 00:00:00 2001
+From: George Burgess IV <gbiv@google.com>
+Date: Tue, 14 Apr 2026 10:39:37 -0600
+Subject: [PATCH] add Android libcxx hardening handler
+
+Diff from upstream's handlers:
+- This forces `__builtin_verbose_trap` to be `nomerge`
+- N calls to `void (const char *, ...)` take more bytes than N to `void
+  (const char *)` with `hidden` visibility
+
+Change-Id: I767869bab51f2588676fbb51ee58cbf4fef60536
+---
+ libcxx/vendor/android/android_assertion_handler.in | 52 +++++++++++++++++++
+ .../modes/override_with_debug_mode.pass.cpp        |  5 ++---
+ 2 files changed, 56 insertions(+), 2 deletions(-)
+ create mode 100644 libcxx/vendor/android/android_assertion_handler.in
+
+diff --git a/libcxx/vendor/android/android_assertion_handler.in b/libcxx/vendor/android/android_assertion_handler.in
+new file mode 100644
+index 000000000000..cea235e14342
+--- /dev/null
++++ b/libcxx/vendor/android/android_assertion_handler.in
+@@ -0,0 +1,37 @@
++// -*- C++ -*-
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef __LIBCPP_ANDROID_ASSERTION_HANDLER
++#define __LIBCPP_ANDROID_ASSERTION_HANDLER
++
++#include <__config>
++#include <__verbose_abort>
++
++#include <stdio.h>
++#include <unistd.h>
++
++#if _LIBCPP_ASSERTION_SEMANTIC == _LIBCPP_ASSERTION_SEMANTIC_ENFORCE
++_LIBCPP_BEGIN_NAMESPACE_STD
++
++// It's cheaper to call a `void(const char*)` function from N,000 places than
++// a varargs one; wrap the varargs to save bytes.
++[[__noreturn__]] _LIBCPP_HIDE_FROM_ABI _LIBCPP_NOINLINE
++inline void __libcpp_android_verbose_abort(const char *__message) {
++  _LIBCPP_VERBOSE_ABORT("%s", __message);
++}
++_LIBCPP_END_NAMESPACE_STD
++
++#  define _LIBCPP_ASSERTION_HANDLER(message) \
++  ({ [[clang::nomerge]] ::std::__libcpp_android_verbose_abort(message); })
++#else
++#  define _LIBCPP_ASSERTION_HANDLER(message) ({ [[clang::nomerge]] __builtin_verbose_trap("libc++", message); })
++#endif // _LIBCPP_ASSERTION_SEMANTIC == _LIBCPP_ASSERTION_SEMANTIC_ENFORCE
++
++
++#endif // __LIBCPP_ANDROID_ASSERTION_HANDLER
+-- 
+2.54.0.rc1.513.gad8abe7a5a-goog
+

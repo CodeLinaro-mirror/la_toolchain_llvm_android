@@ -753,6 +753,7 @@ class LLVMBuilder(LLVMBaseBuilder):
 
         defines['LLVM_ENABLE_PROJECTS'] = ';'.join(sorted(self.llvm_projects))
         defines['LLVM_ENABLE_RUNTIMES'] = ';'.join(sorted(self.llvm_runtime_projects))
+        defines['LIBCXX_ASSERTION_HANDLER_FILE'] = 'vendor/android/android_assertion_handler.in'
         defines['LLVM_INCLUDE_DOCS'] = 'OFF' # We don't ship LLVM docs.
 
         defines['LLVM_TARGETS_TO_BUILD'] = ';'.join(sorted(self.llvm_targets))
@@ -856,6 +857,7 @@ class LLVMBuilder(LLVMBaseBuilder):
                     'LLVM_ENABLE_LIBCXX',
                     'LIBCXXABI_USE_LLVM_UNWINDER',
                     'LIBCXXABI_ENABLE_STATIC_UNWINDER',
+                    'LIBCXX_ASSERTION_HANDLER_FILE',
             ]
 
             for _config in runtime_configs:
