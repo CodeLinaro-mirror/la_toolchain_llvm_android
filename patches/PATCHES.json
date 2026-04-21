@@ -1320,6 +1320,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Update `__mbstate_t.h` to include path to Android's `mbstate_t.h` (#192307)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5320cc50b6b4e3684ff4ba93a5c2c2429c09386b.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 615212
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
