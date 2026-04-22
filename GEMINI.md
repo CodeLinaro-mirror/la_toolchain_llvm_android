@@ -23,4 +23,4 @@ This project contains the build scripts and tooling used to manage the Android C
 ## Android LLVM Versioning
 Upstream LLVM is versioned using Git SHAs. Android LLVM uses a numeric versioning system in the format of `r*****`, which tracks the number of changes since the project's beginning. This is possible because upstream LLVM enforces a linear history without branching.
 
-Use `external/toolchain-utils/py/bin/llvm_tools/git_llvm_rev.py` to convert between upstream SHAs and Android numeric versions.
+Use `external/toolchain-utils/py/bin/llvm_tools/git_llvm_rev` to convert between upstream SHAs and Android numeric versions.
