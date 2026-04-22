@@ -887,6 +887,17 @@ class LLVMBuilder(LLVMBaseBuilder):
                 cxxflags = _config.cxxflags + self.cxxflags
                 ldflags = _config.ldflags + self.ldflags_for_runtime(_config)
 
+                # Disable mlgo to fix tot build for runtime aarch64-unknown-linux-musl, tracked at
+                # https://github.com/llvm/llvm-project/issues/193011.
+                if (android_version.is_llvm_next() and
+                        isinstance(_config, configs.LinuxMuslHostConfig) and
+                        _config.target_arch == hosts.Arch.AARCH64):
+                    mlgo_cflag = '-mllvm -regalloc-enable-advisor=release'
+                    mlgo_ldflag = '-Wl,-mllvm,-regalloc-enable-advisor=release'
+                    cflags = [f for f in cflags if f != mlgo_cflag]
+                    cxxflags = [f for f in cxxflags if f != mlgo_cflag]
+                    ldflags = [f for f in ldflags if f != mlgo_ldflag]
+
                 if _config.sysroot:
                     cflags.append(f'--sysroot={_config.sysroot}')
 
