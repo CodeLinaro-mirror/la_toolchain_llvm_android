@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import sys
 from typing import Dict, List, Optional
 import urllib.request
@@ -33,7 +34,7 @@ from llvm_android.android_version import get_svn_revision_number
 from merge_from_upstream import fetch_upstream, sha_to_revision
 from llvm_android import paths, source_manager
 from llvm_android.patch_utils import PatchItem, PatchList
-from llvm_android.utils import check_call, check_output
+from llvm_android.utils import check_call, check_output, unchecked_call
 
 
 def parse_args():
@@ -41,12 +42,16 @@ def parse_args():
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--sha', nargs='+', help="""
                         sha of patches to cherry pick. It accepts sha:custom_patch_file.""")
+    parser.add_argument('--revert-sha', nargs='+', help="""
+                        sha of patches to revert.""")
     parser.add_argument('--pr', help='Cherry pick from a GitHub PR, e.g., 84422')
     parser.add_argument(
         '--start-version', default='llvm',
         help="""svn revision to start applying patches. 'llvm' can also be used.""")
     parser.add_argument('--bug', help='bug to reference in CLs created (if any)')
     parser.add_argument('--reason', help='issue/reason to mention in CL subject line')
+    parser.add_argument('--tot', action='store_true',
+                        help='Apply the patch to TOT.json instead of PATCHES.json')
     parser.add_argument('--verbose', help='Enable logging')
     parser.add_argument('--no-verify-merge', action='store_true',
                         help='check if patches can be applied cleanly')
@@ -63,8 +68,44 @@ def parse_start_version(start_version: str) -> int:
     return int(m.group(1))
 
 
-def create_patches_for_sha_list(sha_list: List[str], start_version: int, patch_list: PatchList
-                                ) -> PatchList:
+def create_revert_patches(shas: List[str], sha_to_file_path: Dict[str, Path],
+                          upstream_dir: Path) -> Dict[str, str]:
+    """Generate revert patch files in upstream repository."""
+    orig_head = check_output(['git', 'rev-parse', 'HEAD'], cwd=upstream_dir).strip()
+    temp_branch = 'temp_revert_multi'
+    subjects = {}
+    try:
+        unchecked_call(['git', 'revert', '--abort'], cwd=upstream_dir,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        unchecked_call(['git', 'reset', '--hard'], cwd=upstream_dir,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        unchecked_call(['git', 'branch', '-D', temp_branch], cwd=upstream_dir,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        check_call(['git', 'checkout', '-b', temp_branch, 'goog/upstream-main'], cwd=upstream_dir)
+        for sha in shas:
+            try:
+                check_call(['git', 'revert', '--no-edit', sha], cwd=upstream_dir)
+            except subprocess.CalledProcessError:
+                raise RuntimeError(
+                    f"Failed to revert upstream commit {sha}. This typically "
+                    "means that intermediate commits need to be reverted first."
+                )
+            file_path = sha_to_file_path[sha]
+            with open(file_path, 'w') as fh:
+                check_call('git format-patch -1 HEAD --stdout',
+                           stdout=fh, shell=True, cwd=upstream_dir)
+            commit_subject = check_output(
+                'git log -n1 --format=%s HEAD',
+                shell=True, cwd=upstream_dir).strip()
+            subjects[sha] = commit_subject
+    finally:
+        check_call(['git', 'checkout', orig_head], cwd=upstream_dir)
+        check_call(['git', 'branch', '-D', temp_branch], cwd=upstream_dir)
+    return subjects
+
+
+def create_patches_for_sha_list(sha_list: List[str], start_version: int,
+                                patch_list: PatchList) -> PatchList:
     """ generate upstream cherry-pick patch files """
     upstream_dir = paths.TOOLCHAIN_LLVM_PATH
     fetch_upstream()
@@ -75,7 +116,7 @@ def create_patches_for_sha_list(sha_list: List[str], start_version: int, patch_l
             sha, custom_patch_file = sha.split(':')
         if len(sha) < 40:
             sha = get_full_sha(upstream_dir, sha)
-        version = find_version(sha, patch_list, start_version)
+        version = find_version(sha, patch_list, start_version, revert=False)
         version_name = '' if version == 1 else f'-v{version}'
         rel_patch_path = f'cherry/{sha}' + version_name + '.patch'
         file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
@@ -85,16 +126,58 @@ def create_patches_for_sha_list(sha_list: List[str], start_version: int, patch_l
             with open(file_path, 'w') as fh:
                 check_call(f'git format-patch -1 {sha} --stdout',
                            stdout=fh, shell=True, cwd=upstream_dir)
-
         commit_subject = check_output(
             f'git log -n1 --format=%s {sha}', shell=True, cwd=upstream_dir)
-        info: Optional[List[str]] = []
         title = '[UPSTREAM] ' + commit_subject.strip()
         end_version = sha_to_revision(sha)
-        metadata = {'info': info, 'title': title}
+        metadata = {'info': [], 'title': title}
         platforms = ['android']
         version_range: Dict[str, Optional[int]] = {
             'from': start_version,
+            'until': end_version,
+        }
+        result.append(PatchItem(metadata, platforms, rel_patch_path, version_range))
+    return result
+
+
+def create_revert_patches_for_sha_list(sha_list: List[str], start_version: int,
+                                       patch_list: PatchList) -> PatchList:
+    """ generate upstream revert patch files """
+    upstream_dir = paths.TOOLCHAIN_LLVM_PATH
+    fetch_upstream()
+
+    sha_to_rev = {sha: sha_to_revision(sha) for sha in sha_list}
+    # Revert the most recent commits first to prevent merge conflicts.
+    sorted_shas = sorted(sha_list, key=lambda s: sha_to_rev[s], reverse=True)
+
+    sha_to_file_path = {}
+    sha_to_rel_path = {}
+    for sha in sorted_shas:
+        version = find_version(sha, patch_list, start_version, revert=True)
+        version_name = '' if version == 1 else f'-v{version}'
+        rel_patch_path = f'{sha}-revert' + version_name + '.patch'
+        file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
+        sha_to_file_path[sha] = file_path
+        sha_to_rel_path[sha] = rel_patch_path
+
+    sha_to_subject = create_revert_patches(sorted_shas, sha_to_file_path, upstream_dir)
+
+    result = PatchList()
+    for sha in sorted_shas:
+        rel_patch_path = sha_to_rel_path[sha]
+        commit_subject = sha_to_subject[sha]
+
+        effective_start_version = start_version
+        title = commit_subject.strip()
+        end_version = None
+        sha_revision = sha_to_rev[sha]
+        if start_version < sha_revision:
+            effective_start_version = sha_revision
+
+        metadata = {'info': [], 'title': title}
+        platforms = ['android']
+        version_range: Dict[str, Optional[int]] = {
+            'from': effective_start_version,
             'until': end_version,
         }
         result.append(PatchItem(metadata, platforms, rel_patch_path, version_range))
@@ -105,15 +188,19 @@ def get_full_sha(upstream_dir: Path, short_sha: str) -> str:
     return check_output(['git', 'rev-parse', short_sha], cwd=upstream_dir).strip()
 
 
-def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: bool):
+def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: bool,
+              is_revert: bool, patch_json_file: str = 'PATCHES.json'):
     file_list = [
         str(paths.SCRIPTS_DIR / 'patches' / p.rel_patch_path) for p in new_patches
     ]
 
-    file_list += ['patches/PATCHES.json']
+    file_list += [f'patches/{patch_json_file}']
     check_call(['git', 'add'] + file_list)
 
-    subject = f'[patches] Cherry pick CLS for: {reason}'
+    if is_revert:
+        subject = f'[patches] Revert upstream CLs for: {reason}'
+    else:
+        subject = f'[patches] Cherry pick CLs for: {reason}'
     commit_lines = [subject, '']
     script = os.path.basename(sys.argv[0])
     argv_deepcopy = copy.deepcopy(sys.argv[1:])
@@ -131,6 +218,10 @@ def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: b
             subject = patch.metadata['title']
             if subject.startswith('[UPSTREAM] '):
                 subject = subject[len('[UPSTREAM] '):]
+            commit_line = sha + ' ' + subject
+        elif '-revert' in patch.rel_patch_path:  # Add SHA and title for each revert.
+            sha = patch.revert_sha[:11]
+            subject = patch.metadata['title']
             commit_line = sha + ' ' + subject
         else:  # Add link to differential revision.
             commit_line = patch.pr_link
@@ -190,9 +281,9 @@ def create_patch_for_pr(pr: str, start_version: int) -> PatchList:
     return result
 
 
-def find_version(sha, patch_list, start_version) -> int:
+def find_version(sha, patch_list, start_version, revert=False) -> int:
     """ Return the next version for the given SHA and update end_revision if needed"""
-    target = f'cherry/{sha}'
+    target = f'{sha}-revert' if revert else f'cherry/{sha}'
     last_idx = -1
     version = 1
     name = ''
@@ -218,11 +309,22 @@ def main() -> bool:
     args = parse_args()
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level)
-    patch_list = PatchList.load_from_file()
 
-    assert not (bool(args.sha) and bool(args.pr)), (
-        'Only one of cherry-pick or patch supported.'
+    patch_json_file = 'TOT.json' if args.tot else 'PATCHES.json'
+    patch_list = PatchList.load_from_file(patch_json_file)
+
+    options_set = sum(1 for x in [args.sha, args.pr, args.revert_sha] if x)
+    assert options_set <= 1, 'Only one of --sha, --pr, or --revert-sha supported.'
+
+    if options_set == 0:
+        patch_list.sort()
+        patch_list.save_to_file(patch_json_file)
+        return True
+
+    assert args.reason, (
+        'Reason `--reason` must be specified with a PR, SHA, or REVERT-SHA.'
     )
+
     if args.pr:
         start_version = parse_start_version(args.start_version)
         new_patches = create_patch_for_pr(args.pr, start_version)
@@ -231,19 +333,16 @@ def main() -> bool:
         start_version = parse_start_version(args.start_version)
         new_patches = create_patches_for_sha_list(args.sha, start_version, patch_list)
         patch_list.extend(new_patches)
+    elif args.revert_sha:
+        start_version = parse_start_version(args.start_version)
+        new_patches = create_revert_patches_for_sha_list(
+            args.revert_sha, start_version, patch_list)
+        patch_list.extend(new_patches)
 
     patch_list.sort()
-    patch_list.save_to_file()
+    patch_list.save_to_file(patch_json_file)
     if not patch_list.check_patches():
         return False
-
-    if args.pr or args.sha:
-        assert(args.reason), (
-            'Reason `--reason` must be specified with a PR or with a SHA.'
-        )
-    else:
-        # Only sort the patches and return.
-        return True
 
     if not args.no_verify_merge:
         print('Verifying merge...')
@@ -252,8 +351,9 @@ def main() -> bool:
         print('Verifying merge with patch ...')
         source_manager.setup_sources()
     if not args.no_create_cl:
-        cherry = True if args.sha else False
-        create_cl(new_patches, args.reason, args.bug, cherry)
+        cherry = bool(args.sha)
+        is_revert = bool(args.revert_sha)
+        create_cl(new_patches, args.reason, args.bug, cherry, is_revert, patch_json_file)
     return True
 
 
