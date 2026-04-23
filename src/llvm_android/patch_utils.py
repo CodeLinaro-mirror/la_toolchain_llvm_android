@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from llvm_android import paths
@@ -63,6 +64,12 @@ class PatchItem:
         return m.group(1)
 
     @property
+    def revert_sha(self) -> str:
+        m = re.match(r'(.+)-revert(?:-v\d+)?\.patch', self.rel_patch_path)
+        assert m, self.rel_patch_path
+        return m.group(1)
+
+    @property
     def pr_link(self) -> str:
         for line in open(f'patches/{self.rel_patch_path}'):
             if m := re.match(r'Pull Request: (.+)', line):
@@ -101,17 +108,26 @@ class PatchItem:
 class PatchList(list):
     """ a list of PatchItem """
 
-    JSON_FILE_PATH = paths.SCRIPTS_DIR / 'patches' / 'PATCHES.json'
+    @staticmethod
+    def _get_patch_file(filename: str) -> Path:
+        if filename not in ('PATCHES.json', 'TOT.json'):
+            raise ValueError(
+                f'Invalid patch file name: {filename}. '
+                'Must be PATCHES.json or TOT.json.'
+            )
+        return paths.SCRIPTS_DIR / 'patches' / filename
 
     @classmethod
-    def load_from_file(cls) -> PatchList:
-        with open(cls.JSON_FILE_PATH, 'r') as fh:
+    def load_from_file(cls, filename: str = 'PATCHES.json') -> PatchList:
+        file_path = cls._get_patch_file(filename)
+        with open(file_path, 'r') as fh:
             array = json.load(fh)
         return PatchList(PatchItem.from_dict(d) for d in array)
 
-    def save_to_file(self):
+    def save_to_file(self, filename: str = 'PATCHES.json'):
+        file_path = self._get_patch_file(filename)
         array = [patch.to_dict() for patch in self]
-        with open(self.JSON_FILE_PATH, 'w') as fh:
+        with open(file_path, 'w') as fh:
             json.dump(array, fh, indent=4, separators=(',', ': '), sort_keys=True)
             fh.write('\n')
 
