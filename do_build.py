@@ -688,11 +688,11 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
 
 
 def check_execute_only_runtime_libraries(install_dir: Path, version: Version):
-    """ Verify execute-only runtime libraries on AArch64. """
-    # Static libraries are also compiled with -mexecute-only, but the
-    # final memory protection is determined at link time (by the --execute-only
-    # linker flag). Therefore, we only verify the shared libraries where
-    # this property can be checked in the ELF headers.
+    """ Verify execute-only runtime libraries are NOT enabled on AArch64. """
+    # We verify that the shared libraries are NOT execute-only by checking the ELF headers.
+    # Since execute-only code generation was disabled (due to issues with HWASan, see
+    # https://b.corp.google.com/issues/505627899), we expect the executable segments to be readable
+    # and executable (flags != "E").
     execute_only_runtime_libraries = [
         f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.ubsan_standalone-aarch64-android.so",
         f"lib/clang/{version.major_version()}/lib/linux/libclang_rt.asan-aarch64-android.so",
@@ -703,8 +703,8 @@ def check_execute_only_runtime_libraries(install_dir: Path, version: Version):
     ]
     for library in execute_only_runtime_libraries:
         flags = utils.get_executable_segment_flags(install_dir / library)
-        if flags != "E":
-            raise RuntimeError(f"The executable segment of {library} isn't execute-only: {flags}")
+        if flags == "E":
+            raise RuntimeError(f"The executable segment of {library} is execute-only: {flags}")
 
 
 def parse_args():
