@@ -382,9 +382,6 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
         # Avoid LSE instructions for LFI's minimal libc
         if self._config.target_arch == hosts.Arch.AARCH64_LFI:
             cflags.append('-mno-outline-atomics')
-        if self.enable_execute_only_memory():
-            # We are not using compiler-rt/CMakeLists.txt. So manually add the macro.
-            cflags.append('-DCOMPILER_RT_EXECUTE_ONLY_CODE')
         return cflags
 
     def install_config(self) -> None:
