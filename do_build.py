@@ -443,6 +443,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     if toolchain_builder.build_lldb:
         necessary_bin_files.update({
             'lldb-argdumper' + ext,
+            'lldb-dap' + ext,
             'lldb' + ext,
             'lldb' + script_ext,
         })
