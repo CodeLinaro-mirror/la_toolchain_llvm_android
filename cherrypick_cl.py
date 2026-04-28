@@ -155,7 +155,7 @@ def create_revert_patches_for_sha_list(sha_list: List[str], start_version: int,
     for sha in sorted_shas:
         version = find_version(sha, patch_list, start_version, revert=True)
         version_name = '' if version == 1 else f'-v{version}'
-        rel_patch_path = f'{sha}-revert' + version_name + '.patch'
+        rel_patch_path = f'Revert-{sha}' + version_name + '.patch'
         file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
         sha_to_file_path[sha] = file_path
         sha_to_rel_path[sha] = rel_patch_path
@@ -219,7 +219,7 @@ def create_cl(new_patches: PatchList, reason: str, bug: Optional[str], cherry: b
             if subject.startswith('[UPSTREAM] '):
                 subject = subject[len('[UPSTREAM] '):]
             commit_line = sha + ' ' + subject
-        elif '-revert' in patch.rel_patch_path:  # Add SHA and title for each revert.
+        elif 'Revert-' in patch.rel_patch_path:  # Add SHA and title for each revert.
             sha = patch.revert_sha[:11]
             subject = patch.metadata['title']
             commit_line = sha + ' ' + subject
@@ -283,7 +283,7 @@ def create_patch_for_pr(pr: str, start_version: int) -> PatchList:
 
 def find_version(sha, patch_list, start_version, revert=False) -> int:
     """ Return the next version for the given SHA and update end_revision if needed"""
-    target = f'{sha}-revert' if revert else f'cherry/{sha}'
+    target = f'Revert-{sha}' if revert else f'cherry/{sha}'
     last_idx = -1
     version = 1
     name = ''

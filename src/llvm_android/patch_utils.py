@@ -65,7 +65,7 @@ class PatchItem:
 
     @property
     def revert_sha(self) -> str:
-        m = re.match(r'(.+)-revert(?:-v\d+)?\.patch', self.rel_patch_path)
+        m = re.match(r'Revert-(.+)(?:-v\d+)?\.patch', self.rel_patch_path)
         assert m, self.rel_patch_path
         return m.group(1)
 
