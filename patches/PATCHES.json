@@ -1300,5 +1300,33 @@
             "from": 593406,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert \"[ValueTracking] Bail out on non-immediate constant expressions (#168084)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-76c69ca29c1b0ffa86cddb5e199f53915215be8c.patch",
+        "version_range": {
+            "from": 597492,
+            "until": null
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert \"[SimplifyCFG] Fix value enumeration of a full range (#166379)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-4ce58833d3653f0b15d5458b8430ec8cf25fdc16.patch",
+        "version_range": {
+            "from": 596125,
+            "until": null
+        }
     }
 ]
