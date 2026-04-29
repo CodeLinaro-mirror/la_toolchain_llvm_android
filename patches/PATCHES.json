@@ -1066,6 +1066,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Avoid indirect branches from cold sections when BTI is enabled (#194727)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/87b568f1a529ae6d92f11b823921780f08c23262.patch",
+        "version_range": {
+            "from": 584948,
+            "until": 616617
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [

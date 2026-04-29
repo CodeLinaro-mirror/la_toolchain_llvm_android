@@ -1,0 +1,189 @@
+From 7c2e63fe9e6754152c2df7450109cefe92c259cd Mon Sep 17 00:00:00 2001
+From: yabinc <yabinc@google.com>
+Date: Wed, 29 Apr 2026 13:03:32 -0700
+Subject: [PATCH] Avoid indirect branches from cold sections when BTI is
+ enabled (#194727)
+
+Fixes #194489
+
+Profile-guided optimizations such as AutoFDO can split functions into
+hot and cold sections. During the branch relaxation pass, cross-section
+branches that are out-of-range may be relaxed.
+
+If X16 is in use at the branch site, the
+AArch64InstrInfo::insertIndirectBranch pass may scavenge a free register
+to perform the indirect branch. However, because the
+AArch64BranchTargets pass runs before branch relaxation, the target
+block in the hot section is not guaranteed to start with a BTI landing
+pad instruction.
+
+To avoid this BTI exception, avoid using the scavenged register
+optimization when BTI is active (i.e., branchTargetEnforcement() is
+true). This makes the compiler fall back to spilling X16, allowing the
+linker to handle the long branch and insert the necessary BTI-compliant
+veneer.
+
+Change-Id: I85a0130c4ca7e72e52ffdf929eb6a8380d81ebaf
+---
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  | 21 +++--
+ .../AArch64/branch-relax-cross-section.mir    | 94 +++++++++++++++++++
+ 2 files changed, 106 insertions(+), 9 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index ccc8eb8a9706..9807146b8cee 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -343,19 +343,22 @@ void AArch64InstrInfo::insertIndirectBranch(MachineBasicBlock &MBB,
+     return;
+   }
+ 
+-  // If there's a free register and it's worth inflating the code size,
+-  // manually insert the indirect branch.
+-  Register Scavenged = RS->FindUnusedReg(&AArch64::GPR64RegClass);
+-  if (Scavenged != AArch64::NoRegister &&
+-      MBB.getSectionID() == MBBSectionID::ColdSectionID) {
+-    buildIndirectBranch(Scavenged, NewDestBB);
+-    RS->setRegUsed(Scavenged);
+-    return;
++  // In a cold block without BTI, insert the indirect branch if a register is
++  // free. Skip this if BTI is enabled to avoid inserting a BTI at the target,
++  // prioritizing a dynamic cost in cold code over a static cost in hot code.
++  AArch64FunctionInfo *AFI = MBB.getParent()->getInfo<AArch64FunctionInfo>();
++  bool HasBTI = AFI && AFI->branchTargetEnforcement();
++  if (MBB.getSectionID() == MBBSectionID::ColdSectionID && !HasBTI) {
++    Register Scavenged = RS->FindUnusedReg(&AArch64::GPR64RegClass);
++    if (Scavenged != AArch64::NoRegister) {
++      buildIndirectBranch(Scavenged, NewDestBB);
++      RS->setRegUsed(Scavenged);
++      return;
++    }
+   }
+ 
+   // Note: Spilling X16 briefly moves the stack pointer, making it incompatible
+   // with red zones.
+-  AArch64FunctionInfo *AFI = MBB.getParent()->getInfo<AArch64FunctionInfo>();
+   if (!AFI || AFI->hasRedZone().value_or(true))
+     report_fatal_error(
+         "Unable to insert indirect branch inside function that has red zone");
+diff --git a/llvm/test/CodeGen/AArch64/branch-relax-cross-section.mir b/llvm/test/CodeGen/AArch64/branch-relax-cross-section.mir
+index 000246ad8299..d0f4052510ca 100644
+--- a/llvm/test/CodeGen/AArch64/branch-relax-cross-section.mir
++++ b/llvm/test/CodeGen/AArch64/branch-relax-cross-section.mir
+@@ -107,6 +107,21 @@
+     br label %hot
+   }
+ 
++  define void @x16_used_cold_to_hot_with_bti() #0 {
++  entry:
++    %x16 = call i64 asm sideeffect "mov x16, 1", "={x16}"()
++    %cmp = icmp eq i64 %x16, 0
++    br i1 %cmp, label %hot, label %cold
++
++  hot:                                            ; preds = %cold, %entry
++    call void asm sideeffect "# reg use $0", "{x16}"(i64 %x16)
++    ret void
++
++  cold:                                           ; preds = %entry
++    call void asm sideeffect ".space 4", ""()
++    br label %hot
++  }
++
+   define void @all_used_cold_to_hot() {
+   entry:
+     %x0 = call i64 asm sideeffect "mov x0, 1", "={x0}"()
+@@ -176,6 +191,8 @@
+     br label %exit
+   }
+ 
++  attributes #0 = { "branch-target-enforcement" }
++
+ ...
+ ---
+ name:            relax_tbz
+@@ -505,6 +522,83 @@ body:             |
+     B %bb.1
+ ...
+ ---
++name:            x16_used_cold_to_hot_with_bti
++tracksRegLiveness: true
++liveins:         []
++machineFunctionInfo:
++  hasRedZone:      false
++body:             |
++  ; INDIRECT-LABEL: name: x16_used_cold_to_hot_with_bti
++  ; COM: Check that unconditional branches from the cold section to
++  ; COM: the hot section *do not* manually insert indirect branches if BTI
++  ; COM: is enabled.
++  ; INDIRECT:       bb.0.entry:
++  ; INDIRECT-NEXT:    successors: %bb.1({{.*}}), %bb.3({{.*}})
++  ; INDIRECT:         TBZW killed renamable $w8, 0, %bb.1
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:  bb.3.entry:
++  ; INDIRECT-NEXT:    successors: %bb.4
++  ; INDIRECT-NEXT:    liveins: $x16
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    early-clobber $sp = STRXpre $[[SPILL_REGISTER:x[0-9]+]], $sp, -16
++  ; INDIRECT-NEXT:    B %bb.4
++  ; INDIRECT:       bb.1.hot:
++  ; INDIRECT-NEXT:    liveins: $x16
++  ; INDIRECT:         killed $x16
++  ; INDIRECT:         RET undef $lr
++  ; INDIRECT:       bb.6.hot:
++  ; INDIRECT-NEXT:    successors: %bb.7({{.*}})
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    early-clobber $sp, $[[SPILL_REGISTER]] = LDRXpost $sp, 16
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:  bb.7.hot:
++  ; INDIRECT-NEXT:    successors: %bb.1({{.*}})
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    B %bb.1
++  ; INDIRECT:       bb.4.cold (bbsections Cold):
++  ; INDIRECT-NEXT:    successors: %bb.2({{.*}})
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    early-clobber $sp, $[[SPILL_REGISTER]] = LDRXpost $sp, 16
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:  bb.2.cold (bbsections Cold):
++  ; INDIRECT-NEXT:    successors: %bb.5({{.*}})
++  ; INDIRECT-NEXT:    liveins: $x16
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    INLINEASM &".space 4", 1 /* sideeffect attdialect */
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:  bb.5.cold (bbsections Cold):
++  ; INDIRECT-NEXT:    successors: %bb.6({{.*}})
++  ; INDIRECT-NEXT:    liveins: $x16
++  ; INDIRECT-NEXT:    {{ $}}
++  ; INDIRECT-NEXT:    early-clobber $sp = STRXpre $[[SPILL_REGISTER]], $sp, -16
++  ; INDIRECT-NEXT:    B %bb.6
++
++  bb.0.entry:
++    successors: %bb.1, %bb.2
++
++    $sp = frame-setup SUBXri $sp, 16, 0
++    INLINEASM &"mov x16, 1", 1 /* sideeffect attdialect */, 10 /* regdef */, implicit-def $x16
++    dead renamable $x8 = SUBSXri $x16, 0, 0, implicit-def $nzcv
++    renamable $w8 = CSINCWr $wzr, $wzr, 1, implicit killed $nzcv
++    TBZW killed renamable $w8, 0, %bb.1
++
++    B %bb.2
++
++  bb.1.hot:
++    liveins: $x16
++
++    INLINEASM &"# reg use $0", 1 /* sideeffect attdialect */, 9 /* reguse */, killed $x16
++    $sp = frame-destroy ADDXri $sp, 16, 0
++    RET undef $lr
++
++  bb.2.cold (bbsections Cold):
++    successors: %bb.1
++    liveins: $x16
++
++    INLINEASM &".space 4", 1 /* sideeffect attdialect */
++    B %bb.1
++...
++---
+ name:            all_used_cold_to_hot
+ tracksRegLiveness: true
+ stack:
+-- 
+2.54.0.545.g6539524ca2-goog
+
