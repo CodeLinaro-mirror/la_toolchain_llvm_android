@@ -213,8 +213,6 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--no-clean-built-target",
             "--module", "dist",
             "--module", "droid",
-            "--module", "device-tests",
-            "--module", "general-tests",
             "--module", "platform_tests",
             "--clang-package-path", "out/prebuilt_cached/clang-prebuilt",
             "./",
