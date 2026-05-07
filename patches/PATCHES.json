@@ -954,6 +954,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[BACKPORT] [lldb][lldb-server] Fix zip file lookup ignoring last entry in the zip file (#173966)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5ed875a06cb0a6d543f719ad72df2a1660e42cb9.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 608878
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [clang] use canonical arguments for checking function template constraints (#186889)"
         },
         "platforms": [
