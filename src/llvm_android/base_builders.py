@@ -753,7 +753,11 @@ class LLVMBuilder(LLVMBaseBuilder):
 
         defines['LLVM_ENABLE_PROJECTS'] = ';'.join(sorted(self.llvm_projects))
         defines['LLVM_ENABLE_RUNTIMES'] = ';'.join(sorted(self.llvm_runtime_projects))
-        defines['LIBCXX_ASSERTION_HANDLER_FILE'] = 'vendor/android/android_assertion_handler.in'
+        handler_file = paths.LLVM_PATH / 'libcxx/vendor/android/android_assertion_handler.in'
+        if handler_file.exists():
+            defines['LIBCXX_ASSERTION_HANDLER_FILE'] = 'vendor/android/android_assertion_handler.in'
+        else:
+            logger().warning("No assertion handler found at %s; using default libcxx hardening configuration", handler_file)
         defines['LLVM_INCLUDE_DOCS'] = 'OFF' # We don't ship LLVM docs.
 
         defines['LLVM_TARGETS_TO_BUILD'] = ';'.join(sorted(self.llvm_targets))
@@ -904,7 +908,8 @@ class LLVMBuilder(LLVMBaseBuilder):
                             defines[f'{base}_{triple}_{key}'] = value
 
                     for arg in runtimes_passthrough_args:
-                        defines[f'{base}_{triple}_{arg}'] = defines[arg]
+                        if arg in defines:
+                            defines[f'{base}_{triple}_{arg}'] = defines[arg]
 
                     # Don't depend on the host libatomic library.
                     defines[f'{base}_{triple}_LIBCXX_HAS_ATOMIC_LIB'] = 'NO'
