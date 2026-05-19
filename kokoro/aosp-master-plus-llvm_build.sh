@@ -12,10 +12,6 @@ trap cleanup EXIT
 
 cd $TOP
 
-# Fetch aosp-main repo
-repo init -u https://android.googlesource.com/platform/manifest -b android-latest-release --depth=1 < /dev/null
-repo sync -c
-
 # Apply local patches
 for filename in toolchain/llvm_android/kokoro/tot-patches/*.patch; do
   patch -p1 < ${filename}
