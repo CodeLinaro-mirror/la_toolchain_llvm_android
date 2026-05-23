@@ -548,6 +548,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [X86] narrowBitOpRMW - allow additional uses of the BTC/R/S result (#166376)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/28e024fb9d42fd44e0ad70638da0b6a12ba544dc.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596209
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [X86] Add test coverage for #166744 (#166745)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ee0818a1f1fab4303eeb1263ac1f6b22f3fe2110.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596366
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [X86] narrowBitOpRMW/combineTruncate - don't retain pointer info for unknown offset load/stores (#166752)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0663710a59e643716f6b2b3e86c7b4a007c2db07.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 596368
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [DirectX] Remove llvm.assume intrinsic (#166697)"
         },
         "platforms": [
