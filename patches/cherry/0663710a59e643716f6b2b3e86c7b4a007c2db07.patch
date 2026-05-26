@@ -1,0 +1,79 @@
+From 0663710a59e643716f6b2b3e86c7b4a007c2db07 Mon Sep 17 00:00:00 2001
+From: Simon Pilgrim <llvm-dev@redking.me.uk>
+Date: Thu, 6 Nov 2025 12:11:09 +0000
+Subject: [PATCH] [X86] narrowBitOpRMW/combineTruncate - don't retain pointer
+ info for unknown offset load/stores (#166752)
+
+#166337 replaces large (illegal type) loads/stores with a smaller i32
+load/store based off the demanded shifted bits. As these shifts are
+non-constant we can't regenerate the PointerInfo data with a fixed
+offset, so we need to discard the data entirely.
+
+Fixes #166744 - post-ra has to reconstruct dependencies after the chains
+have been stripped and uses pointer info instead - which resulted in
+some loads being rescheduled earlier than the dependent store as it was
+thought they didn't alias
+---
+ llvm/lib/Target/X86/X86ISelLowering.cpp | 6 ++++--
+ llvm/test/CodeGen/X86/pr166744.ll       | 8 ++++----
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/llvm/lib/Target/X86/X86ISelLowering.cpp b/llvm/lib/Target/X86/X86ISelLowering.cpp
+index 4d44227b3ecd..168e04109a0a 100644
+--- a/llvm/lib/Target/X86/X86ISelLowering.cpp
++++ b/llvm/lib/Target/X86/X86ISelLowering.cpp
+@@ -53442,7 +53442,8 @@ static SDValue narrowBitOpRMW(StoreSDNode *St, const SDLoc &DL,
+   }
+ 
+   SDValue NewStore =
+-      DAG.getStore(St->getChain(), DL, Res, NewPtr, St->getPointerInfo(),
++      DAG.getStore(St->getChain(), DL, Res, NewPtr,
++                   MachinePointerInfo(St->getPointerInfo().getAddrSpace()),
+                    Align(), St->getMemOperand()->getFlags());
+ 
+   // If there are other uses of StoredVal, replace with a new load of the
+@@ -54639,7 +54640,8 @@ static SDValue combineTruncate(SDNode *N, SelectionDAG &DAG,
+         SDValue NewPtr = DAG.getMemBasePlusOffset(
+             Ld->getBasePtr(), PtrByteOfs, DL, SDNodeFlags::NoUnsignedWrap);
+         SDValue NewLoad =
+-            DAG.getLoad(VT, DL, Ld->getChain(), NewPtr, Ld->getPointerInfo(),
++            DAG.getLoad(VT, DL, Ld->getChain(), NewPtr,
++                        MachinePointerInfo(Ld->getPointerInfo().getAddrSpace()),
+                         Align(), Ld->getMemOperand()->getFlags());
+         DAG.makeEquivalentMemoryOrdering(Ld, NewLoad);
+         return NewLoad;
+diff --git a/llvm/test/CodeGen/X86/pr166744.ll b/llvm/test/CodeGen/X86/pr166744.ll
+index de2a5e6cc78c..21b25d87796a 100644
+--- a/llvm/test/CodeGen/X86/pr166744.ll
++++ b/llvm/test/CodeGen/X86/pr166744.ll
+@@ -3,7 +3,7 @@
+ ; RUN: llc < %s -mtriple=x86_64-- -mcpu=haswell | FileCheck %s --check-prefixes=NOPOSTRA
+ ; RUN: llc < %s -mtriple=x86_64-- -mcpu=x86-64-v3 | FileCheck %s --check-prefixes=NOPOSTRA
+ 
+-; FIXME: Ensure reloads are after narrowed i512 -> i32 store
++; Ensure reloads are after narrowed i512 -> i32 store
+ define i1 @PR166744(ptr %v, i64 %idx, i1 zeroext %b) {
+ ; POSTRA-LABEL: PR166744:
+ ; POSTRA:       # %bb.0:
+@@ -12,15 +12,15 @@ define i1 @PR166744(ptr %v, i64 %idx, i1 zeroext %b) {
+ ; POSTRA-NEXT:    bextrl %eax, %esi, %eax
+ ; POSTRA-NEXT:    movl (%rdi,%rax,4), %ecx
+ ; POSTRA-NEXT:    btrl %esi, %ecx
+-; POSTRA-NEXT:    movq 8(%rdi), %rsi
+-; POSTRA-NEXT:    orq 40(%rdi), %rsi
+ ; POSTRA-NEXT:    orl %ecx, %edx
+ ; POSTRA-NEXT:    movl %edx, (%rdi,%rax,4)
+ ; POSTRA-NEXT:    movq 16(%rdi), %rax
++; POSTRA-NEXT:    movq (%rdi), %rcx
+ ; POSTRA-NEXT:    movq 24(%rdi), %rdx
++; POSTRA-NEXT:    movq 8(%rdi), %rsi
+ ; POSTRA-NEXT:    orq 56(%rdi), %rdx
++; POSTRA-NEXT:    orq 40(%rdi), %rsi
+ ; POSTRA-NEXT:    orq 48(%rdi), %rax
+-; POSTRA-NEXT:    movq (%rdi), %rcx
+ ; POSTRA-NEXT:    orq 32(%rdi), %rcx
+ ; POSTRA-NEXT:    orq %rdx, %rsi
+ ; POSTRA-NEXT:    orq %rax, %rcx
+-- 
+2.54.0.746.g67dd491aae-goog
+
