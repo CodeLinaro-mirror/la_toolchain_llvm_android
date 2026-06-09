@@ -927,6 +927,9 @@ class LLVMBuilder(LLVMBaseBuilder):
                     # Don't let libclang_rt.*_cxx.a depend on libc++abi.
                     defines[f'{base}_{triple}_SANITIZER_ALLOW_CXXABI'] = 'OFF'
 
+                    # Disable exceptions in ASan runtime to avoid dependency on C++ ABI symbols
+                    defines[f'{base}_{triple}_COMPILER_RT_ASAN_ENABLE_EXCEPTIONS'] = 'OFF'
+
         if self.enable_mlgo:
             defines['TENSORFLOW_AOT_PATH'] = paths.get_tensorflow_path()
 

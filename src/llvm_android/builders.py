@@ -502,6 +502,7 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
         # set. We want this flag on instead to catch unresolved references
         # early.
         defines['SANITIZER_COMMON_LINK_FLAGS'] = '-Wl,-z,defs'
+        defines['COMPILER_RT_ASAN_ENABLE_EXCEPTIONS'] = 'OFF'
         defines['COMPILER_RT_HWASAN_WITH_INTERCEPTORS'] = 'OFF'
         # We just need minimal UBSAN currently for LFI so we can ignore other
         # compiler-rt runtimes for now
