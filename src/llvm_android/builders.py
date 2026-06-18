@@ -815,9 +815,14 @@ class LibEditBuilder(base_builders.AutoconfBuilder, base_builders.LibInfo):
 
     @property
     def ldflags(self) -> List[str]:
-        return [
+        ldflags = [
             f'-L{self.libncurses.link_libraries[0].parent}',
-        ] + super().ldflags
+        ]
+        if self._config.target_os.is_darwin:
+            ldflags.append('-Wl,-rpath,@loader_path')
+        else:
+            ldflags.append('-Wl,-rpath,$ORIGIN')
+        return ldflags + super().ldflags
 
     @property
     def cflags(self) -> List[str]:
