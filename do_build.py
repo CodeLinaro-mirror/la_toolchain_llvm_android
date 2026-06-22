@@ -23,6 +23,7 @@ from pathlib import Path
 import os
 import shutil
 import sys
+import textwrap
 from typing import List, Optional, Set
 import re
 
@@ -650,10 +651,38 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
 
     if host.is_linux:
 
-        # Add BUILD.bazel file.
-        shutil.copyfile(
-            paths.CLANG_PREBUILT_LINUX_KLEAF_DIR / 'template_BUILD.bazel',
-            install_dir / 'BUILD.bazel')
+        # Add BUILD.bazel file with dynamic Python version info.
+        template_path = paths.CLANG_PREBUILT_LINUX_KLEAF_DIR / 'template_BUILD.bazel'
+        with open(template_path, 'r') as f:
+            build_file_content = f.read()
+
+        # Detect bundled Python version
+        python_lib_dir = next((install_dir / 'python3' / 'lib').glob('python3.*'), None)
+        if python_lib_dir:
+            try:
+                python_version = python_lib_dir.name.removeprefix('python')
+                major, minor = python_version.split('.')
+                # Define Starlark code block with standard relative indentation
+                raw_version_info = textwrap.dedent(f"""\
+                    interpreter_version_info = {{
+                        "major": "{major}",
+                        "minor": "{minor}",
+                    }},""")
+                # Indent the entire block by 4 spaces to match the template's indentation
+                version_info_str = textwrap.indent(raw_version_info, '    ')
+            except ValueError:
+                version_info_str = "    interpreter_version_info = None,"
+        else:
+            version_info_str = "    interpreter_version_info = None,"
+
+        # Replace the indented placeholder with the indented block
+        build_file_content = build_file_content.replace(
+            '    # PYTHON_VERSION_INFO_PLACEHOLDER',
+            version_info_str
+        )
+
+        with open(install_dir / 'BUILD.bazel', 'w') as f:
+            f.write(build_file_content)
 
         # Create RBE input files.
         with (install_dir / 'bin' / 'remote_toolchain_inputs').open('w') as inputs_file:
