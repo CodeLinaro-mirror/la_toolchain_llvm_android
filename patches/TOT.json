@@ -1,1 +1,16 @@
-[]
+[
+    {
+        "metadata": {
+            "info": [],
+            "title": "[libc++][test] Drop _BitInt(96) byteswap padding check on 32-bit x86"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "205295.patch",
+        "version_range": {
+            "from": 596125,
+            "until": null
+        }
+    }
+]
