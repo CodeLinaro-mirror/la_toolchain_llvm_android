@@ -605,6 +605,15 @@ class LLVMRuntimeBuilder(LLVMBaseBuilder):  # pylint: disable=abstract-method
             ))
         return ldflags
 
+    @property
+    def cflags(self) -> List[str]:
+        cflags = super().cflags
+        if (self._config.target_os.is_android and
+                self.name not in ('builtins', 'compiler-rt', 'tsan')):
+            cflags.extend(('-fstack-protector-strong', '-D_FORTIFY_SOURCE=2'))
+        return cflags
+
+
 
 class LLVMBuilder(LLVMBaseBuilder):
     """Builder for LLVM project."""
