@@ -1136,6 +1136,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Add Android assertion handler (#198831)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6ce05ad8384d6e18f7b22c2b2f6e05678f4911d3.patch",
+        "version_range": {
+            "from": 596125,
+            "until": 624472
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
@@ -1366,20 +1380,6 @@
             "android"
         ],
         "rel_patch_path": "Revert-4ce58833d3653f0b15d5458b8430ec8cf25fdc16.patch",
-        "version_range": {
-            "from": 596125,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "add Android libcxx hardening handler"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "libcxx-hardening-assertion-handler.patch",
         "version_range": {
             "from": 596125,
             "until": null
