@@ -1068,8 +1068,8 @@ def main():
     mlgo = args.mlgo or preset_mlgo
     bolt = (args.bolt or preset_bolt) and not args.no_bolt
 
-    if bolt and (not (pgo and lto and mlgo)):
-        raise ValueError("Before enabling BOLT, you should enable PGO, LTO and MLGO first!")
+    if bolt and (not (pgo and lto and (mlgo or musl))):
+        raise ValueError("Before enabling BOLT, you should enable PGO and LTO first (and MLGO for non-musl)!")
 
     android_version.set_llvm_next(args.build_llvm_next)
 
