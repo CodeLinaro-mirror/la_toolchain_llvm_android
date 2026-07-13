@@ -14,6 +14,7 @@ cd $TOP
 
 # Apply local patches
 for filename in toolchain/llvm_android/kokoro/tot-patches/*.patch; do
+  [ -e "$filename" ] || continue
   patch -p1 < ${filename}
 done
 
