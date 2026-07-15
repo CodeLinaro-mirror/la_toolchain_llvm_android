@@ -169,8 +169,8 @@ def clean_out_dir():
             child.unlink()
 
 
-def check_gsutil():
-    cmd = ['gsutil', 'version']
+def check_gcloud():
+    cmd = ['gcloud', 'version']
     try:
         subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
@@ -192,11 +192,9 @@ def check_stubby():
 
 
 def check_tools(use_sha: bool):
-    if not check_gsutil():
+    if not check_gcloud():
         print(
-            'Fatal: gsutil not installed! Please go to'
-            ' https://cloud.google.com/storage/docs/gsutil_install to install'
-            ' gsutil',
+            'Fatal: gcloud sdk not installed.',
             file=sys.stderr,
         )
         sys.exit(1)

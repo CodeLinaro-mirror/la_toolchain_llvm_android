@@ -68,9 +68,9 @@ def get_url(build_id: str):
 
 
 def fetch_prebuilts(build_id: str, path: str):
-    gsutil_url = get_url(build_id)
+    gs_url = get_url(build_id)
     with tempfile.TemporaryDirectory() as td:
-        cmd = ["gsutil", "cp", gsutil_url, td]
+        cmd = ["gcloud", "storage", "cp", gs_url, td]
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode > 0:
             err_string = str(result.stderr, encoding="utf-8")
@@ -90,7 +90,7 @@ def fetch_prebuilts(build_id: str, path: str):
 
 def check_valid_build(build_id: str):
     url = prefix + build_id + "/"
-    output = subprocess.check_output(["gsutil", "ls", "-L", prefix])
+    output = subprocess.check_output(["gcloud", "storage", "ls", "-L", prefix])
     if url not in str(output):
         err_msg = build_id + " doesn't exist. Please pick a valid build id."
         raise Exception(err_msg)
