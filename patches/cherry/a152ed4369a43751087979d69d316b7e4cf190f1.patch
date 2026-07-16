@@ -1,0 +1,26 @@
+From a152ed4369a43751087979d69d316b7e4cf190f1 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Wed, 15 Apr 2026 11:21:47 -0700
+Subject: [PATCH] [LFI][NFC] Mark lfi-enable-rewriter flag as hidden (#192143)
+
+This flag is meant for debugging so it should be hidden.
+---
+ llvm/lib/MC/MCLFI.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/llvm/lib/MC/MCLFI.cpp b/llvm/lib/MC/MCLFI.cpp
+index 30196864c468..a5c65540044b 100644
+--- a/llvm/lib/MC/MCLFI.cpp
++++ b/llvm/lib/MC/MCLFI.cpp
+@@ -30,7 +30,7 @@ namespace llvm {
+ 
+ cl::opt<bool> FlagEnableRewriting("lfi-enable-rewriter",
+                                   cl::desc("Enable rewriting for LFI."),
+-                                  cl::init(true));
++                                  cl::init(true), cl::Hidden);
+ 
+ void initializeLFIMCStreamer(MCStreamer &Streamer, MCContext &Ctx,
+                              const Triple &TheTriple) {
+-- 
+2.55.0.229.g6434b31f56-goog
+

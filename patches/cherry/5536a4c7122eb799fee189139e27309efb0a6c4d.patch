@@ -1,0 +1,314 @@
+From 5536a4c7122eb799fee189139e27309efb0a6c4d Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Fri, 24 Apr 2026 15:47:45 -0700
+Subject: [PATCH] [LFI][AArch64] Add rewrites for control flow (#192602)
+
+Adds LFI rewrites for control flow instructions (indirect branches and
+returns). Indirect branches must go through `x28`, which is always
+guaranteed to hold a sandbox address. Modifications to `x30` must guard
+`x30` afterwards, to uphold the invariant that `x30` always holds a
+sandbox address. As a result, bare return instructions can be used
+without any additional rewrites.
+---
+ llvm/docs/LFI.rst                             |  4 --
+ llvm/include/llvm/MC/MCInstrDesc.h            |  5 ++
+ llvm/include/llvm/MC/MCLFIRewriter.h          |  2 +
+ llvm/lib/MC/MCInstrDesc.cpp                   | 12 +++-
+ llvm/lib/MC/MCLFIRewriter.cpp                 |  6 ++
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  | 25 ++++++--
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 57 +++++++++++++++++++
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       | 10 ++++
+ llvm/test/MC/AArch64/LFI/branch.s             | 21 +++++++
+ llvm/test/MC/AArch64/LFI/return.s             | 25 ++++++++
+ 10 files changed, 156 insertions(+), 11 deletions(-)
+ create mode 100644 llvm/test/MC/AArch64/LFI/branch.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/return.s
+
+diff --git a/llvm/docs/LFI.rst b/llvm/docs/LFI.rst
+index 12c68a54b8b8..a173cd57e0ee 100644
+--- a/llvm/docs/LFI.rst
++++ b/llvm/docs/LFI.rst
+@@ -173,8 +173,6 @@ In the following assembly rewrites, some shorthand is used.
+ Control flow
+ ~~~~~~~~~~~~
+ 
+-**Note**: not yet implemented.
+-
+ Indirect branches get rewritten to branch through register ``x28``, which must
+ always contain an address within the sandbox. An ``add`` is used to safely
+ update ``x28`` with the destination address. Since ``ret`` uses ``x30`` by
+@@ -304,8 +302,6 @@ before moving it back into ``sp`` with a safe ``add``.
+ Link register modification
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-**Note**: not yet implemented.
+-
+ When the link register is modified, we write the modified value to a
+ temporary, before loading it back into ``x30`` with a safe ``add``.
+ 
+diff --git a/llvm/include/llvm/MC/MCInstrDesc.h b/llvm/include/llvm/MC/MCInstrDesc.h
+index 396995edc117..da65487ce9c6 100644
+--- a/llvm/include/llvm/MC/MCInstrDesc.h
++++ b/llvm/include/llvm/MC/MCInstrDesc.h
+@@ -618,6 +618,11 @@ public:
+     return -1;
+   }
+ 
++  /// Return true if this instruction explicitly defines the specified physical
++  /// register.
++  LLVM_ABI bool hasExplicitDefOfPhysReg(const MCInst &MI, MCRegister Reg,
++                                        const MCRegisterInfo &RI) const;
++
+   /// Return true if this instruction defines the specified physical
+   /// register, either explicitly or implicitly.
+   LLVM_ABI bool hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
+diff --git a/llvm/include/llvm/MC/MCLFIRewriter.h b/llvm/include/llvm/MC/MCLFIRewriter.h
+index f823627da0c2..835df9a8f920 100644
+--- a/llvm/include/llvm/MC/MCLFIRewriter.h
++++ b/llvm/include/llvm/MC/MCLFIRewriter.h
+@@ -54,6 +54,8 @@ public:
+   LLVM_ABI bool mayStore(const MCInst &Inst) const;
+ 
+   LLVM_ABI bool mayModifyRegister(const MCInst &Inst, MCRegister Reg) const;
++  LLVM_ABI bool explicitlyModifiesRegister(const MCInst &Inst,
++                                           MCRegister Reg) const;
+ 
+   virtual ~MCLFIRewriter() = default;
+   virtual bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
+diff --git a/llvm/lib/MC/MCInstrDesc.cpp b/llvm/lib/MC/MCInstrDesc.cpp
+index f54db55804d3..99cdb44168ec 100644
+--- a/llvm/lib/MC/MCInstrDesc.cpp
++++ b/llvm/lib/MC/MCInstrDesc.cpp
+@@ -37,8 +37,8 @@ bool MCInstrDesc::hasImplicitDefOfPhysReg(MCRegister Reg,
+   return false;
+ }
+ 
+-bool MCInstrDesc::hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
+-                                  const MCRegisterInfo &RI) const {
++bool MCInstrDesc::hasExplicitDefOfPhysReg(const MCInst &MI, MCRegister Reg,
++                                          const MCRegisterInfo &RI) const {
+   for (int i = 0, e = NumDefs; i != e; ++i)
+     if (MI.getOperand(i).isReg() && MI.getOperand(i).getReg() &&
+         RI.isSubRegisterEq(Reg, MI.getOperand(i).getReg()))
+@@ -48,5 +48,11 @@ bool MCInstrDesc::hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
+       if (MI.getOperand(i).isReg() &&
+           RI.isSubRegisterEq(Reg, MI.getOperand(i).getReg()))
+         return true;
+-  return hasImplicitDefOfPhysReg(Reg, &RI);
++  return false;
++}
++
++bool MCInstrDesc::hasDefOfPhysReg(const MCInst &MI, MCRegister Reg,
++                                  const MCRegisterInfo &RI) const {
++  return hasExplicitDefOfPhysReg(MI, Reg, RI) ||
++         hasImplicitDefOfPhysReg(Reg, &RI);
+ }
+diff --git a/llvm/lib/MC/MCLFIRewriter.cpp b/llvm/lib/MC/MCLFIRewriter.cpp
+index 2f4c213070cf..473b99bf8635 100644
+--- a/llvm/lib/MC/MCLFIRewriter.cpp
++++ b/llvm/lib/MC/MCLFIRewriter.cpp
+@@ -51,3 +51,9 @@ bool MCLFIRewriter::mayModifyRegister(const MCInst &Inst,
+                                       MCRegister Reg) const {
+   return InstInfo->get(Inst.getOpcode()).hasDefOfPhysReg(Inst, Reg, *RegInfo);
+ }
++
++bool MCLFIRewriter::explicitlyModifiesRegister(const MCInst &Inst,
++                                               MCRegister Reg) const {
++  return InstInfo->get(Inst.getOpcode())
++      .hasExplicitDefOfPhysReg(Inst, Reg, *RegInfo);
++}
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 202152d7631b..b6fd8eb2a581 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -119,12 +119,29 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
+   case AArch64::SVC:
+     // SVC expands to 4 instructions.
+     return 16;
++  case AArch64::BR:
++  case AArch64::BLR:
++    // Indirect branches/calls expand to 2 instructions (guard + br/blr).
++    return 8;
++  case AArch64::RET:
++    // RET through LR is not rewritten, but RET through another register
++    // expands to 2 instructions (guard + ret).
++    if (MI.getOperand(0).getReg() != AArch64::LR)
++      return 8;
++    return 4;
+   default:
+-    // Default case: instructions that don't cause expansion.
+-    // - TP accesses in LFI are a single load/store, so no expansion.
+-    // - All remaining instructions are not rewritten.
+-    return std::nullopt;
++    break;
+   }
++
++  // Instructions that explicitly modify LR expand to 2 instructions.
++  for (const MachineOperand &MO : MI.explicit_operands())
++    if (MO.isReg() && MO.isDef() && MO.getReg() == AArch64::LR)
++      return 8;
++
++  // Default case: instructions that don't cause expansion.
++  // - TP accesses in LFI are a single load/store, so no expansion.
++  // - All remaining instructions are not rewritten.
++  return std::nullopt;
+ }
+ 
+ /// GetInstSize - Return the number of bytes of code the specified
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 92d7d66992e5..6066ddb7e59a 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -111,6 +111,50 @@ void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
+   emitInst(Inst, Out, STI);
+ }
+ 
++// {br,blr} xN
++// ->
++// add x28, x27, wN, uxtw
++// {br,blr} x28
++void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
++                                                 MCStreamer &Out,
++                                                 const MCSubtargetInfo &STI) {
++  assert(Inst.getNumOperands() >= 1 && Inst.getOperand(0).isReg() &&
++         "expected register operand");
++  MCRegister BranchReg = Inst.getOperand(0).getReg();
++
++  // Guard the branch target through X28.
++  emitAddMask(LFIAddrReg, BranchReg, Out, STI);
++  emitBranch(Inst.getOpcode(), LFIAddrReg, Out, STI);
++}
++
++// ret xN (where xN != x30)
++// ->
++// add x28, x27, wN, uxtw
++// ret x28
++//
++// ret (x30) is safe since x30 is always within the sandbox.
++void AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
++                                         const MCSubtargetInfo &STI) {
++  assert(Inst.getNumOperands() >= 1 && Inst.getOperand(0).isReg() &&
++         "expected register operand");
++  // RET through LR is safe since LR is always within sandbox.
++  if (Inst.getOperand(0).getReg() != AArch64::LR)
++    rewriteIndirectBranch(Inst, Out, STI);
++  else
++    emitInst(Inst, Out, STI);
++}
++
++// modify x30
++// ->
++// modify x30
++// add x30, x27, w30, uxtw
++void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
++                                                 MCStreamer &Out,
++                                                 const MCSubtargetInfo &STI) {
++  emitInst(Inst, Out, STI);
++  emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
++}
++
+ // svc #0
+ // ->
+ // mov x26, x30
+@@ -192,6 +236,19 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return;
+   }
+ 
++  // Control flow.
++  switch (Inst.getOpcode()) {
++  case AArch64::RET:
++    return rewriteReturn(Inst, Out, STI);
++  case AArch64::BR:
++  case AArch64::BLR:
++    return rewriteIndirectBranch(Inst, Out, STI);
++  }
++
++  // Link register modification.
++  if (explicitlyModifiesRegister(Inst, AArch64::LR))
++    return rewriteLRModification(Inst, Out, STI);
++
+   emitInst(Inst, Out, STI);
+ }
+ 
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+index 049860c1ab6c..439e2fe4b7ef 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -67,6 +67,16 @@ private:
+   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+                      const MCSubtargetInfo &STI);
+ 
++  // Control flow.
++  void rewriteIndirectBranch(const MCInst &Inst, MCStreamer &Out,
++                             const MCSubtargetInfo &STI);
++  void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
++                     const MCSubtargetInfo &STI);
++
++  // Link register modification.
++  void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
++                             const MCSubtargetInfo &STI);
++
+   // System instructions.
+   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI);
+diff --git a/llvm/test/MC/AArch64/LFI/branch.s b/llvm/test/MC/AArch64/LFI/branch.s
+new file mode 100644
+index 000000000000..684033f14d69
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/branch.s
+@@ -0,0 +1,21 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++foo:
++
++b foo
++// CHECK: b foo
++
++br x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: br x28
++
++blr x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: blr x28
++
++ret
++// CHECK: ret
++
++ret x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ret x28
+diff --git a/llvm/test/MC/AArch64/LFI/return.s b/llvm/test/MC/AArch64/LFI/return.s
+new file mode 100644
+index 000000000000..7e7431df57aa
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/return.s
+@@ -0,0 +1,25 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++mov x30, x0
++ret
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++ldr x30, [sp]
++ret
++// CHECK:      ldr x30, [sp]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++ldp x29, x30, [sp]
++ret
++// CHECK:      ldp x29, x30, [sp]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++ldp x30, x29, [sp]
++ret
++// CHECK:      ldp x30, x29, [sp]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+-- 
+2.55.0.229.g6434b31f56-goog
+

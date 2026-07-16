@@ -1,0 +1,717 @@
+From 3fe0bdfaa592cc0d7ce9f695a94522fa92366c6f Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Tue, 14 Apr 2026 02:38:08 -0700
+Subject: [PATCH] [LFI][AArch64] Add AArch64 LFI rewrites for system
+ instructions (#186896)
+
+This builds on the MCLFIRewriter infrastructure to add the
+AArch64-specific LFI rewriter, which rewrites AArch64 instructions for
+LFI sandboxing during the assembler step.
+
+The initial rewriter handles system instructions: system calls, thread
+pointer accesses, and also rejects modifications to reserved registers.
+---
+ llvm/docs/LFI.rst                             | 112 ++++++----
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  |  25 +++
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 210 ++++++++++++++++++
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       |  81 +++++++
+ .../MCTargetDesc/AArch64MCTargetDesc.cpp      |  11 +
+ .../AArch64/MCTargetDesc/CMakeLists.txt       |   1 +
+ llvm/test/MC/AArch64/LFI/reserved.s           |  45 ++++
+ llvm/test/MC/AArch64/LFI/sys.s                |   7 +
+ llvm/test/MC/AArch64/LFI/tp.s                 |  13 ++
+ 9 files changed, 467 insertions(+), 38 deletions(-)
+ create mode 100644 llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+ create mode 100644 llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+ create mode 100644 llvm/test/MC/AArch64/LFI/reserved.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/sys.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/tp.s
+
+diff --git a/llvm/docs/LFI.rst b/llvm/docs/LFI.rst
+index 65d8b70f17e0..cf99cc5faae3 100644
+--- a/llvm/docs/LFI.rst
++++ b/llvm/docs/LFI.rst
+@@ -63,6 +63,8 @@ to be applied to hand-written assembly, including inline assembly.
+ Compiler Options
+ ================
+ 
++**Note**: these options are not yet implemented.
++
+ The LFI target has several configuration options.
+ 
+ * ``+lfi-loads``: enable sandboxing for loads (default: true).
+@@ -71,7 +73,7 @@ The LFI target has several configuration options.
+ Use ``+nolfi-loads`` to create a "stores-only" sandbox that may read, but not
+ write, outside the sandbox region.
+ 
+-Use ``+nolfi-loads+nolfi-stores`` to create a "jumps-only" sandbox that may
++Use ``+nolfi-loads,+nolfi-stores`` to create a "jumps-only" sandbox that may
+ read/write outside the sandbox region but may not transfer control outside
+ (e.g., may not execute system calls directly). This is primarily useful in
+ combination with some other form of memory sandboxing, such as Intel MPK.
+@@ -83,12 +85,35 @@ The LFI target uses a custom ABI that reserves additional registers for the
+ platform. The registers are listed below, along with the security invariant
+ that must be maintained.
+ 
+-* ``x27``: always holds the sandbox base address.
++* ``x27``: always holds the sandbox base address (must be aligned to the size
++  of the sandbox).
+ * ``x28``: always holds an address within the sandbox.
+ * ``sp``: always holds an address within the sandbox.
+ * ``x30``: always holds an address within the sandbox.
+ * ``x26``: scratch register.
+-* ``x25``: points to a thread-local virtual register file for storing runtime context information.
++* ``x25``: context register (see below).
++
++The current design only supports 4GiB sandboxes, which requires the sandbox
++base address to be 4GiB-aligned. This is because LFI's ABI stores pointers as
++their full 64-bit values, rather than just 32-bit offsets from the base. This
++enables stores-only mode, where loads are not sandboxed but stores are, and
++allows the host to directly pass pointers to the sandbox.
++
++Context Register
++~~~~~~~~~~~~~~~~
++
++The context register (``x25``) points to a block of thread-local memory managed
++by the LFI runtime. The layout is as follows:
++
+++--------+--------+----------------------------------------------+
++| Offset | Size   | Description                                  |
+++--------+--------+----------------------------------------------+
++| 0      | 8      | Reserved for future use.                     |
+++--------+--------+----------------------------------------------+
++| 8      | 8      | Reserved for use by the LFI runtime.         |
+++--------+--------+----------------------------------------------+
++| 16     | 8      | Virtual thread pointer (used for TP access). |
+++--------+--------+----------------------------------------------+
+ 
+ Linker Support
+ ==============
+@@ -115,6 +140,8 @@ In the following assembly rewrites, some shorthand is used.
+ Control flow
+ ~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ Indirect branches get rewritten to branch through register ``x28``, which must
+ always contain an address within the sandbox. An ``add`` is used to safely
+ update ``x28`` with the destination address. Since ``ret`` uses ``x30`` by
+@@ -139,6 +166,8 @@ require any rewrite.
+ Memory accesses
+ ~~~~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ Memory accesses are rewritten to use the ``[x27, wM, uxtw]`` addressing mode if
+ it is available, which is automatically safe. Otherwise, rewrites fall back to
+ using ``x28`` along with an instruction to safely load it with the target
+@@ -219,6 +248,8 @@ address.
+ Stack pointer modification
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ When the stack pointer is modified, we write the modified value to a temporary,
+ before moving it back into ``sp`` with a safe ``add``.
+ 
+@@ -240,6 +271,8 @@ before moving it back into ``sp`` with a safe ``add``.
+ Link register modification
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ When the link register is modified, we write the modified value to a
+ temporary, before loading it back into ``x30`` with a safe ``add``.
+ 
+@@ -270,43 +303,42 @@ System instructions
+ 
+ System calls are rewritten into a sequence that loads the address of the first
+ runtime call entrypoint and jumps to it. The runtime call entrypoint table is
+-stored at the start of the sandbox, so it can be referenced by ``x27``. The
+-rewrite also saves and restores the link register, since it is used for
+-branching into the runtime.
+-
+-+-----------------+----------------------------+
+-|    Original     |         Rewritten          |
+-+-----------------+----------------------------+
+-| .. code-block:: | .. code-block::            |
+-|                 |                            |
+-|    svc #0       |    mov w26, w30            |
+-|                 |    ldr x30, [x27]          |
+-|                 |    blr x30                 |
+-|                 |    add x30, x27, w26, uxtw |
+-|                 |                            |
+-+-----------------+----------------------------+
++stored at a negative offset from the sandbox base, so it can be referenced by
++``x27``. The rewrite also saves and restores the link register, since it is
++used for branching into the runtime.
++
+++-----------------+------------------------------+
++|    Original     |          Rewritten           |
+++-----------------+------------------------------+
++| .. code-block:: | .. code-block::              |
++|                 |                              |
++|    svc #0       |    mov x26, x30              |
++|                 |    ldur x30, [x27, #-8]      |
++|                 |    blr x30                   |
++|                 |    add x30, x27, w26, uxtw   |
++|                 |                              |
+++-----------------+------------------------------+
+ 
+ Thread-local storage
+ ~~~~~~~~~~~~~~~~~~~~
+ 
+-TLS accesses are rewritten into accesses offset from ``x25``, which is a
+-reserved register that points to a virtual register file, with a location for
+-storing the sandbox's thread pointer. ``TP`` is the offset into that virtual
+-register file where the thread pointer is stored.
+-
+-+----------------------+-----------------------+
+-|       Original       |       Rewritten       |
+-+----------------------+-----------------------+
+-| .. code-block::      | .. code-block::       |
+-|                      |                       |
+-|    mrs xN, tpidr_el0 |    ldr xN, [x25, #TP] |
+-|                      |                       |
+-+----------------------+-----------------------+
+-| .. code-block::      | .. code-block::       |
+-|                      |                       |
+-|    mrs tpidr_el0, xN |    str xN, [x25, #TP] |
+-|                      |                       |
+-+----------------------+-----------------------+
++TLS accesses are rewritten into loads/stores from the context register
++(``x25``), which holds the virtual thread pointer at offset 16 (see
++`Context Register`_).
++
+++----------------------+-------------------------+
++|       Original       |        Rewritten        |
+++----------------------+-------------------------+
++| .. code-block::      | .. code-block::         |
++|                      |                         |
++|    mrs xN, tpidr_el0 |    ldr xN, [x25, #16]   |
++|                      |                         |
+++----------------------+-------------------------+
++| .. code-block::      | .. code-block::         |
++|                      |                         |
++|    msr tpidr_el0, xN |    str xN, [x25, #16]   |
++|                      |                         |
+++----------------------+-------------------------+
+ 
+ Optimizations
+ =============
+@@ -314,6 +346,8 @@ Optimizations
+ Basic guard elimination
+ ~~~~~~~~~~~~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ If a register is guarded multiple times in the same basic block without any
+ modifications to it during the intervening instructions, then subsequent guards
+ can be removed.
+@@ -335,6 +369,8 @@ can be removed.
+ Address generation
+ ~~~~~~~~~~~~~~~~~~
+ 
++**Note**: not yet implemented.
++
+ Addresses to global symbols in position-independent executables are frequently
+ generated via ``adrp`` followed by ``ldr``. Since the address generated by
+ ``adrp`` can be statically guaranteed to be within the sandbox, it is safe to
+@@ -354,7 +390,7 @@ guard instruction before the ``ldr``.
+ Stack guard elimination
+ ~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-**Note**: this optimization has not been implemented.
++**Note**: not yet implemented.
+ 
+ If the stack pointer is modified by adding/subtracting a small immediate, and
+ then later used to perform a memory access without any intervening jumps, then
+@@ -377,7 +413,7 @@ the sandbox region.
+ Guard hoisting
+ ~~~~~~~~~~~~~~
+ 
+-**Note**: this optimization has not been implemented.
++**Note**: not yet implemented.
+ 
+ In certain cases, guards may be hoisted outside of loops.
+ 
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 1a7c092793ed..3ca851ef83d2 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -107,6 +107,26 @@ AArch64InstrInfo::AArch64InstrInfo(const AArch64Subtarget &STI)
+                           AArch64::ADJCALLSTACKUP, AArch64::CATCHRET),
+       RI(STI.getTargetTriple(), STI.getHwMode()), Subtarget(STI) {}
+ 
++/// Return the maximum number of bytes of code the specified instruction may be
++/// after LFI rewriting. If the instruction is not rewritten, std::nullopt is
++/// returned (use default sizing).
++///
++/// NOTE: the size estimates here must be kept in sync with the rewrites in
++/// AArch64MCLFIRewriter.cpp. Sizes may be overestimates of the rewritten
++/// instruction sequences.
++static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
++  switch (MI.getOpcode()) {
++  case AArch64::SVC:
++    // SVC expands to 4 instructions.
++    return 16;
++  default:
++    // Default case: instructions that don't cause expansion.
++    // - TP accesses in LFI are a single load/store, so no expansion.
++    // - All remaining instructions are not rewritten.
++    return std::nullopt;
++  }
++}
++
+ /// GetInstSize - Return the number of bytes of code the specified
+ /// instruction may be.  This returns the maximum number of bytes.
+ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+@@ -130,6 +150,11 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+   unsigned NumBytes = 0;
+   const MCInstrDesc &Desc = MI.getDesc();
+ 
++  // LFI rewriter expansions that supersede normal sizing.
++  if (Subtarget.isLFI())
++    if (auto Size = getLFIInstSizeInBytes(MI))
++      return *Size;
++
+   if (!MI.isBundle() && isTailCallReturnInst(MI)) {
+     NumBytes = Desc.getSize() ? Desc.getSize() : 4;
+ 
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+new file mode 100644
+index 000000000000..92d7d66992e5
+--- /dev/null
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -0,0 +1,210 @@
++//===- AArch64MCLFIRewriter.cpp ---------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file implements the AArch64MCLFIRewriter class, the AArch64 specific
++// subclass of MCLFIRewriter.
++//
++//===----------------------------------------------------------------------===//
++
++#include "AArch64MCLFIRewriter.h"
++#include "AArch64AddressingModes.h"
++#include "MCTargetDesc/AArch64MCTargetDesc.h"
++#include "Utils/AArch64BaseInfo.h"
++
++#include "llvm/MC/MCInst.h"
++#include "llvm/MC/MCStreamer.h"
++#include "llvm/MC/MCSubtargetInfo.h"
++
++using namespace llvm;
++
++// LFI reserved registers.
++static constexpr MCRegister LFIBaseReg = AArch64::X27;
++static constexpr MCRegister LFIAddrReg = AArch64::X28;
++static constexpr MCRegister LFIScratchReg = AArch64::X26;
++static constexpr MCRegister LFICtxReg = AArch64::X25;
++
++// Offset into the context register block (pointed to by LFICtxReg) where the
++// thread pointer is stored. This is a scaled offset (multiplied by 8 for
++// 64-bit loads), so a value of 2 means an actual byte offset of 16.
++static constexpr unsigned LFITPOffset = 2;
++
++// Byte offset from the sandbox base register where the syscall handler address
++// is stored (negative because it is below the sandbox base).
++static constexpr int LFISyscallOffset = -8;
++
++static bool isSyscall(const MCInst &Inst) {
++  return Inst.getOpcode() == AArch64::SVC;
++}
++
++static bool isPrivilegedTP(int64_t Reg) {
++  return Reg == AArch64SysReg::TPIDR_EL1 || Reg == AArch64SysReg::TPIDR_EL2 ||
++         Reg == AArch64SysReg::TPIDR_EL3;
++}
++
++static bool isTPRead(const MCInst &Inst) {
++  return Inst.getOpcode() == AArch64::MRS &&
++         Inst.getOperand(1).getImm() == AArch64SysReg::TPIDR_EL0;
++}
++
++static bool isTPWrite(const MCInst &Inst) {
++  return Inst.getOpcode() == AArch64::MSR &&
++         Inst.getOperand(0).getImm() == AArch64SysReg::TPIDR_EL0;
++}
++
++static bool isPrivilegedTPAccess(const MCInst &Inst) {
++  if (Inst.getOpcode() == AArch64::MRS)
++    return isPrivilegedTP(Inst.getOperand(1).getImm());
++  if (Inst.getOpcode() == AArch64::MSR)
++    return isPrivilegedTP(Inst.getOperand(0).getImm());
++  return false;
++}
++
++bool AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
++  return mayModifyRegister(Inst, LFIAddrReg) ||
++         mayModifyRegister(Inst, LFIBaseReg) ||
++         mayModifyRegister(Inst, LFICtxReg);
++}
++
++void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
++                                    const MCSubtargetInfo &STI) {
++  Out.emitInstruction(Inst, STI);
++}
++
++void AArch64MCLFIRewriter::emitAddMask(MCRegister Dest, MCRegister Src,
++                                       MCStreamer &Out,
++                                       const MCSubtargetInfo &STI) {
++  // add Dest, LFIBaseReg, W(Src), uxtw
++  MCInst Inst;
++  Inst.setOpcode(AArch64::ADDXrx);
++  Inst.addOperand(MCOperand::createReg(Dest));
++  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
++  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(Src)));
++  Inst.addOperand(
++      MCOperand::createImm(AArch64_AM::getArithExtendImm(AArch64_AM::UXTW, 0)));
++  emitInst(Inst, Out, STI);
++}
++
++void AArch64MCLFIRewriter::emitBranch(unsigned Opcode, MCRegister Target,
++                                      MCStreamer &Out,
++                                      const MCSubtargetInfo &STI) {
++  MCInst Branch;
++  Branch.setOpcode(Opcode);
++  Branch.addOperand(MCOperand::createReg(Target));
++  emitInst(Branch, Out, STI);
++}
++
++void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
++                                   MCStreamer &Out,
++                                   const MCSubtargetInfo &STI) {
++  // orr Dest, xzr, Src
++  MCInst Inst;
++  Inst.setOpcode(AArch64::ORRXrs);
++  Inst.addOperand(MCOperand::createReg(Dest));
++  Inst.addOperand(MCOperand::createReg(AArch64::XZR));
++  Inst.addOperand(MCOperand::createReg(Src));
++  Inst.addOperand(MCOperand::createImm(0));
++  emitInst(Inst, Out, STI);
++}
++
++// svc #0
++// ->
++// mov x26, x30
++// ldur x30, [x27, #-8]
++// blr x30
++// add x30, x27, w26, uxtw
++void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
++                                          const MCSubtargetInfo &STI) {
++  // Save LR to scratch.
++  emitMov(LFIScratchReg, AArch64::LR, Out, STI);
++
++  // Load syscall handler address from negative offset from sandbox base.
++  MCInst Load;
++  Load.setOpcode(AArch64::LDURXi);
++  Load.addOperand(MCOperand::createReg(AArch64::LR));
++  Load.addOperand(MCOperand::createReg(LFIBaseReg));
++  Load.addOperand(MCOperand::createImm(LFISyscallOffset));
++  emitInst(Load, Out, STI);
++
++  // Call the runtime.
++  emitBranch(AArch64::BLR, AArch64::LR, Out, STI);
++
++  // Restore LR with guard.
++  emitAddMask(AArch64::LR, LFIScratchReg, Out, STI);
++}
++
++// mrs xN, tpidr_el0
++// ->
++// ldr xN, [x25, #16]
++void AArch64MCLFIRewriter::rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
++                                         const MCSubtargetInfo &STI) {
++  MCRegister DestReg = Inst.getOperand(0).getReg();
++
++  MCInst Load;
++  Load.setOpcode(AArch64::LDRXui);
++  Load.addOperand(MCOperand::createReg(DestReg));
++  Load.addOperand(MCOperand::createReg(LFICtxReg));
++  Load.addOperand(MCOperand::createImm(LFITPOffset));
++  emitInst(Load, Out, STI);
++}
++
++// msr tpidr_el0, xN
++// ->
++// str xN, [x25, #16]
++void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
++                                          const MCSubtargetInfo &STI) {
++  MCRegister SrcReg = Inst.getOperand(1).getReg();
++
++  MCInst Store;
++  Store.setOpcode(AArch64::STRXui);
++  Store.addOperand(MCOperand::createReg(SrcReg));
++  Store.addOperand(MCOperand::createReg(LFICtxReg));
++  Store.addOperand(MCOperand::createImm(LFITPOffset));
++  emitInst(Store, Out, STI);
++}
++
++// NOTE: when adding new rewrites, the size estimates in
++// AArch64InstrInfo::getLFIInstSizeInBytes must be updated to match.
++void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
++                                         const MCSubtargetInfo &STI) {
++  // Reserved register modification is an error.
++  if (mayModifyReserved(Inst)) {
++    error(Inst, "illegal modification of reserved LFI register");
++    return;
++  }
++
++  // System instructions.
++  if (isSyscall(Inst))
++    return rewriteSyscall(Inst, Out, STI);
++
++  if (isTPRead(Inst))
++    return rewriteTPRead(Inst, Out, STI);
++
++  if (isTPWrite(Inst))
++    return rewriteTPWrite(Inst, Out, STI);
++
++  if (isPrivilegedTPAccess(Inst)) {
++    error(Inst, "illegal access to privileged thread pointer register");
++    return;
++  }
++
++  emitInst(Inst, Out, STI);
++}
++
++bool AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
++                                       const MCSubtargetInfo &STI) {
++  // The guard prevents rewrite-recursion when we emit instructions from inside
++  // the rewriter (such instructions should not be rewritten).
++  if (!Enabled || Guard)
++    return false;
++  Guard = true;
++
++  doRewriteInst(Inst, Out, STI);
++
++  Guard = false;
++  return true;
++}
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+new file mode 100644
+index 000000000000..049860c1ab6c
+--- /dev/null
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -0,0 +1,81 @@
++//===- AArch64MCLFIRewriter.h -----------------------------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file declares the AArch64MCLFIRewriter class, the AArch64 specific
++// subclass of MCLFIRewriter.
++//
++//===----------------------------------------------------------------------===//
++#ifndef LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
++#define LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
++
++#include "llvm/MC/MCInstrInfo.h"
++#include "llvm/MC/MCLFIRewriter.h"
++#include "llvm/MC/MCRegister.h"
++#include "llvm/MC/MCRegisterInfo.h"
++
++namespace llvm {
++class MCContext;
++class MCInst;
++class MCStreamer;
++class MCSubtargetInfo;
++
++/// Rewrites AArch64 instructions for LFI sandboxing.
++///
++/// This class implements the LFI (Lightweight Fault Isolation) rewriting
++/// for AArch64 instructions. It transforms instructions to ensure memory
++/// accesses and control flow are confined within the sandbox region.
++///
++/// Reserved registers:
++/// - X27: Sandbox base address (always holds the base)
++/// - X28: Safe address register (always within sandbox)
++/// - X26: Scratch register for intermediate calculations
++/// - X25: context register (points to thread-local runtime data)
++/// - SP:  Stack pointer (always within sandbox)
++/// - X30: Link register (always within sandbox)
++class AArch64MCLFIRewriter : public MCLFIRewriter {
++public:
++  AArch64MCLFIRewriter(MCContext &Ctx, std::unique_ptr<MCRegisterInfo> &&RI,
++                       std::unique_ptr<MCInstrInfo> &&II)
++      : MCLFIRewriter(Ctx, std::move(RI), std::move(II)) {}
++
++  bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
++                   const MCSubtargetInfo &STI) override;
++
++private:
++  /// Recursion guard to prevent infinite loops when emitting instructions.
++  bool Guard = false;
++
++  // Instruction classification.
++  bool mayModifyReserved(const MCInst &Inst) const;
++
++  // Instruction emission.
++  void emitInst(const MCInst &Inst, MCStreamer &Out,
++                const MCSubtargetInfo &STI);
++  void emitAddMask(MCRegister Dest, MCRegister Src, MCStreamer &Out,
++                   const MCSubtargetInfo &STI);
++  void emitBranch(unsigned Opcode, MCRegister Target, MCStreamer &Out,
++                  const MCSubtargetInfo &STI);
++  void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
++               const MCSubtargetInfo &STI);
++
++  // Rewriting logic.
++  void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
++                     const MCSubtargetInfo &STI);
++
++  // System instructions.
++  void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
++                      const MCSubtargetInfo &STI);
++  void rewriteTPRead(const MCInst &Inst, MCStreamer &Out,
++                     const MCSubtargetInfo &STI);
++  void rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
++                      const MCSubtargetInfo &STI);
++};
++
++} // namespace llvm
++
++#endif // LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCTargetDesc.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCTargetDesc.cpp
+index 5c8f57664a2c..979584283ed0 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCTargetDesc.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCTargetDesc.cpp
+@@ -13,6 +13,7 @@
+ #include "AArch64MCTargetDesc.h"
+ #include "AArch64ELFStreamer.h"
+ #include "AArch64MCAsmInfo.h"
++#include "AArch64MCLFIRewriter.h"
+ #include "AArch64WinCOFFStreamer.h"
+ #include "MCTargetDesc/AArch64AddressingModes.h"
+ #include "MCTargetDesc/AArch64InstPrinter.h"
+@@ -503,6 +504,13 @@ static MCInstrAnalysis *createAArch64InstrAnalysis(const MCInstrInfo *Info) {
+   return new AArch64MCInstrAnalysis(Info);
+ }
+ 
++static MCLFIRewriter *
++createAArch64MCLFIRewriter(MCContext &Ctx,
++                           std::unique_ptr<MCRegisterInfo> &&RegInfo,
++                           std::unique_ptr<MCInstrInfo> &&InstInfo) {
++  return new AArch64MCLFIRewriter(Ctx, std::move(RegInfo), std::move(InstInfo));
++}
++
+ // Force static initialization.
+ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void
+ LLVMInitializeAArch64TargetMC() {
+@@ -532,6 +540,9 @@ LLVMInitializeAArch64TargetMC() {
+     TargetRegistry::RegisterMachOStreamer(*T, createMachOStreamer);
+     TargetRegistry::RegisterCOFFStreamer(*T, createAArch64WinCOFFStreamer);
+ 
++    // Register the LFI rewriter.
++    TargetRegistry::RegisterMCLFIRewriter(*T, createAArch64MCLFIRewriter);
++
+     // Register the obj target streamer.
+     TargetRegistry::RegisterObjectTargetStreamer(
+         *T, createAArch64ObjectTargetStreamer);
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/CMakeLists.txt b/llvm/lib/Target/AArch64/MCTargetDesc/CMakeLists.txt
+index 7f220657e45f..7d8d825d7220 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/CMakeLists.txt
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/CMakeLists.txt
+@@ -6,6 +6,7 @@ add_llvm_component_library(LLVMAArch64Desc
+   AArch64MCAsmInfo.cpp
+   AArch64MCCodeEmitter.cpp
+   AArch64MCExpr.cpp
++  AArch64MCLFIRewriter.cpp
+   AArch64MCTargetDesc.cpp
+   AArch64MachObjectWriter.cpp
+   AArch64TargetStreamer.cpp
+diff --git a/llvm/test/MC/AArch64/LFI/reserved.s b/llvm/test/MC/AArch64/LFI/reserved.s
+new file mode 100644
+index 000000000000..8ad5e7c56bb9
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/reserved.s
+@@ -0,0 +1,45 @@
++// RUN: not llvm-mc -triple aarch64_lfi %s 2>&1 | FileCheck %s
++
++mov x27, x0
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        mov x27, x0
++
++ldr x27, [x0]
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldr x27, [x0]
++
++add x27, x0, x1
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        add x27, x0, x1
++
++mov x28, x0
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        mov x28, x0
++
++ldr x28, [x0]
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldr x28, [x0]
++
++add x28, x0, x1
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        add x28, x0, x1
++
++ldp x27, x28, [x0]
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldp x27, x28, [x0]
++
++ldp x0, x27, [x1]
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldp x0, x27, [x1]
++
++ldp x28, x0, [x1]
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldp x28, x0, [x1]
++
++ldr x0, [x27], #8
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldr x0, [x27], #8
++
++ldr x0, [x28, #8]!
++// CHECK: error: illegal modification of reserved LFI register
++// CHECK:        ldr x0, [x28, #8]!
+diff --git a/llvm/test/MC/AArch64/LFI/sys.s b/llvm/test/MC/AArch64/LFI/sys.s
+new file mode 100644
+index 000000000000..df4b69460085
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/sys.s
+@@ -0,0 +1,7 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++svc #0
++// CHECK:      mov x26, x30
++// CHECK-NEXT: ldur x30, [x27, #-8]
++// CHECK-NEXT: blr x30
++// CHECK-NEXT: add x30, x27, w26, uxtw
+diff --git a/llvm/test/MC/AArch64/LFI/tp.s b/llvm/test/MC/AArch64/LFI/tp.s
+new file mode 100644
+index 000000000000..0ddf839a1d56
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/tp.s
+@@ -0,0 +1,13 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++mrs x0, tpidr_el0
++// CHECK: ldr x0, [x25, #16]
++
++mrs x1, tpidr_el0
++// CHECK: ldr x1, [x25, #16]
++
++msr tpidr_el0, x0
++// CHECK: str x0, [x25, #16]
++
++msr tpidr_el0, x1
++// CHECK: str x1, [x25, #16]
+-- 
+2.55.0.229.g6434b31f56-goog
+

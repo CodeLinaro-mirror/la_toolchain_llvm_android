@@ -1,0 +1,115 @@
+From f7fd7a17361ceb850a9c370df25777ba10519710 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Mon, 1 Jun 2026 16:54:00 -0700
+Subject: [PATCH] [LFI][AArch64] Emit .tlsdesccall with the associated blr
+ (#200903)
+
+This PR fixes an issue in the LFI control-flow rewrites if a blr is
+marked with `.tlsdesccall`. The `.tlsdesccall` should be moved after
+rewriting so that it is associated with the rewritten `blr`, rather than
+the guard instruction.
+---
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 19 +++++++++++++++++++
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       |  8 ++++++++
+ llvm/test/MC/AArch64/LFI/tlsdesccall.s        | 12 ++++++++++++
+ 3 files changed, 39 insertions(+)
+ create mode 100644 llvm/test/MC/AArch64/LFI/tlsdesccall.s
+
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index a3d9c8662915..6b683be0f535 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -101,6 +101,17 @@ void AArch64MCLFIRewriter::emitBranch(unsigned Opcode, MCRegister Target,
+   emitInst(Branch, Out, STI);
+ }
+ 
++void AArch64MCLFIRewriter::emitPendingTLSDescCall(MCStreamer &Out,
++                                                  const MCSubtargetInfo &STI) {
++  if (!PendingTLSDescCall)
++    return;
++  MCInst Marker;
++  Marker.setOpcode(AArch64::TLSDESCCALL);
++  Marker.addOperand(MCOperand::createExpr(PendingTLSDescCall));
++  PendingTLSDescCall = nullptr;
++  emitInst(Marker, Out, STI);
++}
++
+ void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
+                                    MCStreamer &Out,
+                                    const MCSubtargetInfo &STI) {
+@@ -127,6 +138,9 @@ void AArch64MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
+ 
+   // Guard the branch target through X28.
+   emitAddMask(LFIAddrReg, BranchReg, Out, STI);
++
++  emitPendingTLSDescCall(Out, STI);
++
+   emitBranch(Inst.getOpcode(), LFIAddrReg, Out, STI);
+ }
+ 
+@@ -218,6 +232,11 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
+ // AArch64InstrInfo::getLFIInstSizeInBytes must be updated to match.
+ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
++  if (Inst.getOpcode() == AArch64::TLSDESCCALL) {
++    PendingTLSDescCall = Inst.getOperand(0).getExpr();
++    return;
++  }
++
+   // Reserved register modification is an error.
+   if (MCRegister Reg = mayModifyReserved(Inst)) {
+     error(Inst, Twine("illegal modification of reserved LFI register ") +
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+index 8af6e1b00a79..e4ed767aa21d 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -20,6 +20,7 @@
+ 
+ namespace llvm {
+ class MCContext;
++class MCExpr;
+ class MCInst;
+ class MCStreamer;
+ class MCSubtargetInfo;
+@@ -50,6 +51,12 @@ private:
+   /// Recursion guard to prevent infinite loops when emitting instructions.
+   bool Guard = false;
+ 
++  /// Deferred `.tlsdesccall` symbol. The directive attaches a
++  /// R_AARCH64_TLSDESC_CALL relocation to the following BLR. Since LFI inserts
++  /// a guard before that BLR, the marker is deferred and re-emitted between
++  /// the guard and the branch so the relocation stays on the BLR.
++  const MCExpr *PendingTLSDescCall = nullptr;
++
+   // Instruction classification. Returns the reserved register that may be
+   // modified, or an invalid register if no reserved register is touched.
+   MCRegister mayModifyReserved(const MCInst &Inst) const;
+@@ -61,6 +68,7 @@ private:
+                    const MCSubtargetInfo &STI);
+   void emitBranch(unsigned Opcode, MCRegister Target, MCStreamer &Out,
+                   const MCSubtargetInfo &STI);
++  void emitPendingTLSDescCall(MCStreamer &Out, const MCSubtargetInfo &STI);
+   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
+                const MCSubtargetInfo &STI);
+ 
+diff --git a/llvm/test/MC/AArch64/LFI/tlsdesccall.s b/llvm/test/MC/AArch64/LFI/tlsdesccall.s
+new file mode 100644
+index 000000000000..252685cc69a7
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/tlsdesccall.s
+@@ -0,0 +1,12 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++adrp x0, :tlsdesc:var
++ldr x1, [x0, :tlsdesc_lo12:var]
++add x0, x0, :tlsdesc_lo12:var
++.tlsdesccall var
++blr x1
++// CHECK:      add x0, x0, :tlsdesc_lo12:var
++// CHECK-NOT:  .tlsdesccall
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: .tlsdesccall var
++// CHECK-NEXT: blr x28
+-- 
+2.55.0.229.g6434b31f56-goog
+

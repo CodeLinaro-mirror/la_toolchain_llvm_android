@@ -1094,6 +1094,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Add AArch64 LFI rewrites for system instructions (#186896)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3fe0bdfaa592cc0d7ce9f695a94522fa92366c6f.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614486
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [AArch64] Check Subtarget via STI in getInstSizeInBytes (#192089)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a8f36ccb2a24ef4abcbff58b2f36ce2deacefd54.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614563
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][NFC] Mark lfi-enable-rewriter flag as hidden (#192143)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a152ed4369a43751087979d69d316b7e4cf190f1.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614705
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [X86] Use unsigned comparison for stack clash probing loop (#192355)"
         },
         "platforms": [
@@ -1108,6 +1150,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI][Doc] Update documentation for planned features (#192128)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/59a509aa80e57c420d06f364b02f0159f7f70775.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615006
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Update `__mbstate_t.h` to include path to Android's `mbstate_t.h` (#192307)"
         },
         "platforms": [
@@ -1117,6 +1173,34 @@
         "version_range": {
             "from": 596125,
             "until": 615212
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][libunwind] Avoid writing to reserved registers on the `aarch64_lfi` target (#192739)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2b63e5e75dbadc30218e41c8113a40acbc625334.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615433
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Add rewrites for control flow (#192602)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5536a4c7122eb799fee189139e27309efb0a6c4d.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615989
         }
     },
     {
@@ -1150,6 +1234,62 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI] Report reserved register modification in error message (#195160)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a9c655df69284995967fb61553bef589a706598e.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 618183
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Emit .tlsdesccall with the associated blr (#200903)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f7fd7a17361ceb850a9c370df25777ba10519710.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 620577
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Add rewrites for memory accesses (#195167)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e07b47ee180559fafb6ce37dece10200c19f1941.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 621887
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Add guard elimination optimization (#204693)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b885cfbb055839ea0aa9b2c0fdd95357cae8dfa6.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 624239
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Add Android assertion handler (#198831)"
         },
         "platforms": [
@@ -1159,6 +1299,20 @@
         "version_range": {
             "from": 596125,
             "until": 624472
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Add PAC support for LFI (#207915)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/26194d4623650fd3f9b58cda34b318197613e702.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 626499
         }
     },
     {

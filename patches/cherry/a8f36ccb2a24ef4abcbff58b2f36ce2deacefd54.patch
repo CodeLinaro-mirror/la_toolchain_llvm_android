@@ -1,0 +1,50 @@
+From a8f36ccb2a24ef4abcbff58b2f36ce2deacefd54 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Tue, 14 Apr 2026 10:59:19 -0700
+Subject: [PATCH] [AArch64] Check Subtarget via STI in getInstSizeInBytes
+ (#192089)
+
+The InstSizes test (`llvm/unittests/Target/AArch64/InstSizes.cpp`)
+destroys the Subtarget field early (`ST` created on the stack in
+[`createInstrInfo`](https://github.com/llvm/llvm-project/blob/40a585e742ed6b28306d7511380079325ba1a003/llvm/unittests/Target/AArch64/InstSizes.cpp#L32)),
+causing a use-after-free if it is used in `getInstSizeInBytes`. This
+causes a failure when running the test with hwasan (reported by build
+bot). To fix this, this PR switches to using `STI` instead of
+`Subtarget` in `getInstSizeInBytes` for checking `isLFI`, which survives
+for the lifetime of the test.
+
+I think fixing the test itself (the root of the issue, as far as I can
+tell) would be more involved. Perhaps I should open an issue for it
+though?
+
+I have tested the fix on an AArch64 machine with hwasan to confirm that
+it resolves the issue.
+---
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 3ca851ef83d2..9d805dad07c1 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -151,7 +151,8 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+   const MCInstrDesc &Desc = MI.getDesc();
+ 
+   // LFI rewriter expansions that supersede normal sizing.
+-  if (Subtarget.isLFI())
++  const auto &STI = MF->getSubtarget<AArch64Subtarget>();
++  if (STI.isLFI())
+     if (auto Size = getLFIInstSizeInBytes(MI))
+       return *Size;
+ 
+@@ -162,7 +163,6 @@ unsigned AArch64InstrInfo::getInstSizeInBytes(const MachineInstr &MI) const {
+     if (!MFI->shouldSignReturnAddress(*MF))
+       return NumBytes;
+ 
+-    const auto &STI = MF->getSubtarget<AArch64Subtarget>();
+     auto Method = STI.getAuthenticatedLRCheckMethod(*MF);
+     NumBytes += AArch64PAuth::getCheckerSizeInBytes(Method);
+     return NumBytes;
+-- 
+2.55.0.229.g6434b31f56-goog
+

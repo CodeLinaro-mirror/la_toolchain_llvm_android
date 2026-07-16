@@ -1,0 +1,195 @@
+From a9c655df69284995967fb61553bef589a706598e Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Tue, 12 May 2026 15:35:47 -0700
+Subject: [PATCH] [LFI] Report reserved register modification in error message
+ (#195160)
+
+Reports the name of the modified reserved register in the error message.
+Updates the MCLFIRewriter error infrastructure to take a Twine for this.
+Also adds a warning function, which will be useful in future cases where
+the rewriter sees an unknown instruction/addressing mode, but will pass
+it through anyway.
+
+Fixes #192027.
+---
+ llvm/include/llvm/MC/MCLFIRewriter.h          |  4 ++-
+ llvm/lib/MC/MCLFIRewriter.cpp                 |  7 ++++-
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 16 +++++++-----
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       |  5 ++--
+ llvm/test/MC/AArch64/LFI/reserved.s           | 26 +++++++++++--------
+ 5 files changed, 37 insertions(+), 21 deletions(-)
+
+diff --git a/llvm/include/llvm/MC/MCLFIRewriter.h b/llvm/include/llvm/MC/MCLFIRewriter.h
+index 835df9a8f920..33d51f29ce99 100644
+--- a/llvm/include/llvm/MC/MCLFIRewriter.h
++++ b/llvm/include/llvm/MC/MCLFIRewriter.h
+@@ -25,6 +25,7 @@ class MCInst;
+ class MCSubtargetInfo;
+ class MCStreamer;
+ class MCSymbol;
++class Twine;
+ 
+ class MCLFIRewriter {
+ private:
+@@ -40,7 +41,8 @@ public:
+                 std::unique_ptr<MCInstrInfo> &&II)
+       : Ctx(Ctx), InstInfo(std::move(II)), RegInfo(std::move(RI)) {}
+ 
+-  LLVM_ABI void error(const MCInst &Inst, const char Msg[]);
++  LLVM_ABI void error(const MCInst &Inst, const Twine &Msg);
++  LLVM_ABI void warning(const MCInst &Inst, const Twine &Msg);
+ 
+   void disable() { Enabled = false; }
+   void enable() { Enabled = true; }
+diff --git a/llvm/lib/MC/MCLFIRewriter.cpp b/llvm/lib/MC/MCLFIRewriter.cpp
+index 473b99bf8635..7eeebbb900e9 100644
+--- a/llvm/lib/MC/MCLFIRewriter.cpp
++++ b/llvm/lib/MC/MCLFIRewriter.cpp
+@@ -13,16 +13,21 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "llvm/MC/MCLFIRewriter.h"
++#include "llvm/ADT/Twine.h"
+ #include "llvm/MC/MCContext.h"
+ #include "llvm/MC/MCInst.h"
+ #include "llvm/MC/MCInstrInfo.h"
+ 
+ using namespace llvm;
+ 
+-void MCLFIRewriter::error(const MCInst &Inst, const char Msg[]) {
++void MCLFIRewriter::error(const MCInst &Inst, const Twine &Msg) {
+   Ctx.reportError(Inst.getLoc(), Msg);
+ }
+ 
++void MCLFIRewriter::warning(const MCInst &Inst, const Twine &Msg) {
++  Ctx.reportWarning(Inst.getLoc(), Msg);
++}
++
+ bool MCLFIRewriter::isCall(const MCInst &Inst) const {
+   return InstInfo->get(Inst.getOpcode()).isCall();
+ }
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 6066ddb7e59a..a3d9c8662915 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -16,6 +16,7 @@
+ #include "MCTargetDesc/AArch64MCTargetDesc.h"
+ #include "Utils/AArch64BaseInfo.h"
+ 
++#include "llvm/ADT/Twine.h"
+ #include "llvm/MC/MCInst.h"
+ #include "llvm/MC/MCStreamer.h"
+ #include "llvm/MC/MCSubtargetInfo.h"
+@@ -64,10 +65,12 @@ static bool isPrivilegedTPAccess(const MCInst &Inst) {
+   return false;
+ }
+ 
+-bool AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+-  return mayModifyRegister(Inst, LFIAddrReg) ||
+-         mayModifyRegister(Inst, LFIBaseReg) ||
+-         mayModifyRegister(Inst, LFICtxReg);
++MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
++  for (MCRegister Reg : {LFIAddrReg, LFIBaseReg, LFICtxReg}) {
++    if (mayModifyRegister(Inst, Reg))
++      return Reg;
++  }
++  return {};
+ }
+ 
+ void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
+@@ -216,8 +219,9 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
+ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+                                          const MCSubtargetInfo &STI) {
+   // Reserved register modification is an error.
+-  if (mayModifyReserved(Inst)) {
+-    error(Inst, "illegal modification of reserved LFI register");
++  if (MCRegister Reg = mayModifyReserved(Inst)) {
++    error(Inst, Twine("illegal modification of reserved LFI register ") +
++                    RegInfo->getName(Reg));
+     return;
+   }
+ 
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+index 439e2fe4b7ef..8af6e1b00a79 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -50,8 +50,9 @@ private:
+   /// Recursion guard to prevent infinite loops when emitting instructions.
+   bool Guard = false;
+ 
+-  // Instruction classification.
+-  bool mayModifyReserved(const MCInst &Inst) const;
++  // Instruction classification. Returns the reserved register that may be
++  // modified, or an invalid register if no reserved register is touched.
++  MCRegister mayModifyReserved(const MCInst &Inst) const;
+ 
+   // Instruction emission.
+   void emitInst(const MCInst &Inst, MCStreamer &Out,
+diff --git a/llvm/test/MC/AArch64/LFI/reserved.s b/llvm/test/MC/AArch64/LFI/reserved.s
+index 8ad5e7c56bb9..3e92195ef54f 100644
+--- a/llvm/test/MC/AArch64/LFI/reserved.s
++++ b/llvm/test/MC/AArch64/LFI/reserved.s
+@@ -1,45 +1,49 @@
+ // RUN: not llvm-mc -triple aarch64_lfi %s 2>&1 | FileCheck %s
+ 
+ mov x27, x0
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X27
+ // CHECK:        mov x27, x0
+ 
+ ldr x27, [x0]
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X27
+ // CHECK:        ldr x27, [x0]
+ 
+ add x27, x0, x1
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X27
+ // CHECK:        add x27, x0, x1
+ 
+ mov x28, x0
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        mov x28, x0
+ 
+ ldr x28, [x0]
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        ldr x28, [x0]
+ 
+ add x28, x0, x1
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        add x28, x0, x1
+ 
+ ldp x27, x28, [x0]
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        ldp x27, x28, [x0]
+ 
+ ldp x0, x27, [x1]
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X27
+ // CHECK:        ldp x0, x27, [x1]
+ 
+ ldp x28, x0, [x1]
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        ldp x28, x0, [x1]
+ 
+ ldr x0, [x27], #8
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X27
+ // CHECK:        ldr x0, [x27], #8
+ 
+ ldr x0, [x28, #8]!
+-// CHECK: error: illegal modification of reserved LFI register
++// CHECK: error: illegal modification of reserved LFI register X28
+ // CHECK:        ldr x0, [x28, #8]!
++
++mov x25, x0
++// CHECK: error: illegal modification of reserved LFI register X25
++// CHECK:        mov x25, x0
+-- 
+2.55.0.229.g6434b31f56-goog
+

@@ -1,0 +1,3430 @@
+From e07b47ee180559fafb6ce37dece10200c19f1941 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Wed, 10 Jun 2026 15:58:04 -0400
+Subject: [PATCH] [LFI][AArch64] Add rewrites for memory accesses (#195167)
+
+This patch adds LFI rewrites for loads and stores, and guards for stack
+pointer modifications.
+
+This also introduces the `+no-lfi-stores` and `+no-lfi-loads` features
+to control the granularity of memory sandboxing.
+
+With these changes the rewriter now supports making fully
+software-sandboxed programs. There are some minor changes
+needed in libunwind to avoid emitting SVE/MTE instructions that
+cause verification failure, which will be addressed in a future patch.
+
+Future work includes the guard elimination optimization, which will
+improve performance, Clang flags to control the LFI subtarget
+features from the frontend, and that can also set a macro that
+communicates the LFI feature level.
+---
+ llvm/docs/LFI.rst                             |   8 +-
+ llvm/lib/Target/AArch64/AArch64.td            |   7 +
+ llvm/lib/Target/AArch64/AArch64Features.td    |   5 +
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  |  38 +-
+ llvm/lib/Target/AArch64/AArch64LFI.td         | 469 +++++++++++++
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 543 ++++++++++++++-
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       |  31 +
+ llvm/test/MC/AArch64/LFI/exclusive.s          | 140 ++++
+ llvm/test/MC/AArch64/LFI/fp.s                 | 204 ++++++
+ llvm/test/MC/AArch64/LFI/jumps-only.s         |  41 ++
+ llvm/test/MC/AArch64/LFI/literal.s            |  37 +
+ llvm/test/MC/AArch64/LFI/lse.s                | 162 +++++
+ llvm/test/MC/AArch64/LFI/mem-lr.s             |  71 ++
+ llvm/test/MC/AArch64/LFI/mem.s                | 411 +++++++++++
+ llvm/test/MC/AArch64/LFI/no-lfi-loads.s       |  33 +
+ llvm/test/MC/AArch64/LFI/no-lfi-stores.s      |  35 +
+ llvm/test/MC/AArch64/LFI/passthrough.s        |  30 +
+ llvm/test/MC/AArch64/LFI/prefetch.s           |  81 +++
+ llvm/test/MC/AArch64/LFI/rcpc.s               |  19 +
+ llvm/test/MC/AArch64/LFI/simd.s               | 650 ++++++++++++++++++
+ llvm/test/MC/AArch64/LFI/stack.s              |  41 ++
+ llvm/test/MC/AArch64/LFI/sys.s                |  24 +
+ 22 files changed, 3068 insertions(+), 12 deletions(-)
+ create mode 100644 llvm/lib/Target/AArch64/AArch64LFI.td
+ create mode 100644 llvm/test/MC/AArch64/LFI/exclusive.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/fp.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/jumps-only.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/literal.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/lse.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/mem-lr.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/mem.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/no-lfi-loads.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/no-lfi-stores.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/passthrough.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/prefetch.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/rcpc.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/simd.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/stack.s
+
+diff --git a/llvm/docs/LFI.rst b/llvm/docs/LFI.rst
+index a173cd57e0ee..b0f5e31d87ee 100644
+--- a/llvm/docs/LFI.rst
++++ b/llvm/docs/LFI.rst
+@@ -115,8 +115,6 @@ Example:
+ Compiler Options
+ ++++++++++++++++
+ 
+-**Note**: these options are not yet implemented.
+-
+ The LFI target has several configuration options, specified via ``-mattr=``:
+ 
+ * ``+no-lfi-loads``: Disable sandboxing for load instructions (stores-only mode).
+@@ -168,7 +166,7 @@ In the following assembly rewrites, some shorthand is used.
+ * ``xN`` or ``wN``: refers to any general-purpose non-reserved register.
+ * ``{a,b,c}``: matches any of ``a``, ``b``, or ``c``.
+ * ``LDSTr``: a load/store instruction that supports register-register addressing modes, with one source/destination register.
+-* ``LDSTx``: a load/store instruction not matched by ``LDSTr``.
++* ``LDSTx``: a load/store instruction not matched by ``LDSTr``. This covers load/store pairs (``ldp``/``stp``), SIMD load/stores (``ld1``, ``st1``, ...), atomics, exclusives, load/store-release, and unscaled (``ldur``/``stur``) forms. These instructions have a more limited set of addressing modes than ``LDSTr``.
+ 
+ Control flow
+ ~~~~~~~~~~~~
+@@ -197,8 +195,6 @@ require any rewrite.
+ Memory accesses
+ ~~~~~~~~~~~~~~~
+ 
+-**Note**: not yet implemented.
+-
+ Memory accesses are rewritten to use the ``[x27, wM, uxtw]`` addressing mode if
+ it is available, which is automatically safe. Otherwise, rewrites fall back to
+ using ``x28`` along with an instruction to safely load it with the target
+@@ -279,8 +275,6 @@ address.
+ Stack pointer modification
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-**Note**: not yet implemented.
+-
+ When the stack pointer is modified, we write the modified value to a temporary,
+ before moving it back into ``sp`` with a safe ``add``.
+ 
+diff --git a/llvm/lib/Target/AArch64/AArch64.td b/llvm/lib/Target/AArch64/AArch64.td
+index bdb80e7ffdd6..6032b248f04a 100644
+--- a/llvm/lib/Target/AArch64/AArch64.td
++++ b/llvm/lib/Target/AArch64/AArch64.td
+@@ -50,6 +50,13 @@ def AArch64InstrInfo : InstrInfo;
+ 
+ include "AArch64SystemOperands.td"
+ 
++//===----------------------------------------------------------------------===//
++// LFI rewriter metadata consumed by AArch64MCLFIRewriter. Must follow
++// AArch64SystemOperands.td due to use of SearchableTable.td.
++//===----------------------------------------------------------------------===//
++
++include "AArch64LFI.td"
++
+ //===----------------------------------------------------------------------===//
+ // AArch64 Processors supported.
+ //
+diff --git a/llvm/lib/Target/AArch64/AArch64Features.td b/llvm/lib/Target/AArch64/AArch64Features.td
+index 4f1a1810cffe..e63f4886a125 100644
+--- a/llvm/lib/Target/AArch64/AArch64Features.td
++++ b/llvm/lib/Target/AArch64/AArch64Features.td
+@@ -1079,6 +1079,11 @@ def FeatureHardenSlsNoComdat : SubtargetFeature<"harden-sls-nocomdat",
+   "Generate thunk code for SLS mitigation in the normal text section">;
+ 
+ 
++def FeatureNoLFILoads : SubtargetFeature<"no-lfi-loads", "NoLFILoads", "true",
++  "Disable LFI sandboxing for load instructions">;
++def FeatureNoLFIStores : SubtargetFeature<"no-lfi-stores", "NoLFIStores", "true",
++  "Disable LFI sandboxing for store instructions">;
++
+ // Only intended to be used by disassemblers.
+ def FeatureAll
+     : SubtargetFeature<"all", "IsAll", "true", "Enable all instructions">;
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 0624764cb8ab..57ea2d2f2f99 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -16,6 +16,7 @@
+ #include "AArch64PointerAuth.h"
+ #include "AArch64Subtarget.h"
+ #include "MCTargetDesc/AArch64AddressingModes.h"
++#include "MCTargetDesc/AArch64MCLFIRewriter.h"
+ #include "MCTargetDesc/AArch64MCTargetDesc.h"
+ #include "Utils/AArch64BaseInfo.h"
+ #include "llvm/ADT/ArrayRef.h"
+@@ -129,14 +130,43 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
+     if (MI.getOperand(0).getReg() != AArch64::LR)
+       return 8;
+     return 4;
++  case AArch64::SYSxt:
++    // VA-based DC/IC ops (op1=3, Cn=7, op2=1) expand to 2 instructions.
++    if (MI.getOperand(0).getImm() == 3 && MI.getOperand(1).getImm() == 7 &&
++        MI.getOperand(3).getImm() == 1)
++      return 8;
++    return std::nullopt;
+   default:
+     break;
+   }
+ 
+-  // Instructions that explicitly modify LR expand to 2 instructions.
+-  for (const MachineOperand &MO : MI.explicit_operands())
+-    if (MO.isReg() && MO.isDef() && MO.getReg() == AArch64::LR)
+-      return 8;
++  // Detect instructions that explicitly define SP or LR.
++  bool ModifiesLR = false;
++  bool ModifiesSP = false;
++  for (const MachineOperand &MO : MI.defs()) {
++    if (!MO.isReg())
++      continue;
++    if (MO.getReg() == AArch64::LR)
++      ModifiesLR = true;
++    else if (MO.getReg() == AArch64::SP)
++      ModifiesSP = true;
++  }
++
++  // Memory accesses expand to a base-register guard plus the rewritten access
++  // (8 bytes), with an extra base-register update for pre/post-index forms (12
++  // bytes total). If the access also defines LR, an LR mask is appended (+4
++  // bytes). Depending on additional optimizations that the rewriter performs,
++  // this may be an overestimate.
++  if (MI.mayLoadOrStore()) {
++    unsigned Size = isLFIPrePostMemAccess(MI.getOpcode()) ? 12 : 8;
++    if (ModifiesLR)
++      Size += 4;
++    return Size;
++  }
++
++  // Non memory operations that modify LR or SP expand to 2 instructions.
++  if (ModifiesSP || ModifiesLR)
++    return 8;
+ 
+   // Default case: instructions that don't cause expansion.
+   // - TP accesses in LFI are a single load/store, so no expansion.
+diff --git a/llvm/lib/Target/AArch64/AArch64LFI.td b/llvm/lib/Target/AArch64/AArch64LFI.td
+new file mode 100644
+index 000000000000..d0b2260cf43e
+--- /dev/null
++++ b/llvm/lib/Target/AArch64/AArch64LFI.td
+@@ -0,0 +1,469 @@
++//===-- AArch64LFI.td - LFI rewriter metadata --------------*- tablegen -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// Per-opcode metadata consumed by AArch64MCLFIRewriter. The rewriter queries
++// four generated lookup tables:
++//
++// * lookupLFIVariantByOpcode: scalar load/store addressing-mode info
++//   (ui/roW/roX/pre/post + log2 element size + cross-reference to the RoW
++//   variant).
++//
++// * lookupPairVariantByOpcode: LDP/STP pre/post-index info (base opcode +
++//   scale + pre vs. post).
++//
++// * lookupSIMDPostByOpcode: SIMD post-index info (base opcode + natural byte
++//   offset).
++//
++// * lookupMemInfoByOpcode: generic operand-layout info used by the base
++//   load/store rewriter (base/offset operand indices, IsPrePost, IsLiteral).
++//
++//===----------------------------------------------------------------------===//
++
++// LFI addressing-mode enumeration (matches the rewriter's logical view).
++// Values are exposed to C++ as plain integers.
++class LFIAddrMode<int v> { int Value = v; }
++def LFI_AM_Ui   : LFIAddrMode<0>;
++def LFI_AM_RoW  : LFIAddrMode<1>;
++def LFI_AM_RoX  : LFIAddrMode<2>;
++def LFI_AM_Pre  : LFIAddrMode<3>;
++def LFI_AM_Post : LFIAddrMode<4>;
++
++//===----------------------------------------------------------------------===//
++// LFIVariant - scalar load/store variants
++//
++// One record per (family, addressing mode) combination. RoWInst is the
++// matching RoW variant of the same family.
++//===----------------------------------------------------------------------===//
++
++class LFIVariant<Instruction inst, bits<3> addrMode, bits<3> log2Size,
++                 Instruction roWInst> {
++  Instruction Inst     = inst;
++  bits<3>     AddrMode = addrMode;
++  bits<3>     Log2Size = log2Size;
++  Instruction RoWInst  = roWInst;
++}
++
++def LFIVariantTable : GenericTable {
++  let FilterClass    = "LFIVariant";
++  let CppTypeName    = "LFIVariantEntry";
++  let Fields         = ["Inst", "AddrMode", "Log2Size", "RoWInst"];
++  let PrimaryKey     = ["Inst"];
++  let PrimaryKeyName = "lookupLFIVariantByOpcode";
++}
++
++//===----------------------------------------------------------------------===//
++// PairVariant - LDP/STP pre/post-index entries
++//===----------------------------------------------------------------------===//
++
++class PairVariant<Instruction inst, bit isPre, bits<5> scale,
++                  Instruction baseInst> {
++  Instruction Inst     = inst;
++  bit         IsPre    = isPre;
++  bits<5>     Scale    = scale;
++  Instruction BaseInst = baseInst;
++}
++
++def PairVariantTable : GenericTable {
++  let FilterClass    = "PairVariant";
++  let CppTypeName    = "PairVariantEntry";
++  let Fields         = ["Inst", "IsPre", "Scale", "BaseInst"];
++  let PrimaryKey     = ["Inst"];
++  let PrimaryKeyName = "lookupPairVariantByOpcode";
++}
++
++//===----------------------------------------------------------------------===//
++// SIMDPost - SIMD post-index entries (multi/lane-load/lane-store).
++//===----------------------------------------------------------------------===//
++
++class SIMDPost<Instruction inst, bits<7> naturalOffset,
++               Instruction baseInst> {
++  Instruction Inst          = inst;
++  bits<7>     NaturalOffset = naturalOffset;
++  Instruction BaseInst      = baseInst;
++}
++
++def SIMDPostTable : GenericTable {
++  let FilterClass    = "SIMDPost";
++  let CppTypeName    = "SIMDPostEntry";
++  let Fields         = ["Inst", "NaturalOffset", "BaseInst"];
++  let PrimaryKey     = ["Inst"];
++  let PrimaryKeyName = "lookupSIMDPostByOpcode";
++}
++
++//===----------------------------------------------------------------------===//
++// MemInfo - per-opcode operand layout for the base load/store rewriter.
++//
++// HasOffset = 0 means OffsetIdx is unused.
++//===----------------------------------------------------------------------===//
++
++class MemInfo<Instruction inst, bits<4> baseIdx, bits<4> offsetIdx,
++              bit hasOffset, bit isPrePost, bit isLiteral> {
++  Instruction Inst       = inst;
++  bits<4>     BaseIdx    = baseIdx;
++  bits<4>     OffsetIdx  = offsetIdx;
++  bit         HasOffset  = hasOffset;
++  bit         IsPrePost  = isPrePost;
++  bit         IsLiteral  = isLiteral;
++}
++
++def MemInfoTable : GenericTable {
++  let FilterClass    = "MemInfo";
++  let CppTypeName    = "MemInfoEntry";
++  let Fields         = ["Inst", "BaseIdx", "OffsetIdx", "HasOffset",
++                        "IsPrePost", "IsLiteral"];
++  let PrimaryKey     = ["Inst"];
++  let PrimaryKeyName = "lookupMemInfoByOpcode";
++}
++
++// Semantic helper subclasses for the four addressing-mode shapes the rewriter
++// encounters. Each forwards to MemInfo with the appropriate HasOffset /
++// IsPrePost / IsLiteral flags, so the call sites only need to specify operand
++// indices.
++class MemLiteral<Instruction inst, int baseIdx>
++  : MemInfo<inst, baseIdx, 0, 0, 0, 1>;
++class MemNoOffset<Instruction inst, int baseIdx>
++  : MemInfo<inst, baseIdx, 0, 0, 0, 0>;
++class MemIndexed<Instruction inst, int baseIdx, int offsetIdx>
++  : MemInfo<inst, baseIdx, offsetIdx, 1, 0, 0>;
++class MemPrePost<Instruction inst, int baseIdx, int offsetIdx>
++  : MemInfo<inst, baseIdx, offsetIdx, 1, 1, 0>;
++
++//===----------------------------------------------------------------------===//
++// Scalar mem families with ui, roW, roX, pre, post variants. Each entry pairs
++// a base opcode name with its log2 element size (== scaled shift used by the
++// roW form). Emits both LFIVariant entries and MemInfo entries.
++//===----------------------------------------------------------------------===//
++
++class ScalarMemFam<string b, int sz> {
++  string Base = b;
++  int Log2 = sz;
++}
++
++defvar AArch64ScalarMemFamilies = [
++  ScalarMemFam<"LDRBB",  0>, ScalarMemFam<"LDRB",   0>,
++  ScalarMemFam<"LDRSBW", 0>, ScalarMemFam<"LDRSBX", 0>,
++  ScalarMemFam<"STRBB",  0>, ScalarMemFam<"STRB",   0>,
++  ScalarMemFam<"LDRHH",  1>, ScalarMemFam<"LDRH",   1>,
++  ScalarMemFam<"LDRSHW", 1>, ScalarMemFam<"LDRSHX", 1>,
++  ScalarMemFam<"STRHH",  1>, ScalarMemFam<"STRH",   1>,
++  ScalarMemFam<"LDRSW",  2>, ScalarMemFam<"LDRS",   2>,
++  ScalarMemFam<"LDRW",   2>, ScalarMemFam<"STRS",   2>,
++  ScalarMemFam<"STRW",   2>,
++  ScalarMemFam<"LDRD",   3>, ScalarMemFam<"LDRX",   3>,
++  ScalarMemFam<"STRD",   3>, ScalarMemFam<"STRX",   3>,
++  ScalarMemFam<"LDRQ",   4>, ScalarMemFam<"STRQ",   4>,
++];
++
++foreach f = AArch64ScalarMemFamilies in {
++  defvar Ui   = !cast<Instruction>(f.Base # "ui");
++  defvar RoW  = !cast<Instruction>(f.Base # "roW");
++  defvar RoX  = !cast<Instruction>(f.Base # "roX");
++  defvar Pre  = !cast<Instruction>(f.Base # "pre");
++  defvar Post = !cast<Instruction>(f.Base # "post");
++
++  def : LFIVariant<Ui,   LFI_AM_Ui.Value,   f.Log2, RoW>;
++  def : LFIVariant<RoW,  LFI_AM_RoW.Value,  f.Log2, RoW>;
++  def : LFIVariant<RoX,  LFI_AM_RoX.Value,  f.Log2, RoW>;
++  def : LFIVariant<Pre,  LFI_AM_Pre.Value,  f.Log2, RoW>;
++  def : LFIVariant<Post, LFI_AM_Post.Value, f.Log2, RoW>;
++
++  // Indexed / register-offset / register-offset-W / register-offset-X all
++  // share the same operand layout: Rt, [Rn, ...].
++  def : MemIndexed<Ui,  1, 2>;
++  def : MemIndexed<RoW, 1, 2>;
++  def : MemIndexed<RoX, 1, 2>;
++  // Pre/post-index writeback: wback, Rt, [Rn], #imm.
++  def : MemPrePost<Pre,  2, 3>;
++  def : MemPrePost<Post, 2, 3>;
++}
++
++// PRFM has ui, roW, roX but no pre/post forms. Log2 = 3 (doubleword scale).
++def : LFIVariant<PRFMui,  LFI_AM_Ui.Value,  3, PRFMroW>;
++def : LFIVariant<PRFMroW, LFI_AM_RoW.Value, 3, PRFMroW>;
++def : LFIVariant<PRFMroX, LFI_AM_RoX.Value, 3, PRFMroW>;
++
++def : MemIndexed<PRFMui,  1, 2>;
++def : MemIndexed<PRFMroW, 1, 2>;
++def : MemIndexed<PRFMroX, 1, 2>;
++
++//===----------------------------------------------------------------------===//
++// Unscaled-immediate scalar loads/stores (LDUR/STUR/PRFUM). Same operand
++// layout as the indexed forms - BaseIdx=1, OffsetIdx=2.
++//===----------------------------------------------------------------------===//
++
++foreach inst = [LDURBBi, LDURBi, LDURDi, LDURHHi, LDURHi, LDURQi,
++                LDURSBWi, LDURSBXi, LDURSHWi, LDURSHXi, LDURSWi, LDURSi,
++                LDURWi, LDURXi,
++                STURBBi, STURBi, STURDi, STURHHi, STURHi, STURQi,
++                STURSi, STURWi, STURXi,
++                PRFUMi] in
++  def : MemIndexed<inst, 1, 2>;
++
++//===----------------------------------------------------------------------===//
++// LDP/STP pair families. Pre/post variants are PairVariant entries; all
++// three variants (`i`, `pre`, `post`) get MemInfo entries.
++//===----------------------------------------------------------------------===//
++
++class PairFam<string b, int s> {
++  string Base = b;
++  int Scale = s;
++}
++
++defvar AArch64PairFamilies = [
++  PairFam<"LDPD",  8>, PairFam<"LDPQ", 16>, PairFam<"LDPSW", 4>,
++  PairFam<"LDPS",  4>, PairFam<"LDPW",  4>, PairFam<"LDPX",  8>,
++  PairFam<"STPD",  8>, PairFam<"STPQ", 16>, PairFam<"STPS",  4>,
++  PairFam<"STPW",  4>, PairFam<"STPX",  8>,
++];
++
++foreach f = AArch64PairFamilies in {
++  defvar Base = !cast<Instruction>(f.Base # "i");
++  defvar Pre  = !cast<Instruction>(f.Base # "pre");
++  defvar Post = !cast<Instruction>(f.Base # "post");
++
++  def : PairVariant<Pre,  1, f.Scale, Base>;
++  def : PairVariant<Post, 0, f.Scale, Base>;
++
++  // Indexed form: Rt, Rt2, [Rn, #imm].
++  def : MemIndexed<Base, 2, 3>;
++  // Pre/post-index: wback, Rt, Rt2, [Rn, #imm]! / [Rn], #imm.
++  def : MemPrePost<Pre,  3, 4>;
++  def : MemPrePost<Post, 3, 4>;
++}
++
++// Non-temporal pair indexed forms (LDNP/STNP). Same operand layout as `i`.
++foreach inst = [LDNPDi, LDNPQi, LDNPSi, LDNPWi, LDNPXi,
++                STNPDi, STNPQi, STNPSi, STNPWi, STNPXi] in
++  def : MemIndexed<inst, 2, 3>;
++
++//===----------------------------------------------------------------------===//
++// SIMD families. Each base instruction NAME has a post-index form NAME_POST.
++// Three subclasses, distinguished by operand layout:
++//
++//   Multi/Replicate : Vt, [Rn]                       - base BaseIdx=1
++//                     wback, Vt, [Rn], Xm            - post BaseIdx=2,Off=3
++//   Lane store      : Vt, idx, [Rn]                  - base BaseIdx=2
++//                     wback, Vt, idx, [Rn], Xm       - post BaseIdx=3,Off=4
++//   Lane load       : Vt(out), Vt(tied), idx, [Rn]   - base BaseIdx=3
++//                     wback, Vt(out), Vt(tied), idx, [Rn], Xm
++//                                                    - post BaseIdx=4,Off=5
++//===----------------------------------------------------------------------===//
++
++class SIMDPostFam<string b, int off> {
++  string Base = b;
++  int Offset = off;
++}
++
++// SIMD lane stores.
++defvar AArch64SIMDLaneStoreFams = [
++  SIMDPostFam<"ST1i8",  1>, SIMDPostFam<"ST1i16",  2>,
++  SIMDPostFam<"ST1i32", 4>, SIMDPostFam<"ST1i64",  8>,
++  SIMDPostFam<"ST2i8",  2>, SIMDPostFam<"ST2i16",  4>,
++  SIMDPostFam<"ST2i32", 8>, SIMDPostFam<"ST2i64", 16>,
++  SIMDPostFam<"ST3i8",  3>, SIMDPostFam<"ST3i16",  6>,
++  SIMDPostFam<"ST3i32",12>, SIMDPostFam<"ST3i64", 24>,
++  SIMDPostFam<"ST4i8",  4>, SIMDPostFam<"ST4i16",  8>,
++  SIMDPostFam<"ST4i32",16>, SIMDPostFam<"ST4i64", 32>,
++];
++
++// SIMD lane loads.
++defvar AArch64SIMDLaneLoadFams = [
++  SIMDPostFam<"LD1i8",  1>, SIMDPostFam<"LD1i16",  2>,
++  SIMDPostFam<"LD1i32", 4>, SIMDPostFam<"LD1i64",  8>,
++  SIMDPostFam<"LD2i8",  2>, SIMDPostFam<"LD2i16",  4>,
++  SIMDPostFam<"LD2i32", 8>, SIMDPostFam<"LD2i64", 16>,
++  SIMDPostFam<"LD3i8",  3>, SIMDPostFam<"LD3i16",  6>,
++  SIMDPostFam<"LD3i32",12>, SIMDPostFam<"LD3i64", 24>,
++  SIMDPostFam<"LD4i8",  4>, SIMDPostFam<"LD4i16",  8>,
++  SIMDPostFam<"LD4i32",16>, SIMDPostFam<"LD4i64", 32>,
++];
++
++// SIMD multi/replicate.
++defvar AArch64SIMDMultiFams = [
++  // Replicate loads.
++  SIMDPostFam<"LD1Rv8b",  1>, SIMDPostFam<"LD1Rv16b",  1>,
++  SIMDPostFam<"LD1Rv4h",  2>, SIMDPostFam<"LD1Rv8h",   2>,
++  SIMDPostFam<"LD1Rv2s",  4>, SIMDPostFam<"LD1Rv4s",   4>,
++  SIMDPostFam<"LD1Rv1d",  8>, SIMDPostFam<"LD1Rv2d",   8>,
++  SIMDPostFam<"LD2Rv8b",  2>, SIMDPostFam<"LD2Rv16b",  2>,
++  SIMDPostFam<"LD2Rv4h",  4>, SIMDPostFam<"LD2Rv8h",   4>,
++  SIMDPostFam<"LD2Rv2s",  8>, SIMDPostFam<"LD2Rv4s",   8>,
++  SIMDPostFam<"LD2Rv1d", 16>, SIMDPostFam<"LD2Rv2d",  16>,
++  SIMDPostFam<"LD3Rv8b",  3>, SIMDPostFam<"LD3Rv16b",  3>,
++  SIMDPostFam<"LD3Rv4h",  6>, SIMDPostFam<"LD3Rv8h",   6>,
++  SIMDPostFam<"LD3Rv2s", 12>, SIMDPostFam<"LD3Rv4s",  12>,
++  SIMDPostFam<"LD3Rv1d", 24>, SIMDPostFam<"LD3Rv2d",  24>,
++  SIMDPostFam<"LD4Rv8b",  4>, SIMDPostFam<"LD4Rv16b",  4>,
++  SIMDPostFam<"LD4Rv4h",  8>, SIMDPostFam<"LD4Rv8h",   8>,
++  SIMDPostFam<"LD4Rv2s", 16>, SIMDPostFam<"LD4Rv4s",  16>,
++  SIMDPostFam<"LD4Rv1d", 32>, SIMDPostFam<"LD4Rv2d",  32>,
++
++  // LD1/ST1 One register.
++  SIMDPostFam<"LD1Onev8b",  8>, SIMDPostFam<"LD1Onev16b", 16>,
++  SIMDPostFam<"LD1Onev4h",  8>, SIMDPostFam<"LD1Onev8h",  16>,
++  SIMDPostFam<"LD1Onev2s",  8>, SIMDPostFam<"LD1Onev4s",  16>,
++  SIMDPostFam<"LD1Onev1d",  8>, SIMDPostFam<"LD1Onev2d",  16>,
++  SIMDPostFam<"ST1Onev8b",  8>, SIMDPostFam<"ST1Onev16b", 16>,
++  SIMDPostFam<"ST1Onev4h",  8>, SIMDPostFam<"ST1Onev8h",  16>,
++  SIMDPostFam<"ST1Onev2s",  8>, SIMDPostFam<"ST1Onev4s",  16>,
++  SIMDPostFam<"ST1Onev1d",  8>, SIMDPostFam<"ST1Onev2d",  16>,
++
++  // LD1/ST1 Two registers.
++  SIMDPostFam<"LD1Twov8b", 16>, SIMDPostFam<"LD1Twov16b", 32>,
++  SIMDPostFam<"LD1Twov4h", 16>, SIMDPostFam<"LD1Twov8h",  32>,
++  SIMDPostFam<"LD1Twov2s", 16>, SIMDPostFam<"LD1Twov4s",  32>,
++  SIMDPostFam<"LD1Twov1d", 16>, SIMDPostFam<"LD1Twov2d",  32>,
++  SIMDPostFam<"ST1Twov8b", 16>, SIMDPostFam<"ST1Twov16b", 32>,
++  SIMDPostFam<"ST1Twov4h", 16>, SIMDPostFam<"ST1Twov8h",  32>,
++  SIMDPostFam<"ST1Twov2s", 16>, SIMDPostFam<"ST1Twov4s",  32>,
++  SIMDPostFam<"ST1Twov1d", 16>, SIMDPostFam<"ST1Twov2d",  32>,
++
++  // LD1/ST1 Three registers.
++  SIMDPostFam<"LD1Threev8b", 24>, SIMDPostFam<"LD1Threev16b", 48>,
++  SIMDPostFam<"LD1Threev4h", 24>, SIMDPostFam<"LD1Threev8h",  48>,
++  SIMDPostFam<"LD1Threev2s", 24>, SIMDPostFam<"LD1Threev4s",  48>,
++  SIMDPostFam<"LD1Threev1d", 24>, SIMDPostFam<"LD1Threev2d",  48>,
++  SIMDPostFam<"ST1Threev8b", 24>, SIMDPostFam<"ST1Threev16b", 48>,
++  SIMDPostFam<"ST1Threev4h", 24>, SIMDPostFam<"ST1Threev8h",  48>,
++  SIMDPostFam<"ST1Threev2s", 24>, SIMDPostFam<"ST1Threev4s",  48>,
++  SIMDPostFam<"ST1Threev1d", 24>, SIMDPostFam<"ST1Threev2d",  48>,
++
++  // LD1/ST1 Four registers.
++  SIMDPostFam<"LD1Fourv8b", 32>, SIMDPostFam<"LD1Fourv16b", 64>,
++  SIMDPostFam<"LD1Fourv4h", 32>, SIMDPostFam<"LD1Fourv8h",  64>,
++  SIMDPostFam<"LD1Fourv2s", 32>, SIMDPostFam<"LD1Fourv4s",  64>,
++  SIMDPostFam<"LD1Fourv1d", 32>, SIMDPostFam<"LD1Fourv2d",  64>,
++  SIMDPostFam<"ST1Fourv8b", 32>, SIMDPostFam<"ST1Fourv16b", 64>,
++  SIMDPostFam<"ST1Fourv4h", 32>, SIMDPostFam<"ST1Fourv8h",  64>,
++  SIMDPostFam<"ST1Fourv2s", 32>, SIMDPostFam<"ST1Fourv4s",  64>,
++  SIMDPostFam<"ST1Fourv1d", 32>, SIMDPostFam<"ST1Fourv2d",  64>,
++
++  // LD2/ST2 Two registers.
++  SIMDPostFam<"LD2Twov8b",  16>, SIMDPostFam<"LD2Twov16b", 32>,
++  SIMDPostFam<"LD2Twov4h",  16>, SIMDPostFam<"LD2Twov8h",  32>,
++  SIMDPostFam<"LD2Twov2s",  16>, SIMDPostFam<"LD2Twov4s",  32>,
++  SIMDPostFam<"LD2Twov2d",  32>,
++  SIMDPostFam<"ST2Twov8b",  16>, SIMDPostFam<"ST2Twov16b", 32>,
++  SIMDPostFam<"ST2Twov4h",  16>, SIMDPostFam<"ST2Twov8h",  32>,
++  SIMDPostFam<"ST2Twov2s",  16>, SIMDPostFam<"ST2Twov4s",  32>,
++  SIMDPostFam<"ST2Twov2d",  32>,
++
++  // LD3/ST3 Three registers.
++  SIMDPostFam<"LD3Threev8b",  24>, SIMDPostFam<"LD3Threev16b", 48>,
++  SIMDPostFam<"LD3Threev4h",  24>, SIMDPostFam<"LD3Threev8h",  48>,
++  SIMDPostFam<"LD3Threev2s",  24>, SIMDPostFam<"LD3Threev4s",  48>,
++  SIMDPostFam<"LD3Threev2d",  48>,
++  SIMDPostFam<"ST3Threev8b",  24>, SIMDPostFam<"ST3Threev16b", 48>,
++  SIMDPostFam<"ST3Threev4h",  24>, SIMDPostFam<"ST3Threev8h",  48>,
++  SIMDPostFam<"ST3Threev2s",  24>, SIMDPostFam<"ST3Threev4s",  48>,
++  SIMDPostFam<"ST3Threev2d",  48>,
++
++  // LD4/ST4 Four registers.
++  SIMDPostFam<"LD4Fourv8b",  32>, SIMDPostFam<"LD4Fourv16b", 64>,
++  SIMDPostFam<"LD4Fourv4h",  32>, SIMDPostFam<"LD4Fourv8h",  64>,
++  SIMDPostFam<"LD4Fourv2s",  32>, SIMDPostFam<"LD4Fourv4s",  64>,
++  SIMDPostFam<"LD4Fourv2d",  64>,
++  SIMDPostFam<"ST4Fourv8b",  32>, SIMDPostFam<"ST4Fourv16b", 64>,
++  SIMDPostFam<"ST4Fourv4h",  32>, SIMDPostFam<"ST4Fourv8h",  64>,
++  SIMDPostFam<"ST4Fourv2s",  32>, SIMDPostFam<"ST4Fourv4s",  64>,
++  SIMDPostFam<"ST4Fourv2d",  64>,
++];
++
++foreach f = AArch64SIMDMultiFams in {
++  defvar Base = !cast<Instruction>(f.Base);
++  defvar Post = !cast<Instruction>(f.Base # "_POST");
++  def : SIMDPost<Post, f.Offset, Base>;
++  def : MemNoOffset<Base, 1>;
++  def : MemPrePost<Post, 2, 3>;
++}
++
++foreach f = AArch64SIMDLaneStoreFams in {
++  defvar Base = !cast<Instruction>(f.Base);
++  defvar Post = !cast<Instruction>(f.Base # "_POST");
++  def : SIMDPost<Post, f.Offset, Base>;
++  def : MemNoOffset<Base, 2>;
++  def : MemPrePost<Post, 3, 4>;
++}
++
++foreach f = AArch64SIMDLaneLoadFams in {
++  defvar Base = !cast<Instruction>(f.Base);
++  defvar Post = !cast<Instruction>(f.Base # "_POST");
++  def : SIMDPost<Post, f.Offset, Base>;
++  def : MemNoOffset<Base, 3>;
++  def : MemPrePost<Post, 4, 5>;
++}
++
++//===----------------------------------------------------------------------===//
++// PC-relative literal loads: Rt, label. BaseIdx=0, no offset operand.
++//===----------------------------------------------------------------------===//
++
++foreach inst = [LDRWl, LDRXl, LDRSWl, LDRSl, LDRDl, LDRQl, PRFMl] in
++  def : MemLiteral<inst, 0>;
++
++//===----------------------------------------------------------------------===//
++// Exclusive / acquire / RCPC loads and store-release: Rt, [Rn].
++//===----------------------------------------------------------------------===//
++
++foreach inst = [LDXRB, LDXRH, LDXRW, LDXRX,
++                LDAXRB, LDAXRH, LDAXRW, LDAXRX,
++                LDARB, LDARH, LDARW, LDARX,
++                LDLARB, LDLARH, LDLARW, LDLARX,
++                // RCPC
++                LDAPRB, LDAPRH, LDAPRW, LDAPRX,
++                // Store-release
++                STLRB, STLRH, STLRW, STLRX,
++                STLLRB, STLLRH, STLLRW, STLLRX] in
++  def : MemNoOffset<inst, 1>;
++
++//===----------------------------------------------------------------------===//
++// Exclusive stores: Ws, Rt, [Rn]. Exclusive pair loads: Rt, Rt2, [Rn].
++//===----------------------------------------------------------------------===//
++
++foreach inst = [STXRB, STXRH, STXRW, STXRX,
++                STLXRB, STLXRH, STLXRW, STLXRX,
++                LDXPW, LDXPX, LDAXPW, LDAXPX] in
++  def : MemNoOffset<inst, 2>;
++
++// Exclusive store pairs: Ws, Rt, Rt2, [Rn].
++foreach inst = [STXPW, STXPX, STLXPW, STLXPX] in
++  def : MemNoOffset<inst, 3>;
++
++//===----------------------------------------------------------------------===//
++// CAS variants: Rs(out), Rs(in, tied), Rt, [Rn]. BaseIdx=3.
++//===----------------------------------------------------------------------===//
++
++defvar AArch64CASBases = ["CAS", "CASA", "CASL", "CASAL"];
++defvar AArch64CASSuffixes = ["B", "H", "W", "X"];
++
++foreach base = AArch64CASBases in
++  foreach suff = AArch64CASSuffixes in
++    def : MemNoOffset<!cast<Instruction>(base # suff), 3>;
++
++// CASP variants: Ws_Ws2(out), Ws_Ws2(in, tied), Wt_Wt2, [Rn]. BaseIdx=3.
++foreach inst = [CASPW, CASPX, CASPAW, CASPAX,
++                CASPLW, CASPLX, CASPALW, CASPALX] in
++  def : MemNoOffset<inst, 3>;
++
++//===----------------------------------------------------------------------===//
++// LSE atomics: Rs, Rt, [Rn].
++//===----------------------------------------------------------------------===//
++
++defvar AArch64LSEBases = [
++  "LDADD", "LDCLR", "LDEOR", "LDSET",
++  "LDSMAX", "LDSMIN", "LDUMAX", "LDUMIN", "SWP",
++];
++defvar AArch64LSESuffixes = [
++  "B",   "H",   "W",   "X",
++  "AB",  "AH",  "AW",  "AX",
++  "LB",  "LH",  "LW",  "LX",
++  "ALB", "ALH", "ALW", "ALX",
++];
++
++foreach base = AArch64LSEBases in
++  foreach suff = AArch64LSESuffixes in
++    def : MemNoOffset<!cast<Instruction>(base # suff), 2>;
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 6b683be0f535..03a5e83db008 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -18,11 +18,62 @@
+ 
+ #include "llvm/ADT/Twine.h"
+ #include "llvm/MC/MCInst.h"
++#include "llvm/MC/MCInstrDesc.h"
++#include "llvm/MC/MCInstrInfo.h"
+ #include "llvm/MC/MCStreamer.h"
+ #include "llvm/MC/MCSubtargetInfo.h"
+ 
+ using namespace llvm;
+ 
++namespace llvm::AArch64 {
++struct LFIVariantEntry {
++  unsigned Inst;
++  uint8_t AddrMode;
++  uint8_t Log2Size;
++  unsigned RoWInst;
++};
++struct PairVariantEntry {
++  unsigned Inst;
++  bool IsPre;
++  uint8_t Scale;
++  unsigned BaseInst;
++};
++struct SIMDPostEntry {
++  unsigned Inst;
++  uint8_t NaturalOffset;
++  unsigned BaseInst;
++};
++struct MemInfoEntry {
++  unsigned Inst;
++  uint8_t BaseIdx;
++  uint8_t OffsetIdx;
++  bool HasOffset;
++  bool IsPrePost;
++  bool IsLiteral;
++};
++
++// LFI addressing-mode codes (must match AArch64LFI.td's LFI_AM_* defs).
++enum LFIAddrMode : uint8_t {
++  LFI_AM_Ui = 0,
++  LFI_AM_RoW = 1,
++  LFI_AM_RoX = 2,
++  LFI_AM_Pre = 3,
++  LFI_AM_Post = 4,
++};
++
++#define GET_LFIVariantTable_DECL
++#define GET_PairVariantTable_DECL
++#define GET_SIMDPostTable_DECL
++#define GET_MemInfoTable_DECL
++#define GET_LFIVariantTable_IMPL
++#define GET_PairVariantTable_IMPL
++#define GET_SIMDPostTable_IMPL
++#define GET_MemInfoTable_IMPL
++// The LFI tables defined in AArch64LFI.td are emitted into this file alongside
++// the system operand tables (single -gen-searchable-tables output).
++#include "AArch64GenSystemOperands.inc"
++} // namespace llvm::AArch64
++
+ // LFI reserved registers.
+ static constexpr MCRegister LFIBaseReg = AArch64::X27;
+ static constexpr MCRegister LFIAddrReg = AArch64::X28;
+@@ -65,6 +116,127 @@ static bool isPrivilegedTPAccess(const MCInst &Inst) {
+   return false;
+ }
+ 
++// Classification functions are limited to Armv8.1-A. Instructions outside of
++// this subset are not guaranteed to be rewritten and as a result may fail LFI
++// verification after compilation.
++
++// Instructions that have mayLoad/mayStore set in TableGen but don't actually
++// perform memory accesses.
++static bool isFakeMemAccess(const MCInst &Inst) {
++  switch (Inst.getOpcode()) {
++  case AArch64::CLREX:
++  case AArch64::DMB:
++  case AArch64::DSB:
++  case AArch64::ISB:
++  case AArch64::HINT:
++    // The range of sub-architectures supported by LFI do not include any load
++    // or store instructions in the HINT space.
++    return true;
++  default:
++    return false;
++  }
++}
++
++static bool mayPrefetch(const MCInst &Inst) {
++  switch (Inst.getOpcode()) {
++  case AArch64::PRFMl:
++  case AArch64::PRFMroW:
++  case AArch64::PRFMroX:
++  case AArch64::PRFMui:
++  case AArch64::PRFUMi:
++    return true;
++  default:
++    return false;
++  }
++}
++
++// User-mode DC/IC instructions that take a virtual address operand. Encoded as
++// SYSxt with op1=3, Cn=7, op2=1 where the Cm field selects the operation.
++static bool isVASysOp(const MCInst &Inst) {
++  if (Inst.getOpcode() != AArch64::SYSxt)
++    return false;
++  if (Inst.getOperand(0).getImm() != 3 || Inst.getOperand(1).getImm() != 7 ||
++      Inst.getOperand(3).getImm() != 1)
++    return false;
++  switch (Inst.getOperand(2).getImm()) {
++  case 4:  // DC ZVA
++  case 5:  // IC IVAU
++  case 10: // DC CVAC
++  case 11: // DC CVAU
++  case 12: // DC CVAP
++  case 13: // DC CVADP
++  case 14: // DC CIVAC
++    return true;
++  default:
++    return false;
++  }
++}
++
++static MCInst replaceRegAt(const MCInst &Inst, unsigned Idx,
++                           MCRegister NewReg) {
++  MCInst New = Inst;
++  assert(New.getOperand(Idx).isReg());
++  New.getOperand(Idx).setReg(NewReg);
++  return New;
++}
++
++// AArch64 load/store opcode suffixes used throughout this file:
++//   Ui:  Unsigned immediate offset, scaled by access size: [Xn, #imm].
++//   RoW: Register offset with 32-bit W register: [Xn, Wm, uxtw #shift].
++//   RoX: Register offset with 64-bit X register: [Xn, Xm, lsl #shift].
++
++// Scalar load/store variant lookup. If Op is a scalar mem instruction with
++// addressing mode ExpectedMode, returns the RoW variant of the same family.
++// Returns INSTRUCTION_LIST_END otherwise.
++static unsigned convertVariantToRoW(unsigned Op, unsigned ExpectedMode) {
++  const AArch64::LFIVariantEntry *E = AArch64::lookupLFIVariantByOpcode(Op);
++  if (!E || E->AddrMode != ExpectedMode)
++    return AArch64::INSTRUCTION_LIST_END;
++  return E->RoWInst;
++}
++
++static unsigned convertRoXToRoW(unsigned Op, unsigned &Shift) {
++  Shift = 0;
++  const AArch64::LFIVariantEntry *E = AArch64::lookupLFIVariantByOpcode(Op);
++  if (!E || E->AddrMode != AArch64::LFI_AM_RoX)
++    return AArch64::INSTRUCTION_LIST_END;
++  Shift = E->Log2Size;
++  return E->RoWInst;
++}
++
++static bool getRoWShift(unsigned Op, unsigned &Shift) {
++  Shift = 0;
++  const AArch64::LFIVariantEntry *E = AArch64::lookupLFIVariantByOpcode(Op);
++  if (!E || E->AddrMode != AArch64::LFI_AM_RoW)
++    return false;
++  Shift = E->Log2Size;
++  return true;
++}
++
++// Pre/post-index conversion to base form. Both LDP/STP pair pre/post forms and
++// SIMD post-index forms come from generated lookup tables. The pair table sets
++// IsPre to distinguish pre-index from post-index. The SIMD table is
++// post-index-only so IsNoOffset is set to indicate the demoted base form takes
++// no immediate offset.
++static unsigned convertPrePostToBase(unsigned Op, bool &IsPre,
++                                     bool &IsNoOffset) {
++  IsPre = false;
++  IsNoOffset = false;
++  if (const auto *E = AArch64::lookupPairVariantByOpcode(Op)) {
++    IsPre = E->IsPre;
++    return E->BaseInst;
++  }
++  if (const auto *E = AArch64::lookupSIMDPostByOpcode(Op)) {
++    IsNoOffset = true;
++    return E->BaseInst;
++  }
++  return AArch64::INSTRUCTION_LIST_END;
++}
++
++bool AArch64MCLFIRewriter::mayModifySP(const MCInst &Inst) const {
++  return mayModifyRegister(Inst, AArch64::SP);
++}
++
+ MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+   for (MCRegister Reg : {LFIAddrReg, LFIBaseReg, LFICtxReg}) {
+     if (mayModifyRegister(Inst, Reg))
+@@ -125,6 +297,77 @@ void AArch64MCLFIRewriter::emitMov(MCRegister Dest, MCRegister Src,
+   emitInst(Inst, Out, STI);
+ }
+ 
++void AArch64MCLFIRewriter::emitAddImm(MCRegister Dest, MCRegister Src,
++                                      int64_t Imm, MCStreamer &Out,
++                                      const MCSubtargetInfo &STI) {
++  assert(std::abs(Imm) <= 4095);
++  MCInst Inst;
++  if (Imm >= 0) {
++    // add Dest, Src, Imm
++    Inst.setOpcode(AArch64::ADDXri);
++    Inst.addOperand(MCOperand::createReg(Dest));
++    Inst.addOperand(MCOperand::createReg(Src));
++    Inst.addOperand(MCOperand::createImm(Imm));
++    Inst.addOperand(MCOperand::createImm(0)); // shift
++  } else {
++    // sub Dest, Src, -Imm
++    Inst.setOpcode(AArch64::SUBXri);
++    Inst.addOperand(MCOperand::createReg(Dest));
++    Inst.addOperand(MCOperand::createReg(Src));
++    Inst.addOperand(MCOperand::createImm(-Imm));
++    Inst.addOperand(MCOperand::createImm(0)); // shift
++  }
++  emitInst(Inst, Out, STI);
++}
++
++void AArch64MCLFIRewriter::emitAddReg(MCRegister Dest, MCRegister Src1,
++                                      MCRegister Src2, unsigned Shift,
++                                      MCStreamer &Out,
++                                      const MCSubtargetInfo &STI) {
++  // add Dest, Src1, Src2, lsl #Shift
++  MCInst Inst;
++  Inst.setOpcode(AArch64::ADDXrs);
++  Inst.addOperand(MCOperand::createReg(Dest));
++  Inst.addOperand(MCOperand::createReg(Src1));
++  Inst.addOperand(MCOperand::createReg(Src2));
++  Inst.addOperand(
++      MCOperand::createImm(AArch64_AM::getShifterImm(AArch64_AM::LSL, Shift)));
++  emitInst(Inst, Out, STI);
++}
++
++void AArch64MCLFIRewriter::emitAddRegExtend(MCRegister Dest, MCRegister Src1,
++                                            MCRegister Src2,
++                                            AArch64_AM::ShiftExtendType ExtType,
++                                            unsigned Shift, MCStreamer &Out,
++                                            const MCSubtargetInfo &STI) {
++  // add Dest, Src1, Src2, ExtType #Shift
++  MCInst Inst;
++  if (ExtType == AArch64_AM::SXTX || ExtType == AArch64_AM::UXTX)
++    Inst.setOpcode(AArch64::ADDXrx64);
++  else
++    Inst.setOpcode(AArch64::ADDXrx);
++  Inst.addOperand(MCOperand::createReg(Dest));
++  Inst.addOperand(MCOperand::createReg(Src1));
++  Inst.addOperand(MCOperand::createReg(Src2));
++  Inst.addOperand(
++      MCOperand::createImm(AArch64_AM::getArithExtendImm(ExtType, Shift)));
++  emitInst(Inst, Out, STI);
++}
++
++void AArch64MCLFIRewriter::emitMemRoW(unsigned Opcode, const MCOperand &DataOp,
++                                      MCRegister BaseReg, MCStreamer &Out,
++                                      const MCSubtargetInfo &STI) {
++  // Op DataOp, [LFIBaseReg, W(BaseReg), uxtw]
++  MCInst Inst;
++  Inst.setOpcode(Opcode);
++  Inst.addOperand(DataOp);
++  Inst.addOperand(MCOperand::createReg(LFIBaseReg));
++  Inst.addOperand(MCOperand::createReg(getWRegFromXReg(BaseReg)));
++  Inst.addOperand(MCOperand::createImm(0)); // S bit = 0 (UXTW).
++  Inst.addOperand(MCOperand::createImm(0)); // Shift amount = 0 (unscaled).
++  emitInst(Inst, Out, STI);
++}
++
+ // {br,blr} xN
+ // ->
+ // add x28, x27, wN, uxtw
+@@ -168,7 +411,11 @@ void AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+ void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+-  emitInst(Inst, Out, STI);
++  if (!isFakeMemAccess(Inst) &&
++      (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst)))
++    rewriteLoadStore(Inst, Out, STI);
++  else
++    emitInst(Inst, Out, STI);
+   emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
+ }
+ 
+@@ -228,6 +475,272 @@ void AArch64MCLFIRewriter::rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
+   emitInst(Store, Out, STI);
+ }
+ 
++bool AArch64MCLFIRewriter::rewriteLoadStoreRoW(const MCInst &Inst,
++                                               MCStreamer &Out,
++                                               const MCSubtargetInfo &STI) {
++  unsigned Op = Inst.getOpcode();
++  unsigned MemOp;
++
++  // Case 1: Indexed load/store with zero immediate offset.
++  // ldr xN, [xM, #0] -> ldr xN, [x27, wM, uxtw]
++  if ((MemOp = convertVariantToRoW(Op, AArch64::LFI_AM_Ui)) !=
++      AArch64::INSTRUCTION_LIST_END) {
++    MCRegister BaseReg = Inst.getOperand(1).getReg();
++    if (BaseReg == AArch64::SP)
++      return false;
++    const MCOperand &OffsetOp = Inst.getOperand(2);
++    if (OffsetOp.isImm() && OffsetOp.getImm() == 0) {
++      emitMemRoW(MemOp, Inst.getOperand(0), BaseReg, Out, STI);
++      return true;
++    }
++    return false;
++  }
++
++  // Case 2: Pre-index load/store with writeback.
++  // ldr xN, [xM, #imm]! -> add xM, xM, #imm; ldr xN, [x27, wM, uxtw]
++  if ((MemOp = convertVariantToRoW(Op, AArch64::LFI_AM_Pre)) !=
++      AArch64::INSTRUCTION_LIST_END) {
++    MCRegister BaseReg = Inst.getOperand(2).getReg();
++    if (BaseReg == AArch64::SP)
++      return false;
++    int64_t Imm = Inst.getOperand(3).getImm();
++    emitAddImm(BaseReg, BaseReg, Imm, Out, STI);
++    emitMemRoW(MemOp, Inst.getOperand(1), BaseReg, Out, STI);
++    return true;
++  }
++
++  // Case 3: Post-index load/store.
++  // ldr xN, [xM], #imm -> ldr xN, [x27, wM, uxtw]; add xM, xM, #imm
++  if ((MemOp = convertVariantToRoW(Op, AArch64::LFI_AM_Post)) !=
++      AArch64::INSTRUCTION_LIST_END) {
++    MCRegister BaseReg = Inst.getOperand(2).getReg();
++    if (BaseReg == AArch64::SP)
++      return false;
++    int64_t Imm = Inst.getOperand(3).getImm();
++    emitMemRoW(MemOp, Inst.getOperand(1), BaseReg, Out, STI);
++    emitAddImm(BaseReg, BaseReg, Imm, Out, STI);
++    return true;
++  }
++
++  // Case 4: Register-offset-X load/store.
++  // ldr xN, [xM1, xM2] -> add x26, xM1, xM2; ldr xN, [x27, w26, uxtw]
++  //
++  // In this case, even if xM1 is SP we must do a full rewrite, since an
++  // arbitrary register value is being added as the offset.
++  unsigned Shift;
++  if ((MemOp = convertRoXToRoW(Op, Shift)) != AArch64::INSTRUCTION_LIST_END) {
++    MCRegister Reg1 = Inst.getOperand(1).getReg();
++    MCRegister Reg2 = Inst.getOperand(2).getReg();
++    int64_t Extend = Inst.getOperand(3).getImm();
++    int64_t IsShift = Inst.getOperand(4).getImm();
++
++    if (!IsShift)
++      Shift = 0;
++
++    if (Extend)
++      emitAddRegExtend(LFIScratchReg, Reg1, Reg2, AArch64_AM::SXTX, Shift, Out,
++                       STI);
++    else
++      emitAddReg(LFIScratchReg, Reg1, Reg2, Shift, Out, STI);
++    emitMemRoW(MemOp, Inst.getOperand(0), LFIScratchReg, Out, STI);
++    return true;
++  }
++
++  // Case 5: Register-offset-W load/store.
++  // ldr xN, [xM1, wM2, uxtw] -> add x26, xM1, wM2, uxtw;
++  //                             ldr xN, [x27, w26, uxtw]
++  if (getRoWShift(Op, Shift)) {
++    MCRegister Reg1 = Inst.getOperand(1).getReg();
++    MCRegister Reg2 = Inst.getOperand(2).getReg();
++    int64_t S = Inst.getOperand(3).getImm();
++    int64_t IsShift = Inst.getOperand(4).getImm();
++
++    if (!IsShift)
++      Shift = 0;
++
++    if (S)
++      emitAddRegExtend(LFIScratchReg, Reg1, Reg2, AArch64_AM::SXTW, Shift, Out,
++                       STI);
++    else
++      emitAddRegExtend(LFIScratchReg, Reg1, Reg2, AArch64_AM::UXTW, Shift, Out,
++                       STI);
++    emitMemRoW(Op, Inst.getOperand(0), LFIScratchReg, Out, STI);
++    return true;
++  }
++
++  return false;
++}
++
++void AArch64MCLFIRewriter::rewriteLoadStoreBase(const MCInst &Inst,
++                                                MCStreamer &Out,
++                                                const MCSubtargetInfo &STI) {
++  unsigned Opcode = Inst.getOpcode();
++  const AArch64::MemInfoEntry *Info = AArch64::lookupMemInfoByOpcode(Opcode);
++
++  if (!Info) {
++    warning(Inst, "unknown addressing mode for memory instruction in LFI");
++    return emitInst(Inst, Out, STI);
++  }
++
++  if (Info->IsLiteral)
++    return error(Inst, "PC-relative literal loads are not supported in LFI");
++
++  MCRegister BaseReg = Inst.getOperand(Info->BaseIdx).getReg();
++
++  // Stack accesses don't need address sandboxing, except when sp is modified
++  // with a non-zero register post-index operand.
++  bool BaseIsSP = BaseReg == AArch64::SP;
++  if (BaseIsSP) {
++    if (!Info->HasOffset || !Inst.getOperand(Info->OffsetIdx).isReg())
++      return emitInst(Inst, Out, STI);
++    MCRegister OffReg = Inst.getOperand(Info->OffsetIdx).getReg();
++    if (OffReg == AArch64::XZR || OffReg == AArch64::WZR)
++      return emitInst(Inst, Out, STI);
++  }
++
++  // Guard the base register, unless it is SP.
++  if (!BaseIsSP)
++    emitAddMask(LFIAddrReg, BaseReg, Out, STI);
++
++  if (!Info->IsPrePost) {
++    // Non-pre/post instruction: replace the base register operand.
++    MCInst NewInst = replaceRegAt(Inst, Info->BaseIdx, LFIAddrReg);
++    emitInst(NewInst, Out, STI);
++    return;
++  }
++
++  bool IsPre = false;
++  bool IsNoOffset = false;
++  unsigned BaseOpcode = convertPrePostToBase(Opcode, IsPre, IsNoOffset);
++
++  if (BaseOpcode == AArch64::INSTRUCTION_LIST_END)
++    return error(Inst, "unhandled pre/post-index instruction in LFI rewriter");
++
++  // Demote pre/post-index to base indexed form.
++  MCInst NewInst;
++  NewInst.setOpcode(BaseOpcode);
++  NewInst.setLoc(Inst.getLoc());
++
++  // Skip writeback operand (operand 0) and copy data operands up to base.
++  for (int I = 1; I < Info->BaseIdx; ++I)
++    NewInst.addOperand(Inst.getOperand(I));
++
++  // Add the access base register (LFIAddrReg or SP).
++  MCRegister AccessBase = BaseIsSP ? AArch64::SP : LFIAddrReg;
++  NewInst.addOperand(MCOperand::createReg(AccessBase));
++
++  // For pre-index, include the offset; for post-index, use zero.
++  if (IsPre && Info->HasOffset)
++    NewInst.addOperand(Inst.getOperand(Info->OffsetIdx));
++  else if (!IsNoOffset)
++    NewInst.addOperand(MCOperand::createImm(0));
++
++  emitInst(NewInst, Out, STI);
++
++  if (!Info->HasOffset)
++    return;
++
++  // Update the base register with the offset. If the base is SP, a register
++  // offset must be sandboxed (the result is otherwise unbounded), and ADDXrs
++  // cannot take SP, so the extended-register form via the scratch register is
++  // used.
++  const MCOperand &OffsetOp = Inst.getOperand(Info->OffsetIdx);
++  if (OffsetOp.isImm()) {
++    // Pair pre/post immediates are scaled by element size; other pre/post
++    // forms (scalar, SIMD) use the raw immediate (scale = 1).
++    int64_t Scale = 1;
++    if (const auto *E = AArch64::lookupPairVariantByOpcode(Opcode))
++      Scale = E->Scale;
++    int64_t Offset = OffsetOp.getImm() * Scale;
++    emitAddImm(BaseReg, BaseReg, Offset, Out, STI);
++  } else if (OffsetOp.isReg()) {
++    // SIMD post-index uses a register offset (XZR for natural offset).
++    MCRegister OffReg = OffsetOp.getReg();
++    if (OffReg == AArch64::XZR) {
++      if (const auto *E = AArch64::lookupSIMDPostByOpcode(Opcode))
++        emitAddImm(BaseReg, BaseReg, E->NaturalOffset, Out, STI);
++    } else if (OffReg != AArch64::WZR) {
++      if (BaseIsSP) {
++        emitAddRegExtend(LFIScratchReg, AArch64::SP, OffReg, AArch64_AM::UXTX,
++                         0, Out, STI);
++        emitAddMask(AArch64::SP, LFIScratchReg, Out, STI);
++      } else {
++        emitAddReg(BaseReg, BaseReg, OffReg, 0, Out, STI);
++      }
++    }
++  }
++}
++
++void AArch64MCLFIRewriter::rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
++                                            const MCSubtargetInfo &STI) {
++  bool IsStore = mayStore(Inst);
++  bool IsLoad = mayLoad(Inst) || mayPrefetch(Inst);
++
++  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
++  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
++
++  if ((!IsLoad || SkipLoads) && (!IsStore || SkipStores))
++    return emitInst(Inst, Out, STI);
++
++  if (rewriteLoadStoreRoW(Inst, Out, STI))
++    return;
++
++  rewriteLoadStoreBase(Inst, Out, STI);
++}
++
++// modify sp
++// ->
++// modify x26
++// add sp, x27, w26, uxtw
++void AArch64MCLFIRewriter::rewriteSPModification(const MCInst &Inst,
++                                                 MCStreamer &Out,
++                                                 const MCSubtargetInfo &STI) {
++  // Route through rewriteLRModification or rewriteLoadStore for memory
++  // accesses. Those helpers automatically handle dangerous stack modifications
++  // that can happen via register post-index.
++  if (mayLoad(Inst) || mayStore(Inst)) {
++    if (mayModifyRegister(Inst, AArch64::LR))
++      return rewriteLRModification(Inst, Out, STI);
++    return rewriteLoadStore(Inst, Out, STI);
++  }
++
++  // No stack sandboxing if sandboxing is disabled for both loads and stores.
++  bool SkipLoads = STI.hasFeature(AArch64::FeatureNoLFILoads);
++  bool SkipStores = STI.hasFeature(AArch64::FeatureNoLFIStores);
++  if (SkipLoads && SkipStores)
++    return emitInst(Inst, Out, STI);
++
++  // Special case: mov sp, xN -> add sp, x27, wN, uxtw
++  if (Inst.getOpcode() == AArch64::ADDXri && Inst.getOperand(2).getImm() == 0 &&
++      Inst.getOperand(3).getImm() == 0)
++    return emitAddMask(AArch64::SP, Inst.getOperand(1).getReg(), Out, STI);
++
++  // Redirect SP modification destination to scratch, then sandbox.
++  MCInst ModInst = replaceRegAt(Inst, 0, LFIScratchReg);
++  emitInst(ModInst, Out, STI);
++  emitAddMask(AArch64::SP, LFIScratchReg, Out, STI);
++}
++
++// {dc,ic} <op>, xN
++// ->
++// add x28, x27, wN, uxtw
++// {dc,ic} <op>, x28
++void AArch64MCLFIRewriter::rewriteVASysOp(const MCInst &Inst, MCStreamer &Out,
++                                          const MCSubtargetInfo &STI) {
++  MCRegister AddrReg = Inst.getOperand(4).getReg();
++
++  emitAddMask(LFIAddrReg, AddrReg, Out, STI);
++
++  MCInst NewInst;
++  NewInst.setOpcode(AArch64::SYSxt);
++  NewInst.addOperand(Inst.getOperand(0));
++  NewInst.addOperand(Inst.getOperand(1));
++  NewInst.addOperand(Inst.getOperand(2));
++  NewInst.addOperand(Inst.getOperand(3));
++  NewInst.addOperand(MCOperand::createReg(LFIAddrReg));
++  emitInst(NewInst, Out, STI);
++}
++
+ // NOTE: when adding new rewrites, the size estimates in
+ // AArch64InstrInfo::getLFIInstSizeInBytes must be updated to match.
+ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+@@ -259,6 +772,9 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return;
+   }
+ 
++  if (isVASysOp(Inst))
++    return rewriteVASysOp(Inst, Out, STI);
++
+   // Control flow.
+   switch (Inst.getOpcode()) {
+   case AArch64::RET:
+@@ -268,13 +784,38 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return rewriteIndirectBranch(Inst, Out, STI);
+   }
+ 
++  // Register modifications that require sandboxing.
++  if (mayModifySP(Inst))
++    return rewriteSPModification(Inst, Out, STI);
++
+   // Link register modification.
+   if (explicitlyModifiesRegister(Inst, AArch64::LR))
+     return rewriteLRModification(Inst, Out, STI);
+ 
++  // Memory access.
++  if (!isFakeMemAccess(Inst) &&
++      (mayLoad(Inst) || mayStore(Inst) || mayPrefetch(Inst)))
++    return rewriteLoadStore(Inst, Out, STI);
++
+   emitInst(Inst, Out, STI);
+ }
+ 
++// This function is made available to the size estimator so that it can
++// classify Pre/Post-index instructions.
++bool llvm::isLFIPrePostMemAccess(unsigned Opcode) {
++  if (convertVariantToRoW(Opcode, AArch64::LFI_AM_Pre) !=
++      AArch64::INSTRUCTION_LIST_END)
++    return true;
++  if (convertVariantToRoW(Opcode, AArch64::LFI_AM_Post) !=
++      AArch64::INSTRUCTION_LIST_END)
++    return true;
++  bool IsPre, IsNoOffset;
++  if (convertPrePostToBase(Opcode, IsPre, IsNoOffset) !=
++      AArch64::INSTRUCTION_LIST_END)
++    return true;
++  return false;
++}
++
+ bool AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
+                                        const MCSubtargetInfo &STI) {
+   // The guard prevents rewrite-recursion when we emit instructions from inside
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+index e4ed767aa21d..b04da5c2c2d7 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -13,6 +13,7 @@
+ #ifndef LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
+ #define LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
+ 
++#include "AArch64AddressingModes.h"
+ #include "llvm/MC/MCInstrInfo.h"
+ #include "llvm/MC/MCLFIRewriter.h"
+ #include "llvm/MC/MCRegister.h"
+@@ -22,6 +23,7 @@ namespace llvm {
+ class MCContext;
+ class MCExpr;
+ class MCInst;
++class MCOperand;
+ class MCStreamer;
+ class MCSubtargetInfo;
+ 
+@@ -60,6 +62,7 @@ private:
+   // Instruction classification. Returns the reserved register that may be
+   // modified, or an invalid register if no reserved register is touched.
+   MCRegister mayModifyReserved(const MCInst &Inst) const;
++  bool mayModifySP(const MCInst &Inst) const;
+ 
+   // Instruction emission.
+   void emitInst(const MCInst &Inst, MCStreamer &Out,
+@@ -71,6 +74,15 @@ private:
+   void emitPendingTLSDescCall(MCStreamer &Out, const MCSubtargetInfo &STI);
+   void emitMov(MCRegister Dest, MCRegister Src, MCStreamer &Out,
+                const MCSubtargetInfo &STI);
++  void emitAddImm(MCRegister Dest, MCRegister Src, int64_t Imm, MCStreamer &Out,
++                  const MCSubtargetInfo &STI);
++  void emitAddReg(MCRegister Dest, MCRegister Src1, MCRegister Src2,
++                  unsigned Shift, MCStreamer &Out, const MCSubtargetInfo &STI);
++  void emitAddRegExtend(MCRegister Dest, MCRegister Src1, MCRegister Src2,
++                        AArch64_AM::ShiftExtendType ExtType, unsigned Shift,
++                        MCStreamer &Out, const MCSubtargetInfo &STI);
++  void emitMemRoW(unsigned Opcode, const MCOperand &DataOp, MCRegister BaseReg,
++                  MCStreamer &Out, const MCSubtargetInfo &STI);
+ 
+   // Rewriting logic.
+   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+@@ -82,6 +94,18 @@ private:
+   void rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+                      const MCSubtargetInfo &STI);
+ 
++  // Memory access.
++  void rewriteLoadStore(const MCInst &Inst, MCStreamer &Out,
++                        const MCSubtargetInfo &STI);
++  void rewriteLoadStoreBase(const MCInst &Inst, MCStreamer &Out,
++                            const MCSubtargetInfo &STI);
++  bool rewriteLoadStoreRoW(const MCInst &Inst, MCStreamer &Out,
++                           const MCSubtargetInfo &STI);
++
++  // SP register modification.
++  void rewriteSPModification(const MCInst &Inst, MCStreamer &Out,
++                             const MCSubtargetInfo &STI);
++
+   // Link register modification.
+   void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+@@ -93,8 +117,15 @@ private:
+                      const MCSubtargetInfo &STI);
+   void rewriteTPWrite(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI);
++  void rewriteVASysOp(const MCInst &Inst, MCStreamer &Out,
++                      const MCSubtargetInfo &STI);
+ };
+ 
++/// Returns true if \p Opcode is a pre- or post-indexed memory access that the
++/// LFI rewriter expands with a base-register update (i.e. an extra
++/// instruction beyond the guard + access pair).
++bool isLFIPrePostMemAccess(unsigned Opcode);
++
+ } // namespace llvm
+ 
+ #endif // LLVM_LIB_TARGET_AARCH64_MCTARGETDESC_AARCH64MCLFIREWRITER_H
+diff --git a/llvm/test/MC/AArch64/LFI/exclusive.s b/llvm/test/MC/AArch64/LFI/exclusive.s
+new file mode 100644
+index 000000000000..eb42bd234848
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/exclusive.s
+@@ -0,0 +1,140 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// Load exclusive
++ldxr x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldxr x0, [x28]
++
++ldxr w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldxr w0, [x28]
++
++ldxrb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldxrb w0, [x28]
++
++ldxrh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldxrh w0, [x28]
++
++// Store exclusive
++stxr w0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stxr w0, x1, [x28]
++
++stxr w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stxr w0, w1, [x28]
++
++stxrb w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stxrb w0, w1, [x28]
++
++stxrh w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stxrh w0, w1, [x28]
++
++// Load-acquire exclusive
++ldaxr x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldaxr x0, [x28]
++
++ldaxr w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldaxr w0, [x28]
++
++ldaxrb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldaxrb w0, [x28]
++
++ldaxrh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldaxrh w0, [x28]
++
++// Store-release exclusive
++stlxr w0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stlxr w0, x1, [x28]
++
++stlxr w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stlxr w0, w1, [x28]
++
++stlxrb w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stlxrb w0, w1, [x28]
++
++stlxrh w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stlxrh w0, w1, [x28]
++
++// Exclusive pairs
++ldxp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldxp x0, x1, [x28]
++
++ldxp w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldxp w0, w1, [x28]
++
++stxp w0, x1, x2, [x3]
++// CHECK:      add x28, x27, w3, uxtw
++// CHECK-NEXT: stxp w0, x1, x2, [x28]
++
++stxp w0, w1, w2, [x3]
++// CHECK:      add x28, x27, w3, uxtw
++// CHECK-NEXT: stxp w0, w1, w2, [x28]
++
++ldaxp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaxp x0, x1, [x28]
++
++stlxp w0, x1, x2, [x3]
++// CHECK:      add x28, x27, w3, uxtw
++// CHECK-NEXT: stlxp w0, x1, x2, [x28]
++
++// Load-acquire / Store-release (non-exclusive)
++ldar x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldar x0, [x28]
++
++ldar w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldar w0, [x28]
++
++ldarb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldarb w0, [x28]
++
++ldarh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldarh w0, [x28]
++
++stlr x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stlr x0, [x28]
++
++stlr w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stlr w0, [x28]
++
++stlrb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stlrb w0, [x28]
++
++stlrh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stlrh w0, [x28]
++
++// SP-relative exclusive (no sandboxing needed)
++ldxr x0, [sp]
++// CHECK: ldxr x0, [sp]
++
++stxr w0, x1, [sp]
++// CHECK: stxr w0, x1, [sp]
++
++ldar x0, [sp]
++// CHECK: ldar x0, [sp]
++
++stlr x0, [sp]
++// CHECK: stlr x0, [sp]
+diff --git a/llvm/test/MC/AArch64/LFI/fp.s b/llvm/test/MC/AArch64/LFI/fp.s
+new file mode 100644
+index 000000000000..d1fc4aac25a2
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/fp.s
+@@ -0,0 +1,204 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// FP/SIMD scalar loads (zero offset -> RoW)
++ldr b0, [x1]
++// CHECK: ldr b0, [x27, w1, uxtw]
++
++ldr h0, [x1]
++// CHECK: ldr h0, [x27, w1, uxtw]
++
++ldr s0, [x1]
++// CHECK: ldr s0, [x27, w1, uxtw]
++
++ldr d0, [x1]
++// CHECK: ldr d0, [x27, w1, uxtw]
++
++ldr q0, [x1]
++// CHECK: ldr q0, [x27, w1, uxtw]
++
++// FP/SIMD scalar stores (zero offset -> RoW)
++str b0, [x1]
++// CHECK: str b0, [x27, w1, uxtw]
++
++str h0, [x1]
++// CHECK: str h0, [x27, w1, uxtw]
++
++str s0, [x1]
++// CHECK: str s0, [x27, w1, uxtw]
++
++str d0, [x1]
++// CHECK: str d0, [x27, w1, uxtw]
++
++str q0, [x1]
++// CHECK: str q0, [x27, w1, uxtw]
++
++// FP loads with non-zero offset (demoted)
++ldr s0, [x1, #4]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr s0, [x28, #4]
++
++ldr d0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr d0, [x28, #8]
++
++ldr q0, [x1, #16]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr q0, [x28, #16]
++
++// FP stores with non-zero offset (demoted)
++str s0, [x1, #4]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: str s0, [x28, #4]
++
++str d0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: str d0, [x28, #8]
++
++str q0, [x1, #16]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: str q0, [x28, #16]
++
++// FP pre-index
++ldr s0, [x1, #4]!
++// CHECK:      add x1, x1, #4
++// CHECK-NEXT: ldr s0, [x27, w1, uxtw]
++
++ldr d0, [x1, #8]!
++// CHECK:      add x1, x1, #8
++// CHECK-NEXT: ldr d0, [x27, w1, uxtw]
++
++ldr q0, [x1, #16]!
++// CHECK:      add x1, x1, #16
++// CHECK-NEXT: ldr q0, [x27, w1, uxtw]
++
++str s0, [x1, #4]!
++// CHECK:      add x1, x1, #4
++// CHECK-NEXT: str s0, [x27, w1, uxtw]
++
++// FP post-index
++ldr s0, [x1], #4
++// CHECK:      ldr s0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #4
++
++ldr d0, [x1], #8
++// CHECK:      ldr d0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #8
++
++ldr q0, [x1], #16
++// CHECK:      ldr q0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #16
++
++str d0, [x1], #8
++// CHECK:      str d0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #8
++
++// FP register offset
++ldr s0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: ldr s0, [x27, w26, uxtw]
++
++ldr d0, [x1, x2, lsl #3]
++// CHECK:      add x26, x1, x2, lsl #3
++// CHECK-NEXT: ldr d0, [x27, w26, uxtw]
++
++ldr q0, [x1, x2, lsl #4]
++// CHECK:      add x26, x1, x2, lsl #4
++// CHECK-NEXT: ldr q0, [x27, w26, uxtw]
++
++str s0, [x1, x2, lsl #2]
++// CHECK:      add x26, x1, x2, lsl #2
++// CHECK-NEXT: str s0, [x27, w26, uxtw]
++
++str d0, [x1, w2, sxtw]
++// CHECK:      add x26, x1, w2, sxtw
++// CHECK-NEXT: str d0, [x27, w26, uxtw]
++
++str q0, [x1, w2, uxtw #4]
++// CHECK:      add x26, x1, w2, uxtw #4
++// CHECK-NEXT: str q0, [x27, w26, uxtw]
++
++// FP unscaled offset
++ldur s0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldur s0, [x28]
++
++ldur d0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldur d0, [x28, #8]
++
++ldur q0, [x1, #-16]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldur q0, [x28, #-16]
++
++stur s0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stur s0, [x28]
++
++stur d0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stur d0, [x28, #8]
++
++// FP pair loads/stores
++ldp s0, s1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp s0, s1, [x28]
++
++ldp d0, d1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp d0, d1, [x28]
++
++ldp q0, q1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp q0, q1, [x28]
++
++stp s0, s1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp s0, s1, [x28]
++
++stp d0, d1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp d0, d1, [x28]
++
++stp q0, q1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp q0, q1, [x28]
++
++// FP pair with offset
++ldp s0, s1, [x2, #8]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp s0, s1, [x28, #8]
++
++ldp d0, d1, [x2, #16]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp d0, d1, [x28, #16]
++
++// FP pair pre/post-index
++ldp s0, s1, [x2], #8
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp s0, s1, [x28]
++// CHECK-NEXT: add x2, x2, #8
++
++ldp d0, d1, [x2, #16]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp d0, d1, [x28, #16]
++// CHECK-NEXT: add x2, x2, #16
++
++stp q0, q1, [x2], #32
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp q0, q1, [x28]
++// CHECK-NEXT: add x2, x2, #32
++
++stp d0, d1, [x2, #-16]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp d0, d1, [x28, #-16]
++// CHECK-NEXT: sub x2, x2, #16
++
++// SP-relative FP loads (no sandboxing needed)
++ldr s0, [sp]
++// CHECK: ldr s0, [sp]
++
++ldr d0, [sp, #8]
++// CHECK: ldr d0, [sp, #8]
++
++ldp q0, q1, [sp, #32]
++// CHECK: ldp q0, q1, [sp, #32]
+diff --git a/llvm/test/MC/AArch64/LFI/jumps-only.s b/llvm/test/MC/AArch64/LFI/jumps-only.s
+new file mode 100644
+index 000000000000..162a20315855
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/jumps-only.s
+@@ -0,0 +1,41 @@
++// RUN: llvm-mc -triple aarch64_lfi -mattr=+no-lfi-loads,+no-lfi-stores %s | FileCheck %s
++
++// Jumps-only mode: only branches are sandboxed.
++
++ldr x0, [x1]
++// CHECK: ldr x0, [x1]
++
++ldr x0, [x1, #8]
++// CHECK: ldr x0, [x1, #8]
++
++str x0, [x1]
++// CHECK: str x0, [x1]
++
++stp x0, x1, [x2, #16]
++// CHECK: stp x0, x1, [x2, #16]
++
++add sp, sp, #8
++// CHECK: add sp, sp, #8
++
++sub sp, sp, #8
++// CHECK: sub sp, sp, #8
++
++mov sp, x0
++// CHECK: mov sp, x0
++
++br x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: br x28
++
++ret
++// CHECK: ret
++
++blr x1
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: blr x28
++
++bl some_func
++// CHECK: bl some_func
++
++b some_func
++// CHECK: b some_func
+diff --git a/llvm/test/MC/AArch64/LFI/literal.s b/llvm/test/MC/AArch64/LFI/literal.s
+new file mode 100644
+index 000000000000..89a0230aace8
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/literal.s
+@@ -0,0 +1,37 @@
++// RUN: not llvm-mc -triple aarch64_lfi %s 2>&1 | FileCheck %s
++
++ldr x0, foo
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++ldr w0, bar
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++ldr s0, baz
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++ldr d0, qux
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++ldr q0, quux
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++ldrsw x0, signed_word
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++prfm pldl1keep, prefetch_target
++// CHECK: error: PC-relative literal loads are not supported in LFI
++
++foo:
++  .quad 0
++bar:
++  .word 0
++baz:
++  .single 0.0
++qux:
++  .double 0.0
++quux:
++  .zero 16
++signed_word:
++  .word -1
++prefetch_target:
++  .quad 0
+diff --git a/llvm/test/MC/AArch64/LFI/lse.s b/llvm/test/MC/AArch64/LFI/lse.s
+new file mode 100644
+index 000000000000..dc9faace3282
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/lse.s
+@@ -0,0 +1,162 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++// RUN: llvm-mc -triple aarch64_lfi -mattr=+no-lfi-loads %s | FileCheck %s
++
++.arch_extension lse
++
++// LDADD variants
++// Atomics are both loads and stores, so +no-lfi-loads must still sandbox them.
++ldadd x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldadd x0, x1, [x28]
++
++ldadd w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldadd w0, w1, [x28]
++
++ldadda x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldadda x0, x1, [x28]
++
++ldaddal x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaddal x0, x1, [x28]
++
++ldaddl x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaddl x0, x1, [x28]
++
++ldaddab w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaddab w0, w1, [x28]
++
++ldaddah w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaddah w0, w1, [x28]
++
++// LDCLR variants
++ldclr x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldclr x0, x1, [x28]
++
++ldclra x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldclra x0, x1, [x28]
++
++ldclral x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldclral x0, x1, [x28]
++
++ldclrl x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldclrl x0, x1, [x28]
++
++// LDEOR variants
++ldeor x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldeor x0, x1, [x28]
++
++ldeora x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldeora x0, x1, [x28]
++
++// LDSET variants
++ldset x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldset x0, x1, [x28]
++
++ldseta x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldseta x0, x1, [x28]
++
++// SWP variants
++swp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swp x0, x1, [x28]
++
++swpa x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpa x0, x1, [x28]
++
++swpal x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpal x0, x1, [x28]
++
++swpl x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpl x0, x1, [x28]
++
++swpab w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpab w0, w1, [x28]
++
++swpah w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpah w0, w1, [x28]
++
++swpalb w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpalb w0, w1, [x28]
++
++swpalh w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: swpalh w0, w1, [x28]
++
++swpal w0, w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: swpal w0, w0, [x28]
++
++// CAS variants
++cas x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: cas x0, x1, [x28]
++
++casa x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: casa x0, x1, [x28]
++
++casal x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: casal x0, x1, [x28]
++
++casl x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: casl x0, x1, [x28]
++
++casab w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: casab w0, w1, [x28]
++
++casah w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: casah w0, w1, [x28]
++
++// CASP variants (pair)
++casp x0, x1, x2, x3, [x4]
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: casp x0, x1, x2, x3, [x28]
++
++caspa x0, x1, x2, x3, [x4]
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: caspa x0, x1, x2, x3, [x28]
++
++caspal x0, x1, x2, x3, [x4]
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: caspal x0, x1, x2, x3, [x28]
++
++caspl x0, x1, x2, x3, [x4]
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: caspl x0, x1, x2, x3, [x28]
++
++caspal w0, w1, w2, w3, [x4]
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: caspal w0, w1, w2, w3, [x28]
++
++// SP-relative atomics (no sandboxing needed)
++ldadd x0, x1, [sp]
++// CHECK: ldadd x0, x1, [sp]
++
++swp x0, x1, [sp]
++// CHECK: swp x0, x1, [sp]
++
++cas x0, x1, [sp]
++// CHECK: cas x0, x1, [sp]
+diff --git a/llvm/test/MC/AArch64/LFI/mem-lr.s b/llvm/test/MC/AArch64/LFI/mem-lr.s
+new file mode 100644
+index 000000000000..c04ede69f5ba
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/mem-lr.s
+@@ -0,0 +1,71 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// Memory accesses that define LR (x30) must sandbox the base register
++// in addition to masking LR after the access.
++
++ldr x30, [x0, #0x100]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldr x30, [x28, #256]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0]
++// CHECK:      ldr x30, [x27, w0, uxtw]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0, #8]!
++// CHECK:      add x0, x0, #8
++// CHECK-NEXT: ldr x30, [x27, w0, uxtw]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0, #-8]!
++// CHECK:      sub x0, x0, #8
++// CHECK-NEXT: ldr x30, [x27, w0, uxtw]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0], #8
++// CHECK:      ldr x30, [x27, w0, uxtw]
++// CHECK-NEXT: add x0, x0, #8
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0, x1]
++// CHECK:      add x26, x0, x1
++// CHECK-NEXT: ldr x30, [x27, w26, uxtw]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldr x30, [x0, x1, lsl #3]
++// CHECK:      add x26, x0, x1, lsl #3
++// CHECK-NEXT: ldr x30, [x27, w26, uxtw]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldur x30, [x0, #4]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldur x30, [x28, #4]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldp x29, x30, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldp x29, x30, [x28]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldp x29, x30, [x0, #16]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldp x29, x30, [x28, #16]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldp x29, x30, [x0, #16]!
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldp x29, x30, [x28, #16]
++// CHECK-NEXT: add x0, x0, #16
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++ldp x29, x30, [x0], #16
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldp x29, x30, [x28]
++// CHECK-NEXT: add x0, x0, #16
++// CHECK-NEXT: add x30, x27, w30, uxtw
++
++// SP-based LR loads are safe without base sandboxing.
++
++ldr x30, [sp, #16]
++// CHECK:      ldr x30, [sp, #16]
++// CHECK-NEXT: add x30, x27, w30, uxtw
+diff --git a/llvm/test/MC/AArch64/LFI/mem.s b/llvm/test/MC/AArch64/LFI/mem.s
+new file mode 100644
+index 000000000000..7e763efdeb80
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/mem.s
+@@ -0,0 +1,411 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// SP-relative loads/stores (no sandboxing needed)
++ldr x0, [sp]
++// CHECK: ldr x0, [sp]
++
++ldr x0, [sp, #8]
++// CHECK: ldr x0, [sp, #8]
++
++ldp x0, x1, [sp, #8]
++// CHECK: ldp x0, x1, [sp, #8]
++
++str x0, [sp]
++// CHECK: str x0, [sp]
++
++str x0, [sp, #8]
++// CHECK: str x0, [sp, #8]
++
++stp x0, x1, [sp, #8]
++// CHECK: stp x0, x1, [sp, #8]
++
++ldur x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldur x0, [x28]
++
++stur x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stur x0, [x28]
++
++ldp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28]
++
++stp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp x0, x1, [x28]
++
++ldr x0, [x1]
++// CHECK: ldr x0, [x27, w1, uxtw]
++
++ldr x0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr x0, [x28, #8]
++
++ldr x0, [x1, #8]!
++// CHECK:      add x1, x1, #8
++// CHECK-NEXT: ldr x0, [x27, w1, uxtw]
++
++str x0, [x1, #8]!
++// CHECK:      add x1, x1, #8
++// CHECK-NEXT: str x0, [x27, w1, uxtw]
++
++ldr x0, [x1, #-8]!
++// CHECK:      sub x1, x1, #8
++// CHECK-NEXT: ldr x0, [x27, w1, uxtw]
++
++str x0, [x1, #-8]!
++// CHECK:      sub x1, x1, #8
++// CHECK-NEXT: str x0, [x27, w1, uxtw]
++
++ldr x0, [x1], #8
++// CHECK:      ldr x0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #8
++
++str x0, [x1], #8
++// CHECK:      str x0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #8
++
++ldr x0, [x1], #-8
++// CHECK:      ldr x0, [x27, w1, uxtw]
++// CHECK-NEXT: sub x1, x1, #8
++
++str x0, [x1], #-8
++// CHECK:      str x0, [x27, w1, uxtw]
++// CHECK-NEXT: sub x1, x1, #8
++
++ldr x0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, x2, lsl #3]
++// CHECK:      add x26, x1, x2, lsl #3
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, x2, sxtx #0]
++// CHECK:      add x26, x1, x2, sxtx
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, x2, sxtx #3]
++// CHECK:      add x26, x1, x2, sxtx #3
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, w2, uxtw]
++// CHECK:      add x26, x1, w2, uxtw
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, w2, uxtw #3]
++// CHECK:      add x26, x1, w2, uxtw #3
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, w2, sxtw]
++// CHECK:      add x26, x1, w2, sxtw
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldr x0, [x1, w2, sxtw #3]
++// CHECK:      add x26, x1, w2, sxtw #3
++// CHECK-NEXT: ldr x0, [x27, w26, uxtw]
++
++ldp x0, x1, [sp], #8
++// CHECK: ldp x0, x1, [sp], #8
++
++ldp x0, x1, [x2], #8
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28]
++// CHECK-NEXT: add x2, x2, #8
++
++ldp x0, x1, [x2, #8]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28, #8]
++// CHECK-NEXT: add x2, x2, #8
++
++ldp x0, x1, [x2], #-8
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28]
++// CHECK-NEXT: sub x2, x2, #8
++
++ldp x0, x1, [x2, #-8]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28, #-8]
++// CHECK-NEXT: sub x2, x2, #8
++
++stp x0, x1, [x2, #-8]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp x0, x1, [x28, #-8]
++// CHECK-NEXT: sub x2, x2, #8
++
++ldaxr x0, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldaxr x0, [x28]
++
++stlxr w15, w17, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stlxr w15, w17, [x28]
++
++ldr w4, [sp, w3, uxtw #2]
++// CHECK:      add x26, sp, w3, uxtw #2
++// CHECK-NEXT: ldr w4, [x27, w26, uxtw]
++
++stxrb w11, w10, [x8]
++// CHECK:      add x28, x27, w8, uxtw
++// CHECK-NEXT: stxrb w11, w10, [x28]
++
++ldr x0, [x0, :got_lo12:x]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ldr x0, [x28, :got_lo12:x]
++
++prfm pstl1strm, [x10]
++// CHECK: prfm pstl1strm, [x27, w10, uxtw]
++
++prfm pstl1strm, [x10, x11]
++// CHECK:      add x26, x10, x11
++// CHECK-NEXT: prfm pstl1strm, [x27, w26, uxtw]
++
++// Byte loads/stores
++ldrb w0, [x1]
++// CHECK: ldrb w0, [x27, w1, uxtw]
++
++ldrb w0, [x1, #1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldrb w0, [x28, #1]
++
++strb w0, [x1]
++// CHECK: strb w0, [x27, w1, uxtw]
++
++ldrsb w0, [x1]
++// CHECK: ldrsb w0, [x27, w1, uxtw]
++
++ldrsb x0, [x1]
++// CHECK: ldrsb x0, [x27, w1, uxtw]
++
++// Halfword loads/stores
++ldrh w0, [x1]
++// CHECK: ldrh w0, [x27, w1, uxtw]
++
++ldrh w0, [x1, #2]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldrh w0, [x28, #2]
++
++strh w0, [x1]
++// CHECK: strh w0, [x27, w1, uxtw]
++
++ldrsh w0, [x1]
++// CHECK: ldrsh w0, [x27, w1, uxtw]
++
++ldrsh x0, [x1]
++// CHECK: ldrsh x0, [x27, w1, uxtw]
++
++// Word loads/stores
++ldr w0, [x1]
++// CHECK: ldr w0, [x27, w1, uxtw]
++
++ldr w0, [x1, #4]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr w0, [x28, #4]
++
++str w0, [x1]
++// CHECK: str w0, [x27, w1, uxtw]
++
++ldrsw x0, [x1]
++// CHECK: ldrsw x0, [x27, w1, uxtw]
++
++// 32-bit pairs
++ldp w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp w0, w1, [x28]
++
++stp w0, w1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp w0, w1, [x28]
++
++// Unscaled loads/stores
++ldurb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldurb w0, [x28]
++
++ldurb w0, [x1, #1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldurb w0, [x28, #1]
++
++ldursb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldursb w0, [x28]
++
++ldurh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldurh w0, [x28]
++
++ldursh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldursh w0, [x28]
++
++ldur w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldur w0, [x28]
++
++ldursw x0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldursw x0, [x28]
++
++sturb w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: sturb w0, [x28]
++
++sturh w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: sturh w0, [x28]
++
++stur w0, [x1]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: stur w0, [x28]
++
++// Byte pre/post-index
++ldrb w0, [x1, #1]!
++// CHECK:      add x1, x1, #1
++// CHECK-NEXT: ldrb w0, [x27, w1, uxtw]
++
++ldrb w0, [x1], #1
++// CHECK:      ldrb w0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #1
++
++strb w0, [x1, #1]!
++// CHECK:      add x1, x1, #1
++// CHECK-NEXT: strb w0, [x27, w1, uxtw]
++
++strb w0, [x1], #1
++// CHECK:      strb w0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #1
++
++// Halfword pre/post-index
++ldrh w0, [x1, #2]!
++// CHECK:      add x1, x1, #2
++// CHECK-NEXT: ldrh w0, [x27, w1, uxtw]
++
++ldrh w0, [x1], #2
++// CHECK:      ldrh w0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #2
++
++// Word pre/post-index
++ldr w0, [x1, #4]!
++// CHECK:      add x1, x1, #4
++// CHECK-NEXT: ldr w0, [x27, w1, uxtw]
++
++ldr w0, [x1], #4
++// CHECK:      ldr w0, [x27, w1, uxtw]
++// CHECK-NEXT: add x1, x1, #4
++
++// Register offset with different sizes
++ldrb w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
++
++ldrh w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
++
++ldrh w0, [x1, x2, lsl #1]
++// CHECK:      add x26, x1, x2, lsl #1
++// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
++
++ldr w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
++
++ldr w0, [x1, x2, lsl #2]
++// CHECK:      add x26, x1, x2, lsl #2
++// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
++
++strb w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: strb w0, [x27, w26, uxtw]
++
++strh w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: strh w0, [x27, w26, uxtw]
++
++str w0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: str w0, [x27, w26, uxtw]
++
++str x0, [x1, x2]
++// CHECK:      add x26, x1, x2
++// CHECK-NEXT: str x0, [x27, w26, uxtw]
++
++// Sign/zero extension variants
++ldrb w0, [x1, w2, uxtw]
++// CHECK:      add x26, x1, w2, uxtw
++// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
++
++ldrb w0, [x1, w2, sxtw]
++// CHECK:      add x26, x1, w2, sxtw
++// CHECK-NEXT: ldrb w0, [x27, w26, uxtw]
++
++ldrh w0, [x1, w2, uxtw]
++// CHECK:      add x26, x1, w2, uxtw
++// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
++
++ldrh w0, [x1, w2, uxtw #1]
++// CHECK:      add x26, x1, w2, uxtw #1
++// CHECK-NEXT: ldrh w0, [x27, w26, uxtw]
++
++ldr w0, [x1, w2, sxtw #2]
++// CHECK:      add x26, x1, w2, sxtw #2
++// CHECK-NEXT: ldr w0, [x27, w26, uxtw]
++
++// Byte loads with #0 shift (shift amount omitted in output).
++ldrsb x0, [x1, x2, sxtx #0]
++// CHECK:      add x26, x1, x2, sxtx{{$}}
++// CHECK-NEXT: ldrsb x0, [x27, w26, uxtw]
++
++ldrsb w0, [x1, x2, sxtx #0]
++// CHECK:      add x26, x1, x2, sxtx{{$}}
++// CHECK-NEXT: ldrsb w0, [x27, w26, uxtw]
++
++ldrsb w0, [x1, w2, sxtw #0]
++// CHECK:      add x26, x1, w2, sxtw{{$}}
++// CHECK-NEXT: ldrsb w0, [x27, w26, uxtw]
++
++ldrsb x0, [x1, w2, uxtw #0]
++// CHECK:      add x26, x1, w2, uxtw{{$}}
++// CHECK-NEXT: ldrsb x0, [x27, w26, uxtw]
++
++ldrsh x0, [x1, x2, sxtx #1]
++// CHECK:      add x26, x1, x2, sxtx #1
++// CHECK-NEXT: ldrsh x0, [x27, w26, uxtw]
++
++ldrsh w0, [x1, x2, sxtx #1]
++// CHECK:      add x26, x1, x2, sxtx #1
++// CHECK-NEXT: ldrsh w0, [x27, w26, uxtw]
++
++ldrsh w0, [x1, w2, sxtw #1]
++// CHECK:      add x26, x1, w2, sxtw #1
++// CHECK-NEXT: ldrsh w0, [x27, w26, uxtw]
++
++ldrsw x0, [x1, x2, sxtx #2]
++// CHECK:      add x26, x1, x2, sxtx #2
++// CHECK-NEXT: ldrsw x0, [x27, w26, uxtw]
++
++ldrsw x0, [x1, w2, sxtw #2]
++// CHECK:      add x26, x1, w2, sxtw #2
++// CHECK-NEXT: ldrsw x0, [x27, w26, uxtw]
++
++// 32-bit pair pre/post-index
++ldp w0, w1, [x2], #8
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp w0, w1, [x28]
++// CHECK-NEXT: add x2, x2, #8
++
++ldp w0, w1, [x2, #8]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp w0, w1, [x28, #8]
++// CHECK-NEXT: add x2, x2, #8
++
++stp w0, w1, [x2], #8
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp w0, w1, [x28]
++// CHECK-NEXT: add x2, x2, #8
++
++stp w0, w1, [x2, #8]!
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp w0, w1, [x28, #8]
++// CHECK-NEXT: add x2, x2, #8
+diff --git a/llvm/test/MC/AArch64/LFI/no-lfi-loads.s b/llvm/test/MC/AArch64/LFI/no-lfi-loads.s
+new file mode 100644
+index 000000000000..1a606452275f
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/no-lfi-loads.s
+@@ -0,0 +1,33 @@
++// RUN: llvm-mc -triple aarch64_lfi -mattr=+no-lfi-loads %s | FileCheck %s
++
++// Stores-only mode: loads pass through, stores are sandboxed.
++
++ldr x0, [x1]
++// CHECK: ldr x0, [x1]
++
++ldr x0, [x1, #8]
++// CHECK: ldr x0, [x1, #8]
++
++ldp x0, x1, [x2]
++// CHECK: ldp x0, x1, [x2]
++
++str x0, [x1]
++// CHECK: str x0, [x27, w1, uxtw]
++
++stp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: stp x0, x1, [x28]
++
++ldr x0, [sp, #8]
++// CHECK: ldr x0, [sp, #8]
++
++str x0, [sp, #8]
++// CHECK: str x0, [sp, #8]
++
++add sp, sp, #8
++// CHECK:      add x26, sp, #8
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++br x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: br x28
+diff --git a/llvm/test/MC/AArch64/LFI/no-lfi-stores.s b/llvm/test/MC/AArch64/LFI/no-lfi-stores.s
+new file mode 100644
+index 000000000000..b1ee8e16b745
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/no-lfi-stores.s
+@@ -0,0 +1,35 @@
++// RUN: llvm-mc -triple aarch64_lfi -mattr=+no-lfi-stores %s | FileCheck %s
++
++// Loads-only mode: stores pass through, loads are sandboxed. This
++// configuration is not very useful in practice.
++
++ldr x0, [x1]
++// CHECK: ldr x0, [x27, w1, uxtw]
++
++ldr x0, [x1, #8]
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: ldr x0, [x28, #8]
++
++ldp x0, x1, [x2]
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: ldp x0, x1, [x28]
++
++str x0, [x1]
++// CHECK: str x0, [x1]
++
++stp x0, x1, [x2]
++// CHECK: stp x0, x1, [x2]
++
++ldr x0, [sp, #8]
++// CHECK: ldr x0, [sp, #8]
++
++str x0, [sp, #8]
++// CHECK: str x0, [sp, #8]
++
++add sp, sp, #8
++// CHECK:      add x26, sp, #8
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++br x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: br x28
+diff --git a/llvm/test/MC/AArch64/LFI/passthrough.s b/llvm/test/MC/AArch64/LFI/passthrough.s
+new file mode 100644
+index 000000000000..1c9190660a5a
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/passthrough.s
+@@ -0,0 +1,30 @@
++// RUN: llvm-mc -triple aarch64_lfi %s 2>&1 | FileCheck %s --implicit-check-not=warning
++
++clrex
++// CHECK: clrex
++clrex #7
++// CHECK: clrex #7
++hint #7
++// CHECK: hint #7
++hint #127
++// CHECK: hint #127
++nop
++// CHECK: nop
++dmb sy
++// CHECK: dmb sy
++dmb ish
++// CHECK: dmb ish
++dsb sy
++// CHECK: dsb sy
++isb
++// CHECK: isb
++yield
++// CHECK: yield
++wfe
++// CHECK: wfe
++wfi
++// CHECK: wfi
++sev
++// CHECK: sev
++sevl
++// CHECK: sevl
+diff --git a/llvm/test/MC/AArch64/LFI/prefetch.s b/llvm/test/MC/AArch64/LFI/prefetch.s
+new file mode 100644
+index 000000000000..55b6bb78fa85
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/prefetch.s
+@@ -0,0 +1,81 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++prfm pldl1keep, [x0]
++// CHECK: prfm pldl1keep, [x27, w0, uxtw]
++
++prfm pldl1strm, [x0]
++// CHECK: prfm pldl1strm, [x27, w0, uxtw]
++
++prfm pldl2keep, [x0]
++// CHECK: prfm pldl2keep, [x27, w0, uxtw]
++
++prfm pldl2strm, [x0]
++// CHECK: prfm pldl2strm, [x27, w0, uxtw]
++
++prfm pldl3keep, [x0]
++// CHECK: prfm pldl3keep, [x27, w0, uxtw]
++
++prfm pldl3strm, [x0]
++// CHECK: prfm pldl3strm, [x27, w0, uxtw]
++
++prfm pstl1keep, [x0]
++// CHECK: prfm pstl1keep, [x27, w0, uxtw]
++
++prfm pstl1strm, [x0]
++// CHECK: prfm pstl1strm, [x27, w0, uxtw]
++
++prfm pstl2keep, [x0]
++// CHECK: prfm pstl2keep, [x27, w0, uxtw]
++
++prfm pstl2strm, [x0]
++// CHECK: prfm pstl2strm, [x27, w0, uxtw]
++
++prfm pldl1keep, [x0, #8]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: prfm pldl1keep, [x28, #8]
++
++prfm pstl1strm, [x0, #16]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: prfm pstl1strm, [x28, #16]
++
++prfm pldl1keep, [x0, x1]
++// CHECK:      add x26, x0, x1
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfm pldl1keep, [x0, x1, lsl #3]
++// CHECK:      add x26, x0, x1, lsl #3
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfm pldl1keep, [x0, w1, uxtw]
++// CHECK:      add x26, x0, w1, uxtw
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfm pldl1keep, [x0, w1, sxtw]
++// CHECK:      add x26, x0, w1, sxtw
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfm pldl1keep, [x0, w1, uxtw #3]
++// CHECK:      add x26, x0, w1, uxtw #3
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfm pldl1keep, [x0, w1, sxtw #3]
++// CHECK:      add x26, x0, w1, sxtw #3
++// CHECK-NEXT: prfm pldl1keep, [x27, w26, uxtw]
++
++prfum pldl1keep, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: prfum pldl1keep, [x28]
++
++prfum pldl1keep, [x0, #1]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: prfum pldl1keep, [x28, #1]
++
++prfum pstl1strm, [x0, #-8]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: prfum pstl1strm, [x28, #-8]
++
++prfm pldl1keep, [sp]
++// CHECK: prfm pldl1keep, [sp]
++
++prfm pldl1keep, [sp, #8]
++// CHECK: prfm pldl1keep, [sp, #8]
+diff --git a/llvm/test/MC/AArch64/LFI/rcpc.s b/llvm/test/MC/AArch64/LFI/rcpc.s
+new file mode 100644
+index 000000000000..eab3d8ed263d
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/rcpc.s
+@@ -0,0 +1,19 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++.arch_extension rcpc
++
++ldapr x0, [x8]
++// CHECK:      add x28, x27, w8, uxtw
++// CHECK-NEXT: ldapr x0, [x28]
++
++ldapr w0, [x8]
++// CHECK:      add x28, x27, w8, uxtw
++// CHECK-NEXT: ldapr w0, [x28]
++
++ldaprh w0, [x8]
++// CHECK:      add x28, x27, w8, uxtw
++// CHECK-NEXT: ldaprh w0, [x28]
++
++ldaprb w0, [x8]
++// CHECK:      add x28, x27, w8, uxtw
++// CHECK-NEXT: ldaprb w0, [x28]
+diff --git a/llvm/test/MC/AArch64/LFI/simd.s b/llvm/test/MC/AArch64/LFI/simd.s
+new file mode 100644
+index 000000000000..8adb203a8df4
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/simd.s
+@@ -0,0 +1,650 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// LD1/ST1 single structure (no post-index)
++
++ld1 { v0.b }[0], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.b }[0], [x28]
++
++ld1 { v0.h }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.h }[1], [x28]
++
++ld1 { v0.s }[2], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.s }[2], [x28]
++
++ld1 { v0.d }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.d }[1], [x28]
++
++st1 { v0.b }[0], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.b }[0], [x28]
++
++st1 { v0.h }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.h }[1], [x28]
++
++st1 { v0.s }[2], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.s }[2], [x28]
++
++st1 { v0.d }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.d }[1], [x28]
++
++// LD1/ST1 single structure with post-index (natural offset)
++
++ld1 { v0.b }[0], [x0], #1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #1
++
++ld1 { v0.h }[1], [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++ld1 { v0.s }[2], [x0], #4
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, #4
++
++ld1 { v0.d }[1], [x0], #8
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.d }[1], [x28]
++// CHECK-NEXT: add x0, x0, #8
++
++st1 { v0.b }[0], [x0], #1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #1
++
++st1 { v0.h }[1], [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++st1 { v0.s }[2], [x0], #4
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, #4
++
++st1 { v0.d }[1], [x0], #8
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.d }[1], [x28]
++// CHECK-NEXT: add x0, x0, #8
++
++// LD1/ST1 single structure with post-index (register offset)
++
++ld1 { v0.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld1 { v0.s }[2], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.d }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.d }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// LD1R (replicate single element to all lanes)
++
++ld1r { v0.8b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.8b }, [x28]
++
++ld1r { v0.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.16b }, [x28]
++
++ld1r { v0.4h }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.4h }, [x28]
++
++ld1r { v0.8h }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.8h }, [x28]
++
++ld1r { v0.2s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.2s }, [x28]
++
++ld1r { v0.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.4s }, [x28]
++
++ld1r { v0.1d }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.1d }, [x28]
++
++ld1r { v0.2d }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.2d }, [x28]
++
++// LD1R with post-index
++
++ld1r { v0.8b }, [x0], #1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.8b }, [x28]
++// CHECK-NEXT: add x0, x0, #1
++
++ld1r { v0.4h }, [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.4h }, [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++ld1r { v0.2s }, [x0], #4
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.2s }, [x28]
++// CHECK-NEXT: add x0, x0, #4
++
++ld1r { v0.1d }, [x0], #8
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.1d }, [x28]
++// CHECK-NEXT: add x0, x0, #8
++
++ld1r { v0.2d }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1r { v0.2d }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// LD1/ST1 multiple structures (1-4 registers)
++
++ld1 { v0.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b }, [x28]
++
++ld1 { v0.16b, v1.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b }, [x28]
++
++ld1 { v0.16b, v1.16b, v2.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b, v2.16b }, [x28]
++
++ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++
++st1 { v0.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b }, [x28]
++
++st1 { v0.16b, v1.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b }, [x28]
++
++st1 { v0.16b, v1.16b, v2.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b, v2.16b }, [x28]
++
++st1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++
++// LD1/ST1 multiple structures with post-index
++
++ld1 { v0.16b }, [x0], #16
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #16
++
++ld1 { v0.16b, v1.16b }, [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++ld1 { v0.16b, v1.16b, v2.16b }, [x0], #48
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b, v2.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #48
++
++ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], #64
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #64
++
++ld1 { v0.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld1 { v0.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// LD2/ST2 multiple structures
++
++ld2 { v0.8b, v1.8b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.8b, v1.8b }, [x28]
++
++ld2 { v0.16b, v1.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.16b, v1.16b }, [x28]
++
++ld2 { v0.4h, v1.4h }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.4h, v1.4h }, [x28]
++
++ld2 { v0.8h, v1.8h }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.8h, v1.8h }, [x28]
++
++ld2 { v0.2s, v1.2s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.2s, v1.2s }, [x28]
++
++ld2 { v0.4s, v1.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.4s, v1.4s }, [x28]
++
++ld2 { v0.2d, v1.2d }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.2d, v1.2d }, [x28]
++
++st2 { v0.16b, v1.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.16b, v1.16b }, [x28]
++
++ld2 { v0.16b, v1.16b }, [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++st2 { v0.16b, v1.16b }, [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++// LD3/ST3 multiple structures
++
++ld3 { v0.8b, v1.8b, v2.8b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.8b, v1.8b, v2.8b }, [x28]
++
++ld3 { v0.16b, v1.16b, v2.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.16b, v1.16b, v2.16b }, [x28]
++
++ld3 { v0.4s, v1.4s, v2.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.4s, v1.4s, v2.4s }, [x28]
++
++st3 { v0.4s, v1.4s, v2.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.4s, v1.4s, v2.4s }, [x28]
++
++ld3 { v0.4s, v1.4s, v2.4s }, [x0], #48
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.4s, v1.4s, v2.4s }, [x28]
++// CHECK-NEXT: add x0, x0, #48
++
++ld3 { v0.4s, v1.4s, v2.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.4s, v1.4s, v2.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// LD4/ST4 multiple structures
++
++ld4 { v0.8b, v1.8b, v2.8b, v3.8b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.8b, v1.8b, v2.8b, v3.8b }, [x28]
++
++ld4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++
++ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x28]
++
++ld4 { v0.2d, v1.2d, v2.2d, v3.2d }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.2d, v1.2d, v2.2d, v3.2d }, [x28]
++
++st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x28]
++
++ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x0], #64
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x28]
++// CHECK-NEXT: add x0, x0, #64
++
++ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// LD2R/LD3R/LD4R (replicate)
++
++ld2r { v0.8b, v1.8b }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2r { v0.8b, v1.8b }, [x28]
++
++ld3r { v0.4s, v1.4s, v2.4s }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3r { v0.4s, v1.4s, v2.4s }, [x28]
++
++ld4r { v0.2d, v1.2d, v2.2d, v3.2d }, [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4r { v0.2d, v1.2d, v2.2d, v3.2d }, [x28]
++
++ld2r { v0.8b, v1.8b }, [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2r { v0.8b, v1.8b }, [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++ld3r { v0.4s, v1.4s, v2.4s }, [x0], #12
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3r { v0.4s, v1.4s, v2.4s }, [x28]
++// CHECK-NEXT: add x0, x0, #12
++
++ld4r { v0.2d, v1.2d, v2.2d, v3.2d }, [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4r { v0.2d, v1.2d, v2.2d, v3.2d }, [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++// LD2/LD3/LD4 single structure (lane loads)
++
++ld2 { v0.b, v1.b }[0], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.b, v1.b }[0], [x28]
++
++ld3 { v0.s, v1.s, v2.s }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.s, v1.s, v2.s }[1], [x28]
++
++ld4 { v0.d, v1.d, v2.d, v3.d }[0], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.d, v1.d, v2.d, v3.d }[0], [x28]
++
++st2 { v0.h, v1.h }[3], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.h, v1.h }[3], [x28]
++
++st3 { v0.s, v1.s, v2.s }[2], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.s, v1.s, v2.s }[2], [x28]
++
++st4 { v0.d, v1.d, v2.d, v3.d }[1], [x0]
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.d, v1.d, v2.d, v3.d }[1], [x28]
++
++ld2 { v0.b, v1.b }[0], [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.b, v1.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++ld3 { v0.s, v1.s, v2.s }[1], [x0], #12
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.s, v1.s, v2.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, #12
++
++ld4 { v0.d, v1.d, v2.d, v3.d }[0], [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.d, v1.d, v2.d, v3.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++ld2 { v0.s, v1.s }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.s, v1.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// ST2/ST3/ST4 lane stores with immediate post-index
++
++st2 { v0.b, v1.b }[0], [x0], #2
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.b, v1.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #2
++
++st2 { v0.h, v1.h }[1], [x0], #4
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.h, v1.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, #4
++
++st2 { v0.s, v1.s }[2], [x0], #8
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.s, v1.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, #8
++
++st2 { v0.d, v1.d }[1], [x0], #16
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.d, v1.d }[1], [x28]
++// CHECK-NEXT: add x0, x0, #16
++
++st3 { v0.b, v1.b, v2.b }[0], [x0], #3
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.b, v1.b, v2.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #3
++
++st3 { v0.h, v1.h, v2.h }[1], [x0], #6
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.h, v1.h, v2.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, #6
++
++st3 { v0.s, v1.s, v2.s }[2], [x0], #12
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.s, v1.s, v2.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, #12
++
++st3 { v0.d, v1.d, v2.d }[0], [x0], #24
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.d, v1.d, v2.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, #24
++
++st4 { v0.b, v1.b, v2.b, v3.b }[0], [x0], #4
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.b, v1.b, v2.b, v3.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, #4
++
++st4 { v0.h, v1.h, v2.h, v3.h }[1], [x0], #8
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.h, v1.h, v2.h, v3.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, #8
++
++st4 { v0.s, v1.s, v2.s, v3.s }[2], [x0], #16
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.s, v1.s, v2.s, v3.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, #16
++
++st4 { v0.d, v1.d, v2.d, v3.d }[0], [x0], #32
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.d, v1.d, v2.d, v3.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, #32
++
++// ST1/ST2/ST3/ST4 lane stores with register post-index
++
++st1 { v0.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.h }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.h }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.s }[2], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.s }[2], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st2 { v0.b, v1.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.b, v1.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st2 { v0.s, v1.s }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.s, v1.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st2 { v0.d, v1.d }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.d, v1.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st3 { v0.b, v1.b, v2.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.b, v1.b, v2.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st3 { v0.s, v1.s, v2.s }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.s, v1.s, v2.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st3 { v0.d, v1.d, v2.d }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.d, v1.d, v2.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.b, v1.b, v2.b, v3.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.b, v1.b, v2.b, v3.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.s, v1.s, v2.s, v3.s }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.s, v1.s, v2.s, v3.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.d, v1.d, v2.d, v3.d }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.d, v1.d, v2.d, v3.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld3 { v0.b, v1.b, v2.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.b, v1.b, v2.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld3 { v0.d, v1.d, v2.d }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld3 { v0.d, v1.d, v2.d }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld4 { v0.b, v1.b, v2.b, v3.b }[0], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.b, v1.b, v2.b, v3.b }[0], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld4 { v0.s, v1.s, v2.s, v3.s }[1], [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld4 { v0.s, v1.s, v2.s, v3.s }[1], [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// ST1/ST2/ST3/ST4 multi-register stores with register post-index
++
++st1 { v0.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.16b, v1.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.16b, v1.16b, v2.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b, v2.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st1 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st2 { v0.16b, v1.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st2 { v0.4s, v1.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st2 { v0.4s, v1.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st3 { v0.16b, v1.16b, v2.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.16b, v1.16b, v2.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st3 { v0.4s, v1.4s, v2.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st3 { v0.4s, v1.4s, v2.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.16b, v1.16b, v2.16b, v3.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++st4 { v0.2d, v1.2d, v2.2d, v3.2d }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: st4 { v0.2d, v1.2d, v2.2d, v3.2d }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld2 { v0.16b, v1.16b }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.16b, v1.16b }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++ld2 { v0.4s, v1.4s }, [x0], x1
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: ld2 { v0.4s, v1.4s }, [x28]
++// CHECK-NEXT: add x0, x0, x1
++
++// SIMD post-index with SP base.
++
++ld1 { v0.16b }, [sp], #16
++// CHECK: ld1 { v0.16b }, [sp], #16
++
++ld1 { v0.16b }, [sp], x1
++// CHECK:      ld1 { v0.16b }, [sp]
++// CHECK-NEXT: add x26, sp, x1
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++st1 { v0.16b }, [sp], #16
++// CHECK: st1 { v0.16b }, [sp], #16
++
++st1 { v0.16b }, [sp], x1
++// CHECK:      st1 { v0.16b }, [sp]
++// CHECK-NEXT: add x26, sp, x1
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++ld2 { v0.16b, v1.16b }, [sp], #32
++// CHECK: ld2 { v0.16b, v1.16b }, [sp], #32
++
++ld2 { v0.16b, v1.16b }, [sp], x2
++// CHECK:      ld2 { v0.16b, v1.16b }, [sp]
++// CHECK-NEXT: add x26, sp, x2
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [sp], x1
++// CHECK:      st4 { v0.4s, v1.4s, v2.4s, v3.4s }, [sp]
++// CHECK-NEXT: add x26, sp, x1
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++ld1 { v0.b }[0], [sp], #1
++// CHECK: ld1 { v0.b }[0], [sp], #1
++
++ld1 { v0.b }[0], [sp], x1
++// CHECK:      ld1 { v0.b }[0], [sp]
++// CHECK-NEXT: add x26, sp, x1
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++st1 { v0.s }[2], [sp], x1
++// CHECK:      st1 { v0.s }[2], [sp]
++// CHECK-NEXT: add x26, sp, x1
++// CHECK-NEXT: add sp, x27, w26, uxtw
+diff --git a/llvm/test/MC/AArch64/LFI/stack.s b/llvm/test/MC/AArch64/LFI/stack.s
+new file mode 100644
+index 000000000000..82d57e749a48
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/stack.s
+@@ -0,0 +1,41 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++ldr x0, [sp, #16]!
++// CHECK: ldr x0, [sp, #16]!
++
++ldr x0, [sp], #16
++// CHECK: ldr x0, [sp], #16
++
++str x0, [sp, #16]!
++// CHECK: str x0, [sp, #16]!
++
++str x0, [sp], #16
++// CHECK: str x0, [sp], #16
++
++mov sp, x0
++// CHECK: add sp, x27, w0, uxtw
++
++add sp, sp, #8
++// CHECK:      add x26, sp, #8
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++sub sp, sp, #8
++// CHECK:      sub x26, sp, #8
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++add sp, sp, x0
++// CHECK:      add x26, sp, x0
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++sub sp, sp, x0
++// CHECK:      sub x26, sp, x0
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++sub sp, sp, #1, lsl #12
++// CHECK:      sub x26, sp, #1, lsl #12
++// CHECK-NEXT: add sp, x27, w26, uxtw
++
++// SP-based load that defines LR (x30) still needs LR sandboxed after the load.
++ldp x29, x30, [sp], #16
++// CHECK:      ldp x29, x30, [sp], #16
++// CHECK-NEXT: add x30, x27, w30, uxtw
+diff --git a/llvm/test/MC/AArch64/LFI/sys.s b/llvm/test/MC/AArch64/LFI/sys.s
+index df4b69460085..045c33396253 100644
+--- a/llvm/test/MC/AArch64/LFI/sys.s
++++ b/llvm/test/MC/AArch64/LFI/sys.s
+@@ -5,3 +5,27 @@ svc #0
+ // CHECK-NEXT: ldur x30, [x27, #-8]
+ // CHECK-NEXT: blr x30
+ // CHECK-NEXT: add x30, x27, w26, uxtw
++
++dc zva, x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: dc zva, x28
++
++dc zva, x5
++// CHECK:      add x28, x27, w5, uxtw
++// CHECK-NEXT: dc zva, x28
++
++dc cvac, x0
++// CHECK:      add x28, x27, w0, uxtw
++// CHECK-NEXT: dc cvac, x28
++
++dc cvau, x1
++// CHECK:      add x28, x27, w1, uxtw
++// CHECK-NEXT: dc cvau, x28
++
++dc civac, x2
++// CHECK:      add x28, x27, w2, uxtw
++// CHECK-NEXT: dc civac, x28
++
++ic ivau, x4
++// CHECK:      add x28, x27, w4, uxtw
++// CHECK-NEXT: ic ivau, x28
+-- 
+2.55.0.229.g6434b31f56-goog
+

@@ -1,0 +1,745 @@
+From 26194d4623650fd3f9b58cda34b318197613e702 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Wed, 15 Jul 2026 11:58:10 -0700
+Subject: [PATCH] [LFI][AArch64] Add PAC support for LFI (#207915)
+
+This patch adds support for PAC instructions that sign `x30` by deferring
+the LFI mask until the next control-flow instruction or label, allowing
+an authentication instruction to run before the mask, which overwrites
+the PAC signature bits in the top bits of the pointer. This relies on
+FEAT_FPAC to provide a security benefit, which requires authentication
+failure to cause a trap, rather than expecting the branch on an invalid
+pointer to cause the trap.
+---
+ llvm/docs/LFI.rst                             | 100 ++++++++++-
+ llvm/include/llvm/MC/MCLFIRewriter.h          |   9 +-
+ llvm/lib/MC/MCStreamer.cpp                    |   5 +-
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  |  23 +++
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 165 +++++++++++++++++-
+ .../MCTargetDesc/AArch64MCLFIRewriter.h       |  20 ++-
+ llvm/test/MC/AArch64/LFI/guard-elim.s         |   4 +-
+ llvm/test/MC/AArch64/LFI/mem-lr.s             |  26 +++
+ llvm/test/MC/AArch64/LFI/pac-errors.s         |  12 ++
+ llvm/test/MC/AArch64/LFI/pac.s                |  53 ++++++
+ llvm/test/MC/AArch64/LFI/return.s             |  43 +++++
+ 11 files changed, 449 insertions(+), 11 deletions(-)
+ create mode 100644 llvm/test/MC/AArch64/LFI/pac-errors.s
+ create mode 100644 llvm/test/MC/AArch64/LFI/pac.s
+
+diff --git a/llvm/docs/LFI.rst b/llvm/docs/LFI.rst
+index cf54e4e12002..991ba500cb14 100644
+--- a/llvm/docs/LFI.rst
++++ b/llvm/docs/LFI.rst
+@@ -295,8 +295,13 @@ before moving it back into ``sp`` with a safe ``add``.
+ Link register modification
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-When the link register is modified, we write the modified value to a
+-temporary, before loading it back into ``x30`` with a safe ``add``.
++When the link register is modified, it is guarded back into the sandbox with a
++safe ``add x30, x27, w30, uxtw``. This guard is deferred until the next
++control-flow instruction rather than emitted immediately after the
++modification. Deferral keeps a signed return address intact so that a following
++authentication instruction (such as ``autiasp``) can run before the guard,
++which would otherwise destroy the pointer authentication signature. See
++`Pointer Authentication Code (PAC) support`_.
+ 
+ +---------------------------+-------------------------------+
+ |         Original          |           Rewritten           |
+@@ -316,6 +321,97 @@ temporary, before loading it back into ``x30`` with a safe ``add``.
+ |                           |                               |
+ +---------------------------+-------------------------------+
+ 
++Pointer Authentication Code (PAC) support
++~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++LFI is compatible with Arm Pointer Authentication Code (PAC) instructions,
++which are used to sign and authenticate ``x30`` to protect against control-flow
++hijacking.
++
++The typical use is ``-mbranch-protection=pac-ret``, which signs only the return
++address in ``x30`` using the hint-space ``paciasp`` and ``autiasp``
++instructions. The combined authenticate-and-branch and authenticate-and-return
++instructions covered below require Armv8.3-a and are not produced by
++``-mbranch-protection``. They can appear in hand-written assembly or from
++environments that sign all code pointers, so the rewriter still sandboxes them
++rather than passing them through unmodified.
++
++To gain the security benefit of PAC under LFI, the hardware must implement
++``FEAT_FPAC``, so that authentication failures fault immediately. Without
++``FEAT_FPAC``, a failed authentication produces a poisoned pointer, which LFI
++still keeps confined to the sandbox by masking it, but the mask overwrites the
++poison caused by the authentication failure.
++
+++-------------------+------------------------------+
++|     Original      |          Rewritten           |
+++-------------------+------------------------------+
++| .. code-block::   | .. code-block::              |
++|                   |                              |
++|    paciasp        |    paciasp                   |
++|                   |                              |
+++-------------------+------------------------------+
++| .. code-block::   | .. code-block::              |
++|                   |                              |
++|    autiasp        |    autiasp                   |
++|    ret            |    add x30, x27, w30, uxtw   |
++|                   |    ret                       |
++|                   |                              |
+++-------------------+------------------------------+
++
++Authenticated returns (``retaa``/``retab``) combine authentication with return,
++and must be expanded during rewriting.
++
+++-----------------+-------------------------------+
++|    Original     |           Rewritten           |
+++-----------------+-------------------------------+
++| .. code-block:: | .. code-block::               |
++|                 |                               |
++|    retaa        |    autiasp                    |
++|                 |    add x30, x27, w30, uxtw    |
++|                 |    ret                        |
++|                 |                               |
+++-----------------+-------------------------------+
++| .. code-block:: | .. code-block::               |
++|                 |                               |
++|    retab        |    autibsp                    |
++|                 |    add x30, x27, w30, uxtw    |
++|                 |    ret                        |
++|                 |                               |
+++-----------------+-------------------------------+
++
++Authenticated branches (``braa``/``brab``/``braaz``/``brabz``) and calls
++(``blraa``/``blrab``/``blraaz``/``blrabz``) combine authentication with an
++indirect branch or call. They are expanded by first authenticating the target
++register in place, then performing a normal sandboxed branch or call.
++
+++-------------------+-------------------------------+
++|     Original      |           Rewritten           |
+++-------------------+-------------------------------+
++| .. code-block::   | .. code-block::               |
++|                   |                               |
++|    braa xN, xM    |    autia xN, xM               |
++|                   |    add x28, x27, wN, uxtw     |
++|                   |    br x28                     |
++|                   |                               |
+++-------------------+-------------------------------+
++| .. code-block::   | .. code-block::               |
++|                   |                               |
++|    braaz xN       |    autiza xN                  |
++|                   |    add x28, x27, wN, uxtw     |
++|                   |    br x28                     |
++|                   |                               |
+++-------------------+-------------------------------+
++| .. code-block::   | .. code-block::               |
++|                   |                               |
++|    blraa xN, xM   |    autia xN, xM               |
++|                   |    add x28, x27, wN, uxtw     |
++|                   |    blr x28                    |
++|                   |                               |
+++-------------------+-------------------------------+
++
++Authenticated exception returns (``eret``/``eretaa``/``eretab``) are privileged
++and are not supported: the rewriter reports an error for them.
++
+ System instructions
+ ~~~~~~~~~~~~~~~~~~~
+ 
+diff --git a/llvm/include/llvm/MC/MCLFIRewriter.h b/llvm/include/llvm/MC/MCLFIRewriter.h
+index 33d51f29ce99..82a57ef54ce6 100644
+--- a/llvm/include/llvm/MC/MCLFIRewriter.h
++++ b/llvm/include/llvm/MC/MCLFIRewriter.h
+@@ -64,8 +64,13 @@ public:
+                            const MCSubtargetInfo &STI) = 0;
+ 
+   // Called when a label is emitted. Used for optimizations that require
+-  // information about jump targets, such as guard elimination.
+-  virtual void onLabel(const MCSymbol *Symbol) {}
++  // information about jump targets, such as guard elimination, and to flush
++  // any rewriter state that must not cross a potential branch target.
++  virtual void onLabel(const MCSymbol *Symbol, MCStreamer &Out) {}
++
++  // Called when the stream is finalized. Used to flush any pending rewriter
++  // state before the stream ends.
++  virtual void finish(MCStreamer &Out) {}
+ };
+ 
+ } // namespace llvm
+diff --git a/llvm/lib/MC/MCStreamer.cpp b/llvm/lib/MC/MCStreamer.cpp
+index 1cd94715b259..e8e88ce7b83c 100644
+--- a/llvm/lib/MC/MCStreamer.cpp
++++ b/llvm/lib/MC/MCStreamer.cpp
+@@ -413,7 +413,7 @@ void MCStreamer::emitLabel(MCSymbol *Symbol, SMLoc Loc) {
+   Symbol->setFragment(&getCurrentSectionOnly()->getDummyFragment());
+ 
+   if (LFIRewriter)
+-    LFIRewriter->onLabel(Symbol);
++    LFIRewriter->onLabel(Symbol, *this);
+ 
+   MCTargetStreamer *TS = getTargetStreamer();
+   if (TS)
+@@ -1283,6 +1283,9 @@ void MCStreamer::finish(SMLoc EndLoc) {
+     return;
+   }
+ 
++  if (LFIRewriter)
++    LFIRewriter->finish(*this);
++
+   MCTargetStreamer *TS = getTargetStreamer();
+   if (TS)
+     TS->finish();
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 018ac03f6295..ec4fe39aafd8 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -130,6 +130,29 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
+     if (MI.getOperand(0).getReg() != AArch64::LR)
+       return 8;
+     return 4;
++  case AArch64::RETAA:
++  case AArch64::RETAB:
++    // Authenticated returns expand to 3 instructions (authenticate + guard +
++    // ret).
++    return 12;
++  case AArch64::BRAA:
++  case AArch64::BRAAZ:
++  case AArch64::BRAB:
++  case AArch64::BRABZ:
++  case AArch64::BLRAA:
++  case AArch64::BLRAAZ:
++  case AArch64::BLRAB:
++  case AArch64::BLRABZ:
++    // Authenticated branches/calls expand to 3 instructions (authenticate +
++    // guard + branch).
++    return 12;
++  case AArch64::AUTIASP:
++  case AArch64::AUTIBSP:
++  case AArch64::AUTIAZ:
++  case AArch64::AUTIBZ:
++  case AArch64::XPACLRI:
++    // Authenticating LR expands to the instruction plus a deferred LR guard.
++    return 8;
+   case AArch64::SYSxt:
+     // VA-based DC/IC ops (op1=3, Cn=7, op2=1) expand to 2 instructions.
+     if (MI.getOperand(0).getImm() == 3 && MI.getOperand(1).getImm() == 7 &&
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 29f2ace01ade..3c24f5ab62a6 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -156,6 +156,52 @@ static bool mayPrefetch(const MCInst &Inst) {
+   }
+ }
+ 
++static bool isAuthenticatedBranch(unsigned Opcode) {
++  switch (Opcode) {
++  case AArch64::BRAA:
++  case AArch64::BRAAZ:
++  case AArch64::BRAB:
++  case AArch64::BRABZ:
++    return true;
++  default:
++    return false;
++  }
++}
++
++static bool isAuthenticatedCall(unsigned Opcode) {
++  switch (Opcode) {
++  case AArch64::BLRAA:
++  case AArch64::BLRAAZ:
++  case AArch64::BLRAB:
++  case AArch64::BLRABZ:
++    return true;
++  default:
++    return false;
++  }
++}
++
++static bool isAuthenticatedReturn(unsigned Opcode) {
++  return Opcode == AArch64::RETAA || Opcode == AArch64::RETAB;
++}
++
++static bool isExceptionReturn(unsigned Opcode) {
++  return Opcode == AArch64::ERET || Opcode == AArch64::ERETAA ||
++         Opcode == AArch64::ERETAB;
++}
++
++static bool pacWritesLR(const MCInst &Inst) {
++  switch (Inst.getOpcode()) {
++  case AArch64::AUTIASP:
++  case AArch64::AUTIBSP:
++  case AArch64::AUTIAZ:
++  case AArch64::AUTIBZ:
++  case AArch64::XPACLRI:
++    return true;
++  default:
++    return false;
++  }
++}
++
+ // User-mode DC/IC instructions that take a virtual address operand. Encoded as
+ // SYSxt with op1=3, Cn=7, op2=1 where the Cm field selects the operation.
+ static bool isVASysOp(const MCInst &Inst) {
+@@ -251,11 +297,26 @@ MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+   return {};
+ }
+ 
+-void AArch64MCLFIRewriter::onLabel(const MCSymbol *) {
++void AArch64MCLFIRewriter::onLabel(const MCSymbol *, MCStreamer &Out) {
++  // Flush a deferred LR guard before the label, since the label is a potential
++  // branch target and code reached through it may use LR for control flow.
++  if (DeferredLRGuard && LastSTI) {
++    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
++    DeferredLRGuard = false;
++  }
++
+   // Invalidate guard state since the label is a potential branch target.
+   ActiveGuardReg = std::nullopt;
+ }
+ 
++void AArch64MCLFIRewriter::finish(MCStreamer &Out) {
++  // Flush a deferred LR guard at the end of the stream.
++  if (DeferredLRGuard && LastSTI) {
++    emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
++    DeferredLRGuard = false;
++  }
++}
++
+ void AArch64MCLFIRewriter::emitInst(const MCInst &Inst, MCStreamer &Out,
+                                     const MCSubtargetInfo &STI) {
+   // Invalidate the active guard if this instruction modifies the guarded
+@@ -438,7 +499,7 @@ void AArch64MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+ // modify x30
+ // ->
+ // modify x30
+-// add x30, x27, w30, uxtw
++// add x30, x27, w30, uxtw (deferred)
+ void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
+                                                  MCStreamer &Out,
+                                                  const MCSubtargetInfo &STI) {
+@@ -447,7 +508,71 @@ void AArch64MCLFIRewriter::rewriteLRModification(const MCInst &Inst,
+     rewriteLoadStore(Inst, Out, STI);
+   else
+     emitInst(Inst, Out, STI);
++
++  // Defer the LR guard until the next control-flow instruction or label. This
++  // keeps a signed return address intact so that an authentication instruction
++  // can run before the mask destroys the PAC bits.
++  DeferredLRGuard = true;
++}
++
++// retaa / retab
++// ->
++// autiasp / autibsp
++// add x30, x27, w30, uxtw
++// ret
++void AArch64MCLFIRewriter::rewriteAuthenticatedReturn(
++    const MCInst &Inst, MCStreamer &Out, const MCSubtargetInfo &STI) {
++  MCInst Auth;
++  Auth.setOpcode(Inst.getOpcode() == AArch64::RETAA ? AArch64::AUTIASP
++                                                    : AArch64::AUTIBSP);
++  emitInst(Auth, Out, STI);
++
+   emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
++  emitBranch(AArch64::RET, AArch64::LR, Out, STI);
++}
++
++// {braa,brab,braaz,brabz} xN[, xM]  (blra* for calls)
++// ->
++// {autia,autib,autiza,autizb} xN[, xM]
++// add x28, x27, wN, uxtw
++// {br,blr} x28
++void AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
++    const MCInst &Inst, unsigned BranchOpcode, MCStreamer &Out,
++    const MCSubtargetInfo &STI) {
++  MCRegister TargetReg = Inst.getOperand(0).getReg();
++
++  // Select the authentication opcode for the target register.
++  MCInst Auth;
++  switch (Inst.getOpcode()) {
++  case AArch64::BRAA:
++  case AArch64::BLRAA:
++    Auth.setOpcode(AArch64::AUTIA);
++    break;
++  case AArch64::BRAB:
++  case AArch64::BLRAB:
++    Auth.setOpcode(AArch64::AUTIB);
++    break;
++  case AArch64::BRAAZ:
++  case AArch64::BLRAAZ:
++    Auth.setOpcode(AArch64::AUTIZA);
++    break;
++  case AArch64::BRABZ:
++  case AArch64::BLRABZ:
++    Auth.setOpcode(AArch64::AUTIZB);
++    break;
++  default:
++    llvm_unreachable("unexpected authenticated branch/call opcode");
++  }
++
++  Auth.addOperand(MCOperand::createReg(TargetReg)); // dst
++  Auth.addOperand(MCOperand::createReg(TargetReg)); // src (tied to dst)
++  if (Auth.getOpcode() == AArch64::AUTIA || Auth.getOpcode() == AArch64::AUTIB)
++    Auth.addOperand(Inst.getOperand(1)); // modifier
++  emitInst(Auth, Out, STI);
++
++  // Guard the authenticated target and branch/call through x28.
++  emitAddMask(LFIAddrReg, TargetReg, Out, STI);
++  emitBranch(BranchOpcode, LFIAddrReg, Out, STI);
+ }
+ 
+ // svc #0
+@@ -806,6 +931,33 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+   if (isVASysOp(Inst))
+     return rewriteVASysOp(Inst, Out, STI);
+ 
++  if (isExceptionReturn(Inst.getOpcode())) {
++    error(Inst, "exception returns are not supported by LFI");
++    return;
++  }
++
++  // PAC authenticated returns expand to authenticate + guarded RET. The
++  // expansion emits its own LR guard, so discard any deferred guard: masking
++  // before the authentication would corrupt the signed return address.
++  if (isAuthenticatedReturn(Inst.getOpcode())) {
++    DeferredLRGuard = false;
++    return rewriteAuthenticatedReturn(Inst, Out, STI);
++  }
++
++  // Flush a deferred LR guard before any control-flow instruction, so that a
++  // modified LR is sandboxed before it can be used to transfer control.
++  if (DeferredLRGuard && (isReturn(Inst) || isIndirectBranch(Inst) ||
++                          isCall(Inst) || isBranch(Inst))) {
++    emitAddMask(AArch64::LR, AArch64::LR, Out, STI);
++    DeferredLRGuard = false;
++  }
++
++  // PAC authenticated branches/calls expand to authenticate + guarded branch.
++  if (isAuthenticatedBranch(Inst.getOpcode()))
++    return rewriteAuthenticatedBranchOrCall(Inst, AArch64::BR, Out, STI);
++  if (isAuthenticatedCall(Inst.getOpcode()))
++    return rewriteAuthenticatedBranchOrCall(Inst, AArch64::BLR, Out, STI);
++
+   // Control flow.
+   switch (Inst.getOpcode()) {
+   case AArch64::RET:
+@@ -819,8 +971,9 @@ void AArch64MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+   if (mayModifySP(Inst))
+     return rewriteSPModification(Inst, Out, STI);
+ 
+-  // Link register modification.
+-  if (explicitlyModifiesRegister(Inst, AArch64::LR))
++  // Link register modification. This covers explicit writes to x30 as well as
++  // PAC instructions that write LR in place, which define LR implicitly.
++  if (explicitlyModifiesRegister(Inst, AArch64::LR) || pacWritesLR(Inst))
+     return rewriteLRModification(Inst, Out, STI);
+ 
+   // Memory access.
+@@ -859,6 +1012,10 @@ bool AArch64MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return false;
+   Guard = true;
+ 
++  // Record the subtarget so a deferred LR guard can be emitted from
++  // onLabel/finish, which are not given an MCSubtargetInfo.
++  LastSTI = &STI;
++
+   doRewriteInst(Inst, Out, STI);
+ 
+   Guard = false;
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+index b21c381393cf..d7a70b0e163a 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.h
+@@ -52,12 +52,23 @@ public:
+   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI) override;
+ 
+-  void onLabel(const MCSymbol *Symbol) override;
++  void onLabel(const MCSymbol *Symbol, MCStreamer &Out) override;
++  void finish(MCStreamer &Out) override;
+ 
+ private:
+   /// Recursion guard to prevent infinite loops when emitting instructions.
+   bool Guard = false;
+ 
++  /// When set, an instruction has modified the link register but its guard
++  /// (`add x30, x27, w30, uxtw`) has not been emitted yet. The guard is
++  /// deferred until the next control-flow instruction so that pointer
++  /// authentication can run on the signed value before the mask overwrites the
++  /// upper bits of the pointer.
++  bool DeferredLRGuard = false;
++
++  /// Most recently seen MCSubtargetInfo.
++  const MCSubtargetInfo *LastSTI = nullptr;
++
+   /// Deferred `.tlsdesccall` symbol. The directive attaches a
+   /// R_AARCH64_TLSDESC_CALL relocation to the following BLR. Since LFI inserts
+   /// a guard before that BLR, the marker is deferred and re-emitted between
+@@ -120,6 +131,13 @@ private:
+   void rewriteLRModification(const MCInst &Inst, MCStreamer &Out,
+                              const MCSubtargetInfo &STI);
+ 
++  // PAC instructions.
++  void rewriteAuthenticatedReturn(const MCInst &Inst, MCStreamer &Out,
++                                  const MCSubtargetInfo &STI);
++  void rewriteAuthenticatedBranchOrCall(const MCInst &Inst,
++                                        unsigned BranchOpcode, MCStreamer &Out,
++                                        const MCSubtargetInfo &STI);
++
+   // System instructions.
+   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI);
+diff --git a/llvm/test/MC/AArch64/LFI/guard-elim.s b/llvm/test/MC/AArch64/LFI/guard-elim.s
+index 8a684027f418..f4c5c5869fba 100644
+--- a/llvm/test/MC/AArch64/LFI/guard-elim.s
++++ b/llvm/test/MC/AArch64/LFI/guard-elim.s
+@@ -153,12 +153,14 @@ lr_mask_between:
+ ldr x0, [x12, #8]
+ ldr x30, [x12, #16]
+ ldr x1, [x12, #24]
++ret
+ // CHECK-LABEL: lr_mask_between:
+ // CHECK-NEXT: add x28, x27, w12, uxtw
+ // CHECK-NEXT: ldr x0, [x28, #8]
+ // CHECK-NEXT: ldr x30, [x28, #16]
+-// CHECK-NEXT: add x30, x27, w30, uxtw
+ // CHECK-NEXT: ldr x1, [x28, #24]
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ // A .lfi_rewrite_disable region invalidates the guard, since the instructions
+ // inside it bypass the rewriter and may modify the base register or x28.
+diff --git a/llvm/test/MC/AArch64/LFI/mem-lr.s b/llvm/test/MC/AArch64/LFI/mem-lr.s
+index e9b53131042f..3ae87090b9f7 100644
+--- a/llvm/test/MC/AArch64/LFI/mem-lr.s
++++ b/llvm/test/MC/AArch64/LFI/mem-lr.s
+@@ -4,68 +4,94 @@
+ // in addition to masking LR after the access.
+ 
+ ldr x30, [x0, #0x100]
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldr x30, [x28, #256]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0]
++ret
+ // CHECK:      ldr x30, [x27, w0, uxtw]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0, #8]!
++ret
+ // CHECK:      add x0, x0, #8
+ // CHECK-NEXT: ldr x30, [x27, w0, uxtw]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0, #-8]!
++ret
+ // CHECK:      sub x0, x0, #8
+ // CHECK-NEXT: ldr x30, [x27, w0, uxtw]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0], #8
++ret
+ // CHECK:      ldr x30, [x27, w0, uxtw]
+ // CHECK-NEXT: add x0, x0, #8
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0, x1]
++ret
+ // CHECK:      add x26, x0, x1
+ // CHECK-NEXT: ldr x30, [x27, w26, uxtw]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldr x30, [x0, x1, lsl #3]
++ret
+ // CHECK:      add x26, x0, x1, lsl #3
+ // CHECK-NEXT: ldr x30, [x27, w26, uxtw]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldur x30, [x0, #4]
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldur x30, [x28, #4]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldp x29, x30, [x0]
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldp x29, x30, [x28]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldp x29, x30, [x0, #16]
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldp x29, x30, [x28, #16]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldp x29, x30, [x0, #16]!
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldp x29, x30, [x28, #16]
+ // CHECK-NEXT: add x0, x0, #16
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ ldp x29, x30, [x0], #16
++ret
+ // CHECK:      add x28, x27, w0, uxtw
+ // CHECK-NEXT: ldp x29, x30, [x28]
+ // CHECK-NEXT: add x0, x0, #16
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+ 
+ // SP-based LR loads are safe without base sandboxing.
+ 
+ ldr x30, [sp, #16]
++ret
+ // CHECK:      ldr x30, [sp, #16]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
+diff --git a/llvm/test/MC/AArch64/LFI/pac-errors.s b/llvm/test/MC/AArch64/LFI/pac-errors.s
+new file mode 100644
+index 000000000000..9259c034ec79
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/pac-errors.s
+@@ -0,0 +1,12 @@
++// RUN: not llvm-mc -triple aarch64_lfi %s 2>&1 | FileCheck %s
++
++.arch_extension pauth
++
++eret
++// CHECK: error: exception returns are not supported by LFI
++
++eretaa
++// CHECK: error: exception returns are not supported by LFI
++
++eretab
++// CHECK: error: exception returns are not supported by LFI
+diff --git a/llvm/test/MC/AArch64/LFI/pac.s b/llvm/test/MC/AArch64/LFI/pac.s
+new file mode 100644
+index 000000000000..861b09ed62ef
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/pac.s
+@@ -0,0 +1,53 @@
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++.arch_extension pauth
++
++retaa
++// CHECK:      autiasp
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++retab
++// CHECK:      autibsp
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++braa x0, x1
++// CHECK:      autia x0, x1
++// CHECK-NEXT: add x28, x27, w0, uxtw
++// CHECK-NEXT: br x28
++
++braaz x2
++// CHECK:      autiza x2
++// CHECK-NEXT: add x28, x27, w2, uxtw
++// CHECK-NEXT: br x28
++
++brab x3, x4
++// CHECK:      autib x3, x4
++// CHECK-NEXT: add x28, x27, w3, uxtw
++// CHECK-NEXT: br x28
++
++brabz x5
++// CHECK:      autizb x5
++// CHECK-NEXT: add x28, x27, w5, uxtw
++// CHECK-NEXT: br x28
++
++blraa x0, x1
++// CHECK:      autia x0, x1
++// CHECK-NEXT: add x28, x27, w0, uxtw
++// CHECK-NEXT: blr x28
++
++blraaz x2
++// CHECK:      autiza x2
++// CHECK-NEXT: add x28, x27, w2, uxtw
++// CHECK-NEXT: blr x28
++
++blrab x3, x4
++// CHECK:      autib x3, x4
++// CHECK-NEXT: add x28, x27, w3, uxtw
++// CHECK-NEXT: blr x28
++
++blrabz x5
++// CHECK:      autizb x5
++// CHECK-NEXT: add x28, x27, w5, uxtw
++// CHECK-NEXT: blr x28
+diff --git a/llvm/test/MC/AArch64/LFI/return.s b/llvm/test/MC/AArch64/LFI/return.s
+index 7e7431df57aa..9becff0a55e9 100644
+--- a/llvm/test/MC/AArch64/LFI/return.s
++++ b/llvm/test/MC/AArch64/LFI/return.s
+@@ -1,5 +1,7 @@
+ // RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
+ 
++.arch_extension pauth
++
+ mov x30, x0
+ ret
+ // CHECK:      mov x30, x0
+@@ -23,3 +25,44 @@ ret
+ // CHECK:      ldp x30, x29, [sp]
+ // CHECK-NEXT: add x30, x27, w30, uxtw
+ // CHECK-NEXT: ret
++
++mov x30, x0
++next_func:
++nop
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK:      nop
++
++autiasp
++ret
++// CHECK:      autiasp
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++paciasp
++nop
++// CHECK:      paciasp
++// CHECK-NEXT: nop
++
++mov x30, x0
++bl some_func
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: bl some_func
++
++mov x30, x0
++blr x1
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: add x28, x27, w1, uxtw
++// CHECK-NEXT: blr x28
++
++mov x30, x0
++b some_func
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: b some_func
++
++mov x30, x0
++// CHECK:      mov x30, x0
++// CHECK-NEXT: add x30, x27, w30, uxtw
+-- 
+2.55.0.229.g6434b31f56-goog
+

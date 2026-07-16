@@ -1,0 +1,63 @@
+From 2b63e5e75dbadc30218e41c8113a40acbc625334 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Tue, 21 Apr 2026 15:42:31 -0700
+Subject: [PATCH] [LFI][libunwind] Avoid writing to reserved registers on the
+ `aarch64_lfi` target (#192739)
+
+The registers `x25`, `x26`, `x27`, and `x28` are reserved for the
+`aarch64_lfi` target and should not be written/used. See
+`llvm/docs/LFI.rst` for more details. They contain fixed constants or
+temporaries used as part of assembly-level rewrites of load/store
+instructions. The rewriter will reject programs that attempt to write to
+these registers. It is technically OK to save/read them (in
+`UnwindRegistersSave.S`), but there is no point since there is no need
+to restore them (and to maintain LFI's security invariant, they in fact
+cannot be written).
+---
+ libunwind/src/UnwindRegistersRestore.S | 6 ++++++
+ libunwind/src/UnwindRegistersSave.S    | 6 ++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/libunwind/src/UnwindRegistersRestore.S b/libunwind/src/UnwindRegistersRestore.S
+index 76a80344034f..8f84f4d456a3 100644
+--- a/libunwind/src/UnwindRegistersRestore.S
++++ b/libunwind/src/UnwindRegistersRestore.S
+@@ -678,9 +678,15 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_jumpto)
+   ldp    x18,x19, [x0, #0x090]
+   ldp    x20,x21, [x0, #0x0A0]
+   ldp    x22,x23, [x0, #0x0B0]
++#if defined(__LFI__)
++  ldr    x24,     [x0, #0x0C0]
++  // Skip reloading x25-x28; reserved by LFI ABI.
++  ldr    x29,     [x0, #0x0E8]
++#else
+   ldp    x24,x25, [x0, #0x0C0]
+   ldp    x26,x27, [x0, #0x0D0]
+   ldp    x28,x29, [x0, #0x0E0]
++#endif
+ 
+ #if defined(__ARM_FP) && __ARM_FP != 0
+   ldp    d0, d1,  [x0, #0x110]
+diff --git a/libunwind/src/UnwindRegistersSave.S b/libunwind/src/UnwindRegistersSave.S
+index f988fd461def..ca9a97b18e76 100644
+--- a/libunwind/src/UnwindRegistersSave.S
++++ b/libunwind/src/UnwindRegistersSave.S
+@@ -794,9 +794,15 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+   stp    x18,x19, [x0, #0x090]
+   stp    x20,x21, [x0, #0x0A0]
+   stp    x22,x23, [x0, #0x0B0]
++#if defined(__LFI__)
++  str    x24,     [x0, #0x0C0]
++  // Skip spilling x25-x28; reserved by LFI ABI.
++  str    x29,     [x0, #0x0E8]
++#else
+   stp    x24,x25, [x0, #0x0C0]
+   stp    x26,x27, [x0, #0x0D0]
+   stp    x28,x29, [x0, #0x0E0]
++#endif
+   str    x30,     [x0, #0x0F0]
+   mov    x1,sp
+   str    x1,      [x0, #0x0F8]
+-- 
+2.55.0.229.g6434b31f56-goog
+
