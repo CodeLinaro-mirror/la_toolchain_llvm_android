@@ -17,6 +17,7 @@
 
 import argparse
 import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -53,6 +54,12 @@ def parse_args(sys_argv: Optional[List[str]]):
     )
 
     parser.add_argument(
+        "--cache-dir",
+        type=str,
+        help="Directory to cache downloaded tarballs",
+    )
+
+    parser.add_argument(
         "path",
         type=str,
         nargs=1,
@@ -67,10 +74,27 @@ def get_url(build_id: str):
     return url
 
 
-def fetch_prebuilts(build_id: str, path: str):
+def fetch_prebuilts(build_id: str, path: str, cache_dir: Optional[str] = None):
     gs_url = get_url(build_id)
-    with tempfile.TemporaryDirectory() as td:
-        cmd = ["gcloud", "storage", "cp", gs_url, td]
+    if cache_dir:
+        cache_path = Path(cache_dir) / build_id
+        if cache_path.exists():
+            tarballs = list(cache_path.glob("*.tar.xz"))
+            if tarballs:
+                print(f"Using cached tarball: {tarballs[0]}")
+                extract_tarball(path, str(tarballs[0]))
+                return True
+
+    temp_dir = None
+    if cache_dir:
+        download_dir = Path(cache_dir) / build_id
+        download_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        temp_dir = tempfile.TemporaryDirectory()
+        download_dir = Path(temp_dir.name)
+
+    try:
+        cmd = ["gcloud", "storage", "cp", gs_url, str(download_dir)]
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode > 0:
             err_string = str(result.stderr, encoding="utf-8")
@@ -78,14 +102,19 @@ def fetch_prebuilts(build_id: str, path: str):
                 print(f"Build {build_id} failed to build.")
             else:
                 print(err_string)
-        else:
-            print(f"Download build {build_id} successful!")
+            return False
 
-            # extract the toolchain
-            tar = os.path.abspath(td) + "/" + os.listdir(td)[0]
-            extract_tarball(path, tar)
-            return True
-    return False
+        print(f"Download build {build_id} successful!")
+        tarballs = list(download_dir.glob("*.tar.xz"))
+        if not tarballs:
+            print("Download succeeded but no tarball found.")
+            return False
+
+        extract_tarball(path, str(tarballs[0]))
+        return True
+    finally:
+        if temp_dir:
+            temp_dir.cleanup()
 
 
 def check_valid_build(build_id: str):
@@ -231,7 +260,7 @@ def main(sys_argv: List[str]):
 
     check_valid_build(build_id)
 
-    fetch_prebuilts(build_id, path)
+    fetch_prebuilts(build_id, path, args_output.cache_dir)
 
     return 0
 

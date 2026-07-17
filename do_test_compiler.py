@@ -186,6 +186,10 @@ def parse_args():
         dest='bolt',
         help='Build BOLT instrumented compiler and gather profiles')
 
+    parser.add_argument(
+        '--cache-dir',
+        help='Directory to cache downloaded compiler tarballs.')
+
     args = parser.parse_args()
     if args.build_only and not args.target:
         parser.error('Build target is not specified in build only mode.')
@@ -347,17 +351,22 @@ def extract_packaged_clang(package_path: Path) -> Path:
     return clang_path
 
 
-def fetch_kokoro_prebuilt(build_id: str) -> Path:
+def fetch_kokoro_prebuilt(build_id: str, cache_dir: Optional[str] = None) -> Path:
     # Extract package to $OUT_DIR/extracted
     extract_dir = paths.OUT_DIR / 'extracted'
     if extract_dir.exists():
         shutil.rmtree(extract_dir)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
-    utils.check_call([
-        paths.SCRIPTS_DIR / "fetch_kokoro_prebuilts.py", "--build_id", build_id,
-        extract_dir
-    ])
+    cmd = [
+        paths.SCRIPTS_DIR / "fetch_kokoro_prebuilts.py",
+        "--build_id", build_id,
+    ]
+    if cache_dir is not None:
+        cmd.extend(["--cache-dir", cache_dir])
+    cmd.append(str(extract_dir))
+
+    utils.check_call(cmd)
 
     return extract_dir / f'clang-{build_id}'
 
@@ -380,7 +389,7 @@ def main():
     elif args.clang_package_path is not None:
         clang_path = extract_packaged_clang(Path(args.clang_package_path))
     elif args.clang_kokoro_build_id is not None:
-        clang_path = fetch_kokoro_prebuilt(args.clang_kokoro_build_id)
+        clang_path = fetch_kokoro_prebuilt(args.clang_kokoro_build_id, args.cache_dir)
     else:
         cmd = [paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
         if not args.no_mlgo:
