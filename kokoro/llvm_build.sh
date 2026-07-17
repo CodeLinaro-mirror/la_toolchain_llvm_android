@@ -16,13 +16,6 @@ if (( $EUID == 0 )); then
   exit 0
 fi
 
-# Kokoro will rsync back everything created by the build. This can take up to 10
-# minutes for our out directory. Clean up these files at the end.
-function cleanup {
-  rm -rf "${OUT}"
-}
-trap cleanup EXIT
-
 mkdir -p "${DIST}"
 if [ $LLVM_BUILD_TYPE == "linux-TOT" ]; then
   OUT_DIR="${OUT}" DIST_DIR="${DIST}" $TOP/prebuilts/python/linux-x86/bin/python3 \
