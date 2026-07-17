@@ -1318,6 +1318,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Fix Segfault due to infinite recursion in LFI rewriter (#210267)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/965fa410dad7294cc1c1a9632ff94558de6dfa40.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 626840
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [

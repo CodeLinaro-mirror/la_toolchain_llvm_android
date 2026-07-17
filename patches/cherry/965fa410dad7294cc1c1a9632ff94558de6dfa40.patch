@@ -1,0 +1,56 @@
+From 965fa410dad7294cc1c1a9632ff94558de6dfa40 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Fri, 17 Jul 2026 17:19:21 -0400
+Subject: [PATCH] [LFI][AArch64] Fix Segfault due to infinite recursion in LFI
+ rewriter (#210267)
+
+When emitting a deferred LR guard, if debug info is enabled, the
+emission of the guard instruction can trigger temporary labels (e.g. for
+DWARF line entries), which recursively calls onLabel. Since
+DeferredLRGuard was only set to false after emission, the nested call
+would re-emit the guard, causing infinite recursion which leads to a
+SegFault due to stack overflow. This was detected compiling
+ubsan_minimal_handlers.cpp in compiler-rt. I fixed it by using the
+existing recursion guard (Guard).
+---
+ .../AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp   |  3 +++
+ llvm/test/MC/AArch64/LFI/debug-info.s               | 13 +++++++++++++
+ 2 files changed, 16 insertions(+)
+ create mode 100644 llvm/test/MC/AArch64/LFI/debug-info.s
+
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 3c24f5ab62a6..38e303db6b6c 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -298,6 +298,9 @@ MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+ }
+ 
+ void AArch64MCLFIRewriter::onLabel(const MCSymbol *, MCStreamer &Out) {
++  if (Guard)
++    return;
++
+   // Flush a deferred LR guard before the label, since the label is a potential
+   // branch target and code reached through it may use LR for control flow.
+   if (DeferredLRGuard && LastSTI) {
+diff --git a/llvm/test/MC/AArch64/LFI/debug-info.s b/llvm/test/MC/AArch64/LFI/debug-info.s
+new file mode 100644
+index 000000000000..9c6efbd79f6a
+--- /dev/null
++++ b/llvm/test/MC/AArch64/LFI/debug-info.s
+@@ -0,0 +1,13 @@
++// RUN: llvm-mc -triple aarch64_lfi -filetype=obj %s -o /dev/null
++// RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++
++// CHECK:      mov	x30, x0
++// CHECK:      add	x30, x27, w30, uxtw
++// CHECK:      next_func:
++// CHECK-NEXT: nop
++
++.file 1 "debug-info.s"
++mov x30, x0
++.loc 1 10 0
++next_func:
++  nop
+-- 
+2.55.0.229.g6434b31f56-goog
+
