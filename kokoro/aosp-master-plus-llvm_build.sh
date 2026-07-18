@@ -3,13 +3,6 @@ set -e
 
 TOP=$(cd $(dirname $0)/../../.. && pwd)
 
-function cleanup {
-  # Kokoro will rsync back everything created by the build. Since we don't care
-  # about any artifacts on this build, nuke EVERYTHING at the end of the build.
-  rm -rf "${TOP}"/*
-}
-trap cleanup EXIT
-
 cd $TOP
 
 # Apply local patches
