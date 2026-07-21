@@ -26,7 +26,7 @@ from typing import List, Optional
 import context  # pylint: disable=unused-import
 from llvm_android.utils import check_tools, extract_tarball
 
-prefix = "gs://android-llvm-kokoro-ci-artifacts/prod/android-llvm/linux-tot/continuous/"
+prefix = "gs://android-llvm-kokoro-ci-artifacts/"
 
 
 def parse_args(sys_argv: Optional[List[str]]):
@@ -69,8 +69,8 @@ def parse_args(sys_argv: Optional[List[str]]):
 
 
 def get_url(build_id: str):
-    suffix = "/**.tar.xz"
-    url = prefix + build_id + suffix
+    suffix = f"**/clang-{build_id}*.tar.xz"
+    url = prefix + suffix
     return url
 
 
@@ -98,7 +98,7 @@ def fetch_prebuilts(build_id: str, path: str, cache_dir: Optional[str] = None):
         result = subprocess.run(cmd, stderr=subprocess.PIPE)
         if result.returncode > 0:
             err_string = str(result.stderr, encoding="utf-8")
-            if "CommandException: No URLs matched" in err_string:
+            if "CommandException: No URLs matched" in err_string or "One or more URLs matched no objects" in err_string:
                 print(f"Build {build_id} failed to build.")
             else:
                 print(err_string)
@@ -118,10 +118,11 @@ def fetch_prebuilts(build_id: str, path: str, cache_dir: Optional[str] = None):
 
 
 def check_valid_build(build_id: str):
-    url = prefix + build_id + "/"
-    output = subprocess.check_output(["gcloud", "storage", "ls", "-L", prefix])
-    if url not in str(output):
-        err_msg = build_id + " doesn't exist. Please pick a valid build id."
+    gs_url = get_url(build_id)
+    cmd = ["gcloud", "storage", "ls", gs_url]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0 or not result.stdout.strip():
+        err_msg = f"{build_id} doesn't exist. Please pick a valid build id."
         raise Exception(err_msg)
 
 
