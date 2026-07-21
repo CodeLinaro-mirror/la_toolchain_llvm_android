@@ -1,0 +1,54 @@
+From c4026e4350fd4d70692f205aff8764055a8b4ce1 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Mon, 20 Jul 2026 10:40:40 -0700
+Subject: [PATCH] [LFI][libunwind] Omit unsuppported stg/za instructions for
+ LFI target (#209392)
+
+Under the LFI target the SVE `za` are not currently supported, and
+neither is the `stg` instruction. When included in an LFI program they
+cause verification failures due to being unsupported instructions. This
+patch omits them from compilation when targeting LFI.
+---
+ libunwind/src/DwarfInstructions.hpp | 2 +-
+ libunwind/src/UnwindRegistersSave.S | 5 +++++
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/libunwind/src/DwarfInstructions.hpp b/libunwind/src/DwarfInstructions.hpp
+index 56220c327a7f..4f53df3e74b7 100644
+--- a/libunwind/src/DwarfInstructions.hpp
++++ b/libunwind/src/DwarfInstructions.hpp
+@@ -216,7 +216,7 @@ int DwarfInstructions<A, R>::stepWithDwarf(
+       // __unw_step_stage2 is not used for cross unwinding, so we use
+       // __aarch64__ rather than LIBUNWIND_TARGET_AARCH64 to make sure we are
+       // building for AArch64 natively.
+-#if defined(__aarch64__)
++#if defined(__aarch64__) && !defined(__LFI__)
+       if (stage2 && cieInfo.mteTaggedFrame) {
+         pint_t sp = registers.getSP();
+         pint_t p = sp;
+diff --git a/libunwind/src/UnwindRegistersSave.S b/libunwind/src/UnwindRegistersSave.S
+index f44f6a133196..678187fb52f0 100644
+--- a/libunwind/src/UnwindRegistersSave.S
++++ b/libunwind/src/UnwindRegistersSave.S
+@@ -854,6 +854,10 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+   .p2align 2
+ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_za_disable)
+   .variant_pcs __libunwind_Registers_arm64_za_disable
++#if defined(__LFI__)
++  mov x0, #1
++  ret
++#else
+ #if __has_feature(ptrauth_calls)
+   pacibsp
+ #endif
+@@ -897,6 +901,7 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_arm64_za_disable)
+ #else
+   ret
+ #endif
++#endif
+ 
+ #elif defined(__arm__) && !defined(__APPLE__)
+ 
+-- 
+2.55.0.229.g6434b31f56-goog
+
