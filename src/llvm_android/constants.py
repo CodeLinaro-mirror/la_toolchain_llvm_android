@@ -18,7 +18,7 @@
 from typing import Set
 
 # Minimum macOS version to support.
-MAC_MIN_VERSION: str = '10.14'
+MAC_MIN_VERSION: str = '11.0'
 
 # This is the baseline stable version of Clang to start our stage-1 build.
 CLANG_PREBUILT_VERSION: str = 'clang-r596125'
