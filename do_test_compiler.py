@@ -295,12 +295,12 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
         print('Device missing serial number')
         return True
     serial = device[0]
-    [label, target] = device[-1].split(':')
+    state = device[1] if len(device) > 1 else None
     # If current device is not connected correctly we will just skip it.
-    if label != 'device':
-        print('Device %s is not connecting correctly.' % serial)
+    if state not in ['device']:
+        print('Device %s has unexpected state "%s".' % (serial, state))
         return True
-    product = 'aosp_' + target
+    product = 'aosp_' + device[-1].split(':')[1]
 
     target = '-'.join([product, 'trunk_staging', 'eng'])
     try:
