@@ -28,6 +28,19 @@ from llvm_android.utils import check_tools, extract_tarball
 
 prefix = "gs://android-llvm-kokoro-ci-artifacts/"
 
+DEFAULT_CACHE_DIR = Path.home() / ".cache" / "kokoro-llvm-tot"
+
+
+def setup_tmpfiles() -> None:
+    """Ensure ~/.config/user-tmpfiles.d/kokoro-llvm-tot.conf exists."""
+    config_dir = Path.home() / ".config" / "user-tmpfiles.d"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_file = config_dir / "kokoro-llvm-tot.conf"
+    content = "d %h/.cache/kokoro-llvm-tot 0755 - - aA:3d\n"
+    if not config_file.exists() or config_file.read_text() != content:
+        config_file.write_text(content)
+
+
 
 def parse_args(sys_argv: Optional[List[str]]):
     """Parse the command line arguments."""
@@ -54,9 +67,9 @@ def parse_args(sys_argv: Optional[List[str]]):
     )
 
     parser.add_argument(
-        "--cache-dir",
-        type=str,
-        help="Directory to cache downloaded tarballs",
+        "--no-cache",
+        action="store_true",
+        help="Disable caching downloaded tarballs under ~/.cache/kokoro-llvm-tot",
     )
 
     parser.add_argument(
@@ -74,10 +87,13 @@ def get_url(build_id: str):
     return url
 
 
-def fetch_prebuilts(build_id: str, path: str, cache_dir: Optional[str] = None):
+def fetch_prebuilts(build_id: str, path: str, no_cache: bool = False):
     gs_url = get_url(build_id)
+    cache_dir = None if no_cache else DEFAULT_CACHE_DIR
+
     if cache_dir:
-        cache_path = Path(cache_dir) / build_id
+        setup_tmpfiles()
+        cache_path = cache_dir / build_id
         if cache_path.exists():
             tarballs = list(cache_path.glob("*.tar.xz"))
             if tarballs:
@@ -87,7 +103,7 @@ def fetch_prebuilts(build_id: str, path: str, cache_dir: Optional[str] = None):
 
     temp_dir = None
     if cache_dir:
-        download_dir = Path(cache_dir) / build_id
+        download_dir = cache_dir / build_id
         download_dir.mkdir(parents=True, exist_ok=True)
     else:
         temp_dir = tempfile.TemporaryDirectory()
@@ -261,7 +277,7 @@ def main(sys_argv: List[str]):
 
     check_valid_build(build_id)
 
-    fetch_prebuilts(build_id, path, args_output.cache_dir)
+    fetch_prebuilts(build_id, path, args_output.no_cache)
 
     return 0
 
