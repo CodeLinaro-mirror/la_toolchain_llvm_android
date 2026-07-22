@@ -291,10 +291,14 @@ def build_target(android_base: Path, clang_version: version.Version,
 def test_device(android_base: Path, clang_version: version.Version, device: List[str],
                 modules: List[str], max_jobs: int, clean_output: str, flashall_path: Optional[Path],
                 with_tidy: bool, no_mlgo: bool) -> bool:
+    if not device or device[:3] == ['(no', 'serial', 'number)']:
+        print('Device missing serial number')
+        return True
+    serial = device[0]
     [label, target] = device[-1].split(':')
     # If current device is not connected correctly we will just skip it.
     if label != 'device':
-        print('Device %s is not connecting correctly.' % device[0])
+        print('Device %s is not connecting correctly.' % serial)
         return True
     product = 'aosp_' + target
 
@@ -306,12 +310,12 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
             bin_path = (android_base / 'out' / 'host' /
                         hosts.build_tag() / 'bin')
             utils.check_call(
-                ['./adb', '-s', device[0], 'reboot', 'bootloader'],
+                ['./adb', '-s', serial, 'reboot', 'bootloader'],
                 cwd=bin_path)
             utils.check_call(
-                ['./fastboot', '-s', device[0], 'flashall'], cwd=bin_path)
+                ['./fastboot', '-s', serial, 'flashall'], cwd=bin_path)
         else:
-            os.environ['ANDROID_SERIAL'] = device[0]
+            os.environ['ANDROID_SERIAL'] = serial
             utils.check_call(['./flashall'], cwd=flashall_path)
         result = True
     except subprocess.CalledProcessError:
