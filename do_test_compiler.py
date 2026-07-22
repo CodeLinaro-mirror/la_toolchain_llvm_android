@@ -297,8 +297,9 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
     if label != 'device':
         print('Device %s is not connecting correctly.' % device[0])
         return True
-    else:
-        target = 'aosp_' + target + '-eng'
+    product = 'aosp_' + target
+
+    target = '-'.join([product, 'trunk_staging', 'eng'])
     try:
         build_target(android_base, clang_version, target, modules, max_jobs,
                      with_tidy, no_mlgo)
