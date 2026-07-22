@@ -300,7 +300,12 @@ def test_device(android_base: Path, clang_version: version.Version, device: List
     if state not in ['device']:
         print('Device %s has unexpected state "%s".' % (serial, state))
         return True
-    product = 'aosp_' + device[-1].split(':')[1]
+    device_props = dict(tok.split(':', 1) for tok in device[2:] if ':' in tok)
+    name = device_props.get('device')
+    if not name:
+        print('Failed to deduce build target for device %s' % serial)
+        return True
+    product = 'aosp_' + name
 
     target = '-'.join([product, 'trunk_staging', 'eng'])
     try:
