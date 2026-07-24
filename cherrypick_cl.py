@@ -122,6 +122,8 @@ def create_patches_for_sha_list(sha_list: List[str], start_version: int,
         file_path = paths.SCRIPTS_DIR / 'patches' / rel_patch_path
         if custom_patch_file:
             shutil.copyfile(custom_patch_file, file_path)
+        elif file_path.exists():
+            print(f'Patch file {file_path} already exists, skipping generation.')
         else:
             with open(file_path, 'w') as fh:
                 check_call(f'git format-patch -1 {sha} --stdout',

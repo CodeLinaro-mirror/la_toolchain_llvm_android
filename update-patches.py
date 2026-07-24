@@ -244,6 +244,7 @@ def update_patches(error: LastPatchError) -> PatchList:
 
     new_patch_list = PatchList()
     update_list = PatchList()
+    curr_version = int(android_version.get_svn_revision_number())
     for index, patch in enumerate(patch_list):
         new_patch_list.append(patch)
 
@@ -287,7 +288,15 @@ def update_patches(error: LastPatchError) -> PatchList:
                     f' resolve merge conflicts in {_TMP_FILE} and commit before'
                     ' rerunning the script again with --continue_script'
                 )
-            new_patch_list.append(new_patch)
+            if patch.start_version == curr_version:
+                new_patch_list[-1] = new_patch
+                # Delete the old patch file
+                old_patch_file = _PATCH_DIR / patch.rel_patch_path
+                if old_patch_file.exists():
+                    logger().info(f'Deleting replaced temporary patch: {old_patch_file}')
+                    old_patch_file.unlink()
+            else:
+                new_patch_list.append(new_patch)
             update_list.append(new_patch)
         else:
             apply_patch(patch)
