@@ -1,0 +1,1113 @@
+From 24154a55d698a98e7b6d2aae1778b79f15ce5b09 Mon Sep 17 00:00:00 2001
+From: PiJoules <leonardchan@google.com>
+Date: Fri, 17 Apr 2026 15:23:48 -0700
+Subject: [PATCH] Revert "Reland "[LTO][LLD] Prevent invalid LTO libfunc
+ transforms (#164916)"" (#192741)
+
+Reverts llvm/llvm-project#190642
+
+A bisect shows this as the change leading to the link failure at
+https://g-issues.fuchsia.dev/issues/503377901
+---
+ clang/lib/CodeGen/BackendUtil.cpp             | 12 ++--
+ lld/COFF/InputFiles.cpp                       |  5 +-
+ lld/COFF/LTO.cpp                              |  4 --
+ lld/COFF/LTO.h                                |  1 -
+ lld/COFF/SymbolTable.cpp                      | 24 -------
+ lld/ELF/Driver.cpp                            | 19 -----
+ lld/ELF/LTO.cpp                               |  4 --
+ lld/ELF/LTO.h                                 |  1 -
+ .../COFF/lto-libcall-archive-bitcode.test     | 51 -------------
+ lld/test/ELF/lto/libcall-archive-bitcode.test | 54 --------------
+ lld/test/wasm/lto/libcall-archive-bitcode.ll  | 56 ---------------
+ lld/wasm/LTO.cpp                              |  4 --
+ lld/wasm/LTO.h                                |  1 -
+ lld/wasm/SymbolTable.cpp                      | 23 ------
+ llvm/docs/ReleaseNotes.md                     |  7 --
+ llvm/include/llvm/LTO/LTO.h                   | 29 ++------
+ llvm/include/llvm/LTO/LTOBackend.h            | 22 +++---
+ llvm/lib/LTO/LTO.cpp                          | 71 +++++--------------
+ llvm/lib/LTO/LTOBackend.cpp                   | 34 ++-------
+ llvm/lib/LTO/LTOCodeGenerator.cpp             |  4 +-
+ llvm/lib/LTO/ThinLTOCodeGenerator.cpp         |  4 +-
+ .../LTO/Resolution/X86/libcall-external.ll    | 25 -------
+ .../Resolution/X86/libcall-in-thin-link.ll    | 35 ---------
+ llvm/test/LTO/Resolution/X86/libcall-in-tu.ll | 34 ---------
+ llvm/tools/llvm-lto2/llvm-lto2.cpp            | 16 -----
+ 25 files changed, 52 insertions(+), 488 deletions(-)
+ delete mode 100644 lld/test/COFF/lto-libcall-archive-bitcode.test
+ delete mode 100644 lld/test/ELF/lto/libcall-archive-bitcode.test
+ delete mode 100644 lld/test/wasm/lto/libcall-archive-bitcode.ll
+ delete mode 100644 llvm/test/LTO/Resolution/X86/libcall-external.ll
+ delete mode 100644 llvm/test/LTO/Resolution/X86/libcall-in-thin-link.ll
+ delete mode 100644 llvm/test/LTO/Resolution/X86/libcall-in-tu.ll
+
+diff --git a/clang/lib/CodeGen/BackendUtil.cpp b/clang/lib/CodeGen/BackendUtil.cpp
+index afd7ebcf336f..3b50c465c1c2 100644
+--- a/clang/lib/CodeGen/BackendUtil.cpp
++++ b/clang/lib/CodeGen/BackendUtil.cpp
+@@ -1407,14 +1407,12 @@ runThinLTOBackend(CompilerInstance &CI, ModuleSummaryIndex *CombinedIndex,
+ 
+   // FIXME: Both ExecuteAction and thinBackend set up optimization remarks for
+   // the same context.
+-  // FIXME: This does not yet set the list of bitcode libfuncs that it isn't
+-  // safe to call. This precludes bitcode libc in distributed ThinLTO.
+   finalizeLLVMOptimizationRemarks(M->getContext());
+-  if (Error E = thinBackend(
+-          Conf, -1, AddStream, *M, *CombinedIndex, ImportList,
+-          ModuleToDefinedGVSummaries[M->getModuleIdentifier()],
+-          /*ModuleMap=*/nullptr, Conf.CodeGenOnly, /*BitcodeLibFuncs=*/{},
+-          /*IRAddStream=*/nullptr, CGOpts.CmdArgs)) {
++  if (Error E =
++          thinBackend(Conf, -1, AddStream, *M, *CombinedIndex, ImportList,
++                      ModuleToDefinedGVSummaries[M->getModuleIdentifier()],
++                      /*ModuleMap=*/nullptr, Conf.CodeGenOnly,
++                      /*IRAddStream=*/nullptr, CGOpts.CmdArgs)) {
+     handleAllErrors(std::move(E), [&](ErrorInfoBase &EIB) {
+       errs() << "Error running ThinLTO backend: " << EIB.message() << '\n';
+     });
+diff --git a/lld/COFF/InputFiles.cpp b/lld/COFF/InputFiles.cpp
+index 8a586be351d2..5e66ff182cd9 100644
+--- a/lld/COFF/InputFiles.cpp
++++ b/lld/COFF/InputFiles.cpp
+@@ -25,6 +25,7 @@
+ #include "llvm/DebugInfo/PDB/Native/NativeSession.h"
+ #include "llvm/DebugInfo/PDB/Native/PDBFile.h"
+ #include "llvm/IR/Mangler.h"
++#include "llvm/IR/RuntimeLibcalls.h"
+ #include "llvm/LTO/LTO.h"
+ #include "llvm/Object/Binary.h"
+ #include "llvm/Object/COFF.h"
+@@ -1401,6 +1402,8 @@ void BitcodeFile::parse() {
+     // FIXME: Check nodeduplicate
+     comdat[i] =
+         symtab.addComdat(this, saver.save(obj->getComdatTable()[i].first));
++  Triple tt(obj->getTargetTriple());
++  RTLIB::RuntimeLibcallsInfo libcalls(tt);
+   for (const lto::InputFile::Symbol &objSym : obj->symbols()) {
+     StringRef symName = saver.save(objSym.getName());
+     int comdatIndex = objSym.getComdatIndex();
+@@ -1450,7 +1453,7 @@ void BitcodeFile::parse() {
+           symtab.addRegular(this, symName, nullptr, fakeSC, 0, objSym.isWeak());
+     }
+     symbols.push_back(sym);
+-    if (objSym.isUsed())
++    if (objSym.isUsed() || objSym.isLibcall(libcalls))
+       symtab.ctx.config.gcroot.push_back(sym);
+   }
+   directives = saver.save(obj->getCOFFLinkerOpts());
+diff --git a/lld/COFF/LTO.cpp b/lld/COFF/LTO.cpp
+index 445ea52e995d..2d38a13830da 100644
+--- a/lld/COFF/LTO.cpp
++++ b/lld/COFF/LTO.cpp
+@@ -288,7 +288,3 @@ std::vector<InputFile *> BitcodeCompiler::compile() {
+ 
+   return ret;
+ }
+-
+-void BitcodeCompiler::setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs) {
+-  ltoObj->setBitcodeLibFuncs(bitcodeLibFuncs);
+-}
+diff --git a/lld/COFF/LTO.h b/lld/COFF/LTO.h
+index 73e855e567b0..6826251b5ffa 100644
+--- a/lld/COFF/LTO.h
++++ b/lld/COFF/LTO.h
+@@ -45,7 +45,6 @@ public:
+ 
+   void add(BitcodeFile &f);
+   std::vector<InputFile *> compile();
+-  void setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs);
+ 
+ private:
+   std::unique_ptr<llvm::lto::LTO> ltoObj;
+diff --git a/lld/COFF/SymbolTable.cpp b/lld/COFF/SymbolTable.cpp
+index df540be800e4..4d4e57591c0f 100644
+--- a/lld/COFF/SymbolTable.cpp
++++ b/lld/COFF/SymbolTable.cpp
+@@ -1473,37 +1473,13 @@ void SymbolTable::compileBitcodeFiles() {
+   if (bitcodeFileInstances.empty())
+     return;
+ 
+-  // Collect the bitcode library functions that are not safe to call because
+-  // they were not yet brought in the link. (Such symbols are lazy.)
+-  llvm::BumpPtrAllocator alloc;
+-  llvm::StringSaver saver(alloc);
+-  SmallVector<StringRef> bitcodeLibFuncs;
+-  // Triple must be captured before the bitcode is moved into the compiler.
+-  // Note that the below assumes that the set of possible libfuncs is roughly
+-  // equivalent for all bitcode translation units.
+-  llvm::Triple tt =
+-      llvm::Triple(bitcodeFileInstances.front()->obj->getTargetTriple());
+-  for (StringRef libFunc : lto::LTO::getLibFuncSymbols(tt, saver)) {
+-    if (Symbol *sym = find(libFunc)) {
+-      if (auto *l = dyn_cast<LazyArchive>(sym)) {
+-        if (isBitcode(l->getMemberBuffer()))
+-          bitcodeLibFuncs.push_back(libFunc);
+-      } else if (auto *o = dyn_cast<LazyObject>(sym)) {
+-        if (isBitcode(o->file->mb))
+-          bitcodeLibFuncs.push_back(libFunc);
+-      }
+-    }
+-  }
+-
+   ScopedTimer t(ctx.ltoTimer);
+   lto.reset(new BitcodeCompiler(ctx));
+-  lto->setBitcodeLibFuncs(bitcodeLibFuncs);
+   {
+     llvm::TimeTraceScope addScope("Add bitcode file instances");
+     for (BitcodeFile *f : bitcodeFileInstances)
+       lto->add(*f);
+   }
+-
+   for (InputFile *newObj : lto->compile()) {
+     ObjFile *obj = cast<ObjFile>(newObj);
+     obj->parse();
+diff --git a/lld/ELF/Driver.cpp b/lld/ELF/Driver.cpp
+index 24718d2d2186..607d3daf7b3e 100644
+--- a/lld/ELF/Driver.cpp
++++ b/lld/ELF/Driver.cpp
+@@ -2781,27 +2781,8 @@ static void markBuffersAsDontNeed(Ctx &ctx, bool skipLinkedOutput) {
+ template <class ELFT>
+ void LinkerDriver::compileBitcodeFiles(bool skipLinkedOutput) {
+   llvm::TimeTraceScope timeScope("LTO");
+-
+-  // Collect the bitcode library functions that are not safe to call because
+-  // they were not yet brought in the link. (Such symbols are lazy.)
+-  llvm::BumpPtrAllocator alloc;
+-  llvm::StringSaver saver(alloc);
+-  SmallVector<StringRef> bitcodeLibFuncs;
+-  if (!ctx.bitcodeFiles.empty()) {
+-    // Triple must be captured before the bitcode is moved into the compiler.
+-    // Note that the below assumes that the set of possible libfuncs is roughly
+-    // equivalent for all bitcode translation units.
+-    llvm::Triple tt =
+-        llvm::Triple(ctx.bitcodeFiles.front()->obj->getTargetTriple());
+-    for (StringRef libFunc : lto::LTO::getLibFuncSymbols(tt, saver))
+-      if (Symbol *sym = ctx.symtab->find(libFunc);
+-          sym && sym->isLazy() && isa<BitcodeFile>(sym->file))
+-        bitcodeLibFuncs.push_back(libFunc);
+-  }
+-
+   // Compile bitcode files and replace bitcode symbols.
+   lto.reset(new BitcodeCompiler(ctx));
+-  lto->setBitcodeLibFuncs(bitcodeLibFuncs);
+   for (BitcodeFile *file : ctx.bitcodeFiles)
+     lto->add(*file);
+ 
+diff --git a/lld/ELF/LTO.cpp b/lld/ELF/LTO.cpp
+index 7b0fe2001439..352848af1551 100644
+--- a/lld/ELF/LTO.cpp
++++ b/lld/ELF/LTO.cpp
+@@ -436,7 +436,3 @@ SmallVector<std::unique_ptr<InputFile>, 0> BitcodeCompiler::compile() {
+   }
+   return ret;
+ }
+-
+-void BitcodeCompiler::setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs) {
+-  ltoObj->setBitcodeLibFuncs(bitcodeLibFuncs);
+-}
+diff --git a/lld/ELF/LTO.h b/lld/ELF/LTO.h
+index c8cb2156d90c..acf3bcff7f2f 100644
+--- a/lld/ELF/LTO.h
++++ b/lld/ELF/LTO.h
+@@ -43,7 +43,6 @@ public:
+ 
+   void add(BitcodeFile &f);
+   SmallVector<std::unique_ptr<InputFile>, 0> compile();
+-  void setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs);
+ 
+ private:
+   Ctx &ctx;
+diff --git a/lld/test/COFF/lto-libcall-archive-bitcode.test b/lld/test/COFF/lto-libcall-archive-bitcode.test
+deleted file mode 100644
+index bd172f1ff395..000000000000
+--- a/lld/test/COFF/lto-libcall-archive-bitcode.test
++++ /dev/null
+@@ -1,51 +0,0 @@
+-; REQUIRES: x86
+-
+-; RUN: rm -rf %t && split-file %s %t && cd %t
+-; RUN: llvm-as main.ll -o main.obj
+-; RUN: llvm-as puts.ll -o puts.obj
+-; RUN: llvm-mc -filetype=obj -triple=x86_64-pc-windows-msvc printf.s -o printf.obj
+-; RUN: llvm-ar rcs libc.lib puts.obj printf.obj
+-
+-;; Ensure that no printf->puts translation occurs during LTO because puts is in
+-;; bitcode, but was not brought into the link. This would fail the link by
+-;; extracting bitcode after LTO.
+-; RUN: lld-link -out:out.exe -entry:main -subsystem:console -lldmap:- -nodefaultlib main.obj libc.lib | FileCheck %s
+-
+-;; Test the same behavior with lazy objects.
+-; RUN: lld-link -out:out-lazy.exe -entry:main -subsystem:console -lldmap:- -nodefaultlib main.obj /start-lib puts.obj /end-lib printf.obj | FileCheck %s
+-
+-;; Test that translation DOES occur when puts is extracted and brought into the link.
+-; RUN: lld-link -out:out-extracted.exe -entry:main -subsystem:console -lldmap:- -nodefaultlib main.obj puts.obj printf.obj | FileCheck %s --check-prefix=EXTRACTED
+-
+-; CHECK-NOT: puts
+-; CHECK: printf
+-
+-; EXTRACTED: printf
+-; EXTRACTED: puts
+-
+-;--- puts.ll
+-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-pc-windows-msvc"
+-
+-define i32 @puts(ptr nocapture readonly %0) noinline {
+-  call void asm sideeffect "", ""()
+-  ret i32 0
+-}
+-
+-;--- printf.s
+-.globl printf
+-printf:
+-  ret
+-
+-;--- main.ll
+-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-pc-windows-msvc"
+-
+-@str = constant [5 x i8] c"foo\0A\00"
+-
+-define i32 @main() {
+-  %call = call i32 (ptr, ...) @printf(ptr @str)
+-  ret i32 0
+-}
+-
+-declare i32 @printf(ptr, ...)
+diff --git a/lld/test/ELF/lto/libcall-archive-bitcode.test b/lld/test/ELF/lto/libcall-archive-bitcode.test
+deleted file mode 100644
+index 00726a2e6aeb..000000000000
+--- a/lld/test/ELF/lto/libcall-archive-bitcode.test
++++ /dev/null
+@@ -1,54 +0,0 @@
+-; REQUIRES: x86
+-
+-; RUN: rm -rf %t && split-file %s %t && cd %t
+-; RUN: llvm-as main.ll -o main.o
+-; RUN: llvm-as puts.ll -o puts.o
+-; RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu printf.s -o printf.o
+-; RUN: llvm-ar rcs libc.a puts.o printf.o
+-
+-;; Ensure that no printf->puts translation occurs during LTO because puts is in
+-;; bitcode, but was not brought into the link. This would fail the link by
+-;; extracting bitcode after LTO.
+-; RUN: ld.lld -o out main.o libc.a
+-; RUN: llvm-nm out | FileCheck %s
+-
+-;; Test the same behavior with lazy objects.
+-; RUN: ld.lld -o out-lazy main.o --start-lib puts.o --end-lib printf.o
+-; RUN: llvm-nm out-lazy | FileCheck %s
+-
+-;; Test that translation DOES occur when puts is extracted and brought into the link.
+-; RUN: ld.lld -o out-extracted main.o puts.o printf.o
+-; RUN: llvm-nm out-extracted | FileCheck %s --check-prefix=EXTRACTED
+-
+-; CHECK-NOT: puts
+-; CHECK: printf
+-
+-; EXTRACTED: printf
+-; EXTRACTED: puts
+-
+-;--- puts.ll
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-unknown-linux-gnu"
+-
+-define i32 @puts(ptr nocapture readonly %0) noinline {
+-  call void asm sideeffect "", ""()
+-  ret i32 0
+-}
+-
+-;--- printf.s
+-.globl printf
+-printf:
+-  ret
+-
+-;--- main.ll
+-target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+-target triple = "x86_64-unknown-linux-gnu"
+-
+-@str = constant [5 x i8] c"foo\0A\00"
+-
+-define i32 @_start() {
+-  %call = call i32 (ptr, ...) @printf(ptr @str)
+-  ret i32 0
+-}
+-
+-declare i32 @printf(ptr, ...)
+diff --git a/lld/test/wasm/lto/libcall-archive-bitcode.ll b/lld/test/wasm/lto/libcall-archive-bitcode.ll
+deleted file mode 100644
+index 3b640efc1091..000000000000
+--- a/lld/test/wasm/lto/libcall-archive-bitcode.ll
++++ /dev/null
+@@ -1,56 +0,0 @@
+-; REQUIRES: x86
+-
+-; RUN: rm -rf %t && split-file %s %t && cd %t
+-; RUN: llvm-as main.ll -o main.o
+-; RUN: llvm-as puts.ll -o puts.o
+-; RUN: llvm-mc -filetype=obj -triple=wasm32-unknown-unknown printf.s -o printf.o
+-; RUN: llvm-ar rcs libc.a puts.o printf.o
+-
+-;; Ensure that no printf->puts translation occurs during LTO because puts is in
+-;; bitcode, but was not brought into the link. This would fail the link by
+-;; extracting bitcode after LTO.
+-; RUN: wasm-ld -o out.wasm main.o libc.a
+-; RUN: obj2yaml out.wasm | FileCheck %s
+-
+-;; Test the same behavior with lazy objects.
+-; RUN: wasm-ld -o out-lazy.wasm main.o --start-lib puts.o --end-lib printf.o
+-; RUN: obj2yaml out-lazy.wasm | FileCheck %s
+-
+-;; Test that translation DOES occur when puts is extracted and brought into the link.
+-; RUN: wasm-ld -o out-extracted.wasm main.o puts.o printf.o
+-; RUN: obj2yaml out-extracted.wasm | FileCheck %s --check-prefix=EXTRACTED
+-
+-; CHECK-NOT: Name: puts
+-; CHECK:     Name: printf
+-
+-; EXTRACTED: Name: puts
+-; EXTRACTED-NOT: Name: printf
+-
+-;--- puts.ll
+-target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"
+-target triple = "wasm32-unknown-unknown"
+-
+-define i32 @puts(ptr nocapture readonly %0) noinline {
+-  call void asm sideeffect "", ""()
+-  ret i32 0
+-}
+-
+-;--- printf.s
+-.globl printf
+-printf:
+-  .functype printf (i32, i32) -> (i32)
+-  i32.const 0
+-  end_function
+-
+-;--- main.ll
+-target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-n32:64-S128-ni:1:10:20"
+-target triple = "wasm32-unknown-unknown"
+-
+-@str = constant [5 x i8] c"foo\0A\00"
+-
+-define i32 @_start() {
+-  %call = call i32 (ptr, ...) @printf(ptr @str)
+-  ret i32 0
+-}
+-
+-declare i32 @printf(ptr, ...)
+\ No newline at end of file
+diff --git a/lld/wasm/LTO.cpp b/lld/wasm/LTO.cpp
+index 2c068bf51890..9fcb95b84b54 100644
+--- a/lld/wasm/LTO.cpp
++++ b/lld/wasm/LTO.cpp
+@@ -195,10 +195,6 @@ static void thinLTOCreateEmptyIndexFiles() {
+   }
+ }
+ 
+-void BitcodeCompiler::setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs) {
+-  ltoObj->setBitcodeLibFuncs(bitcodeLibFuncs);
+-}
+-
+ // Merge all the bitcode files we have seen, codegen the result
+ // and return the resulting objects.
+ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
+diff --git a/lld/wasm/LTO.h b/lld/wasm/LTO.h
+index 6fa110d6099b..21b1d5902466 100644
+--- a/lld/wasm/LTO.h
++++ b/lld/wasm/LTO.h
+@@ -46,7 +46,6 @@ public:
+ 
+   void add(BitcodeFile &f);
+   SmallVector<InputFile *, 0> compile();
+-  void setBitcodeLibFuncs(ArrayRef<StringRef> bitcodeLibFuncs);
+ 
+ private:
+   std::unique_ptr<llvm::lto::LTO> ltoObj;
+diff --git a/lld/wasm/SymbolTable.cpp b/lld/wasm/SymbolTable.cpp
+index 93d3e5f71a3e..05e653ea23ed 100644
+--- a/lld/wasm/SymbolTable.cpp
++++ b/lld/wasm/SymbolTable.cpp
+@@ -82,31 +82,8 @@ void SymbolTable::compileBitcodeFiles() {
+   // Prevent further LTO objects being included
+   BitcodeFile::doneLTO = true;
+ 
+-  // Collect the bitcode library functions that are not safe to call because
+-  // they were not yet brought in the link. (Such symbols are lazy.)
+-  llvm::BumpPtrAllocator alloc;
+-  llvm::StringSaver saver(alloc);
+-  SmallVector<StringRef> bitcodeLibFuncs;
+-  if (!ctx.bitcodeFiles.empty()) {
+-    // Triple must be captured before the bitcode is moved into the compiler.
+-    // Note that the below assumes that the set of possible libfuncs is
+-    // equivalent for all bitcode translation units.
+-    llvm::Triple tt =
+-        llvm::Triple(ctx.bitcodeFiles.front()->obj->getTargetTriple());
+-    for (StringRef libFunc : llvm::lto::LTO::getLibFuncSymbols(tt, saver)) {
+-      if (Symbol *sym = find(libFunc)) {
+-        if (auto *lazy = dyn_cast<LazySymbol>(sym)) {
+-          if (isa<BitcodeFile>(lazy->getFile()))
+-            bitcodeLibFuncs.push_back(libFunc);
+-        }
+-      }
+-    }
+-  }
+-
+   // Compile bitcode files and replace bitcode symbols.
+   lto.reset(new BitcodeCompiler);
+-  lto->setBitcodeLibFuncs(bitcodeLibFuncs);
+-
+   for (BitcodeFile *f : ctx.bitcodeFiles)
+     lto->add(*f);
+ 
+diff --git a/llvm/docs/ReleaseNotes.md b/llvm/docs/ReleaseNotes.md
+index 9caeef89d0b1..a3ac48ae0927 100644
+--- a/llvm/docs/ReleaseNotes.md
++++ b/llvm/docs/ReleaseNotes.md
+@@ -101,13 +101,6 @@ Changes to LLVM infrastructure
+     this may fail if symlink permissions are not available.
+   * Added ``readlink``, which reads the target of a symbolic link.
+ 
+-* Bitcode libraries can now implement compiler-managed library functions
+-  (libcalls) without causing incorrect API manipulation or undefined references
+-  ([#177046](https://github.com/llvm/llvm-project/pull/125687)). Note that
+-  there are still issues with invalid compiler reasoning about some functions
+-  in bitcode, e.g. `malloc`. Not yet supported on MachO or when using
+-  distributed ThinLTO. 
+-
+ Changes to building LLVM
+ ------------------------
+ 
+diff --git a/llvm/include/llvm/LTO/LTO.h b/llvm/include/llvm/LTO/LTO.h
+index aba2661e81c4..3fec06b8bd78 100644
+--- a/llvm/include/llvm/LTO/LTO.h
++++ b/llvm/include/llvm/LTO/LTO.h
+@@ -179,8 +179,7 @@ public:
+     // may emit references to. Such symbols must be considered external, as
+     // removing them or modifying their interfaces would invalidate the code
+     // generator's knowledge about them.
+-    bool isLibcall(const TargetLibraryInfo &TLI,
+-                   const RTLIB::RuntimeLibcallsInfo &Libcalls) const;
++    bool isLibcall(const RTLIB::RuntimeLibcallsInfo &Libcalls) const;
+   };
+ 
+   /// A range over the symbols in this InputFile.
+@@ -309,8 +308,7 @@ public:
+ using ThinBackendFunction = std::function<std::unique_ptr<ThinBackendProc>(
+     const Config &C, ModuleSummaryIndex &CombinedIndex,
+     const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-    AddStreamFn AddStream, FileCache Cache,
+-    ArrayRef<StringRef> BitcodeLibFuncs)>;
++    AddStreamFn AddStream, FileCache Cache)>;
+ 
+ /// This type defines the behavior following the thin-link phase during ThinLTO.
+ /// It encapsulates a backend function and a strategy for thread pool
+@@ -325,11 +323,10 @@ struct ThinBackend {
+   std::unique_ptr<ThinBackendProc> operator()(
+       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-      AddStreamFn AddStream, FileCache Cache,
+-      ArrayRef<StringRef> BitcodeLibFuncs) {
++      AddStreamFn AddStream, FileCache Cache) {
+     assert(isValid() && "Invalid backend function");
+     return Func(Conf, CombinedIndex, ModuleToDefinedGVSummaries,
+-                std::move(AddStream), std::move(Cache), BitcodeLibFuncs);
++                std::move(AddStream), std::move(Cache));
+   }
+   ThreadPoolStrategy getParallelism() const { return Parallelism; }
+   bool isValid() const { return static_cast<bool>(Func); }
+@@ -449,11 +446,6 @@ public:
+   LLVM_ABI Error add(std::unique_ptr<InputFile> Obj,
+                      ArrayRef<SymbolResolution> Res);
+ 
+-  /// Set the list of functions implemented in bitcode that were not extracted
+-  /// from an archive. Such functions may not be referenced, as they have
+-  /// lost their opportunity to be defined.
+-  LLVM_ABI void setBitcodeLibFuncs(ArrayRef<StringRef> BitcodeLibFuncs);
+-
+   /// Returns an upper bound on the number of tasks that the client may expect.
+   /// This may only be called after all IR object files have been added. For a
+   /// full description of tasks see LTOBackend.h.
+@@ -474,14 +466,6 @@ public:
+   LLVM_ABI static SmallVector<const char *>
+   getRuntimeLibcallSymbols(const Triple &TT);
+ 
+-  /// Static method that returns a list of library function symbols that can be
+-  /// generated by LTO but might not be visible from bitcode symbol table.
+-  /// Unlike the runtime libcalls, the linker can report to the code generator
+-  /// which of these are actually available in the link, and the code generator
+-  /// can then only reference that set of symbols.
+-  LLVM_ABI static SmallVector<StringRef>
+-  getLibFuncSymbols(const Triple &TT, llvm::StringSaver &Saver);
+-
+ protected:
+   // Called at the start of run().
+   virtual Error serializeInputsForDistribution() { return Error::success(); }
+@@ -673,11 +657,6 @@ private:
+   // Setup optimization remarks according to the provided configuration.
+   Error setupOptimizationRemarks();
+ 
+-  // LibFuncs that were implemented in bitcode but were not extracted
+-  // from their libraries. Such functions cannot safely be called, since
+-  // they have lost their opportunity to be defined.
+-  SmallVector<StringRef> BitcodeLibFuncs;
+-
+ public:
+   /// Helper to emit an optimization remark during the LTO link when outside of
+   /// the standard optimization pass pipeline.
+diff --git a/llvm/include/llvm/LTO/LTOBackend.h b/llvm/include/llvm/LTO/LTOBackend.h
+index 4bb38529ec75..48ad5aa64f61 100644
+--- a/llvm/include/llvm/LTO/LTOBackend.h
++++ b/llvm/include/llvm/LTO/LTOBackend.h
+@@ -39,15 +39,13 @@ LLVM_ABI bool opt(const Config &Conf, TargetMachine *TM, unsigned Task,
+                   Module &Mod, bool IsThinLTO,
+                   ModuleSummaryIndex *ExportSummary,
+                   const ModuleSummaryIndex *ImportSummary,
+-                  const std::vector<uint8_t> &CmdArgs,
+-                  ArrayRef<StringRef> BitcodeLibFuncs);
++                  const std::vector<uint8_t> &CmdArgs);
+ 
+ /// Runs a regular LTO backend. The regular LTO backend can also act as the
+ /// regular LTO phase of ThinLTO, which may need to access the combined index.
+ LLVM_ABI Error backend(const Config &C, AddStreamFn AddStream,
+                        unsigned ParallelCodeGenParallelismLevel, Module &M,
+-                       ModuleSummaryIndex &CombinedIndex,
+-                       ArrayRef<StringRef> BitcodeLibFuncs);
++                       ModuleSummaryIndex &CombinedIndex);
+ 
+ /// Runs a ThinLTO backend.
+ /// If \p ModuleMap is not nullptr, all the module files to be imported have
+@@ -58,14 +56,14 @@ LLVM_ABI Error backend(const Config &C, AddStreamFn AddStream,
+ /// the backend will skip optimization and only perform code generation. If
+ /// \p IRAddStream is not nullptr, it will be called just before code generation
+ /// to serialize the optimized IR.
+-LLVM_ABI Error thinBackend(
+-    const Config &C, unsigned Task, AddStreamFn AddStream, Module &M,
+-    const ModuleSummaryIndex &CombinedIndex,
+-    const FunctionImporter::ImportMapTy &ImportList,
+-    const GVSummaryMapTy &DefinedGlobals,
+-    MapVector<StringRef, BitcodeModule> *ModuleMap, bool CodeGenOnly,
+-    ArrayRef<StringRef> BitcodeLibFuncs, AddStreamFn IRAddStream = nullptr,
+-    const std::vector<uint8_t> &CmdArgs = std::vector<uint8_t>());
++LLVM_ABI Error
++thinBackend(const Config &C, unsigned Task, AddStreamFn AddStream, Module &M,
++            const ModuleSummaryIndex &CombinedIndex,
++            const FunctionImporter::ImportMapTy &ImportList,
++            const GVSummaryMapTy &DefinedGlobals,
++            MapVector<StringRef, BitcodeModule> *ModuleMap, bool CodeGenOnly,
++            AddStreamFn IRAddStream = nullptr,
++            const std::vector<uint8_t> &CmdArgs = std::vector<uint8_t>());
+ 
+ LLVM_ABI Error finalizeOptimizationRemarks(LLVMRemarkFileHandle DiagOutputFile);
+ 
+diff --git a/llvm/lib/LTO/LTO.cpp b/llvm/lib/LTO/LTO.cpp
+index 95faf3484c45..1a6976eea808 100644
+--- a/llvm/lib/LTO/LTO.cpp
++++ b/llvm/lib/LTO/LTO.cpp
+@@ -653,11 +653,7 @@ Expected<std::unique_ptr<InputFile>> InputFile::create(MemoryBufferRef Object) {
+ }
+ 
+ bool InputFile::Symbol::isLibcall(
+-    const TargetLibraryInfo &TLI,
+     const RTLIB::RuntimeLibcallsInfo &Libcalls) const {
+-  LibFunc F;
+-  if (TLI.getLibFunc(IRName, F) && TLI.has(F))
+-    return true;
+   return Libcalls.getSupportedLibcallImpl(IRName) != RTLIB::Unsupported;
+ }
+ 
+@@ -719,8 +715,6 @@ void LTO::addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
+   auto *ResE = Res.end();
+   (void)ResE;
+   RTLIB::RuntimeLibcallsInfo Libcalls(TT);
+-  TargetLibraryInfoImpl TLII(TT);
+-  TargetLibraryInfo TLI(TLII);
+   for (const InputFile::Symbol &Sym : Syms) {
+     assert(ResI != ResE);
+     SymbolResolution Res = *ResI++;
+@@ -763,7 +757,7 @@ void LTO::addModuleToGlobalRes(ArrayRef<InputFile::Symbol> Syms,
+       GlobalRes.VisibleOutsideSummary = true;
+     }
+ 
+-    bool IsLibcall = Sym.isLibcall(TLI, Libcalls);
++    bool IsLibcall = Sym.isLibcall(Libcalls);
+ 
+     // Set the partition to external if we know it is re-defined by the linker
+     // with -defsym or -wrap options, used elsewhere, e.g. it is visible to a
+@@ -850,12 +844,6 @@ Error LTO::add(std::unique_ptr<InputFile> InputPtr,
+   return Error::success();
+ }
+ 
+-void LTO::setBitcodeLibFuncs(ArrayRef<StringRef> BitcodeLibFuncs) {
+-  assert(this->BitcodeLibFuncs.empty() &&
+-         "bitcode libfuncs were set twice; maybe accidentally clobbered?");
+-  this->BitcodeLibFuncs.append(BitcodeLibFuncs.begin(), BitcodeLibFuncs.end());
+-}
+-
+ Expected<ArrayRef<SymbolResolution>>
+ LTO::addModule(InputFile &Input, ArrayRef<SymbolResolution> InputRes,
+                unsigned ModI, ArrayRef<SymbolResolution> Res) {
+@@ -1481,9 +1469,9 @@ Error LTO::runRegularLTO(AddStreamFn AddStream) {
+   }
+ 
+   if (!RegularLTO.EmptyCombinedModule || Conf.AlwaysEmitRegularLTOObj) {
+-    if (Error Err = backend(
+-            Conf, AddStream, RegularLTO.ParallelCodeGenParallelismLevel,
+-            *RegularLTO.CombinedModule, ThinLTO.CombinedIndex, BitcodeLibFuncs))
++    if (Error Err =
++            backend(Conf, AddStream, RegularLTO.ParallelCodeGenParallelismLevel,
++                    *RegularLTO.CombinedModule, ThinLTO.CombinedIndex))
+       return Err;
+   }
+ 
+@@ -1503,20 +1491,6 @@ SmallVector<const char *> LTO::getRuntimeLibcallSymbols(const Triple &TT) {
+   return LibcallSymbols;
+ }
+ 
+-SmallVector<StringRef> LTO::getLibFuncSymbols(const Triple &TT,
+-                                              StringSaver &Saver) {
+-  auto TLII = std::make_unique<TargetLibraryInfoImpl>(TT);
+-  TargetLibraryInfo TLI(*TLII);
+-  SmallVector<StringRef> LibFuncSymbols;
+-  LibFuncSymbols.reserve(LibFunc::NumLibFuncs);
+-  for (unsigned I = LibFunc::Begin_LibFunc; I != LibFunc::End_LibFunc; ++I) {
+-    LibFunc F = static_cast<LibFunc>(I);
+-    if (TLI.has(F))
+-      LibFuncSymbols.push_back(Saver.save(TLI.getName(F)).data());
+-  }
+-  return LibFuncSymbols;
+-}
+-
+ Error ThinBackendProc::emitFiles(
+     const FunctionImporter::ImportMapTy &ImportList, llvm::StringRef ModulePath,
+     const std::string &NewModulePath) const {
+@@ -1594,7 +1568,6 @@ protected:
+   // generating directly into the returned output stream.
+   AddStreamFn AddStream;
+   FileCache Cache;
+-  ArrayRef<StringRef> BitcodeLibFuncs;
+ 
+ public:
+   InProcessThinBackend(
+@@ -1602,13 +1575,11 @@ public:
+       ThreadPoolStrategy ThinLTOParallelism,
+       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+       AddStreamFn AddStream, FileCache Cache, lto::IndexWriteCallback OnWrite,
+-      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles,
+-      ArrayRef<StringRef> BitcodeLibFuncs)
++      bool ShouldEmitIndexFiles, bool ShouldEmitImportsFiles)
+       : CGThinBackend(Conf, CombinedIndex, ModuleToDefinedGVSummaries, OnWrite,
+                       ShouldEmitIndexFiles, ShouldEmitImportsFiles,
+                       ThinLTOParallelism),
+-        AddStream(std::move(AddStream)), Cache(std::move(Cache)),
+-        BitcodeLibFuncs(BitcodeLibFuncs) {}
++        AddStream(std::move(AddStream)), Cache(std::move(Cache)) {}
+ 
+   virtual Error runThinLTOBackendThread(
+       AddStreamFn AddStream, FileCache Cache, unsigned Task, BitcodeModule BM,
+@@ -1629,7 +1600,7 @@ public:
+ 
+       return thinBackend(Conf, Task, AddStream, **MOrErr, CombinedIndex,
+                          ImportList, DefinedGlobals, &ModuleMap,
+-                         Conf.CodeGenOnly, BitcodeLibFuncs);
++                         Conf.CodeGenOnly);
+     };
+     if (ShouldEmitIndexFiles) {
+       if (auto E = emitFiles(ImportList, ModuleID, ModuleID.str()))
+@@ -1714,14 +1685,13 @@ public:
+       const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+       ThreadPoolStrategy ThinLTOParallelism,
+       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-      AddStreamFn CGAddStream, FileCache CGCache,
+-      ArrayRef<StringRef> BitcodeLibFuncs, AddStreamFn IRAddStream,
++      AddStreamFn CGAddStream, FileCache CGCache, AddStreamFn IRAddStream,
+       FileCache IRCache)
+       : InProcessThinBackend(Conf, CombinedIndex, ThinLTOParallelism,
+                              ModuleToDefinedGVSummaries, std::move(CGAddStream),
+                              std::move(CGCache), /*OnWrite=*/nullptr,
+                              /*ShouldEmitIndexFiles=*/false,
+-                             /*ShouldEmitImportsFiles=*/false, BitcodeLibFuncs),
++                             /*ShouldEmitImportsFiles=*/false),
+         IRAddStream(std::move(IRAddStream)), IRCache(std::move(IRCache)) {}
+ 
+   Error runThinLTOBackendThread(
+@@ -1744,7 +1714,7 @@ public:
+ 
+       return thinBackend(Conf, Task, CGAddStream, **MOrErr, CombinedIndex,
+                          ImportList, DefinedGlobals, &ModuleMap,
+-                         Conf.CodeGenOnly, BitcodeLibFuncs, IRAddStream);
++                         Conf.CodeGenOnly, IRAddStream);
+     };
+     // Like InProcessThinBackend, we produce index files as needed for
+     // FirstRoundThinBackend. However, these files are not generated for
+@@ -1811,7 +1781,6 @@ public:
+       ThreadPoolStrategy ThinLTOParallelism,
+       const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+       AddStreamFn AddStream, FileCache Cache,
+-      ArrayRef<StringRef> BitcodeLibFuncs,
+       std::unique_ptr<SmallVector<StringRef>> IRFiles,
+       stable_hash CombinedCGDataHash)
+       : InProcessThinBackend(Conf, CombinedIndex, ThinLTOParallelism,
+@@ -1819,7 +1788,7 @@ public:
+                              std::move(Cache),
+                              /*OnWrite=*/nullptr,
+                              /*ShouldEmitIndexFiles=*/false,
+-                             /*ShouldEmitImportsFiles=*/false, BitcodeLibFuncs),
++                             /*ShouldEmitImportsFiles=*/false),
+         IRFiles(std::move(IRFiles)), CombinedCGDataHash(CombinedCGDataHash) {}
+ 
+   Error runThinLTOBackendThread(
+@@ -1840,7 +1809,7 @@ public:
+ 
+       return thinBackend(Conf, Task, AddStream, *LoadedModule, CombinedIndex,
+                          ImportList, DefinedGlobals, &ModuleMap,
+-                         /*CodeGenOnly=*/true, BitcodeLibFuncs);
++                         /*CodeGenOnly=*/true);
+     };
+     if (!Cache.isValid() || !CombinedIndex.modulePaths().count(ModuleID) ||
+         all_of(CombinedIndex.getModuleHash(ModuleID),
+@@ -1879,12 +1848,11 @@ ThinBackend lto::createInProcessThinBackend(ThreadPoolStrategy Parallelism,
+   auto Func =
+       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-          AddStreamFn AddStream, FileCache Cache,
+-          ArrayRef<StringRef> BitcodeLibFuncs) {
++          AddStreamFn AddStream, FileCache Cache) {
+         return std::make_unique<InProcessThinBackend>(
+             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
+             AddStream, Cache, OnWrite, ShouldEmitIndexFiles,
+-            ShouldEmitImportsFiles, BitcodeLibFuncs);
++            ShouldEmitImportsFiles);
+       };
+   return ThinBackend(Func, Parallelism);
+ }
+@@ -2001,8 +1969,7 @@ ThinBackend lto::createWriteIndexesThinBackend(
+   auto Func =
+       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-          AddStreamFn AddStream, FileCache Cache,
+-          ArrayRef<StringRef> BitcodeLibFuncs) {
++          AddStreamFn AddStream, FileCache Cache) {
+         return std::make_unique<WriteIndexesThinBackend>(
+             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
+             OldPrefix, NewPrefix, NativeObjectPrefix, ShouldEmitImportsFiles,
+@@ -2255,7 +2222,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
+   if (!CodeGenDataThinLTOTwoRounds) {
+     std::unique_ptr<ThinBackendProc> BackendProc =
+         ThinLTO.Backend(Conf, ThinLTO.CombinedIndex, ModuleToDefinedGVSummaries,
+-                        AddStream, Cache, BitcodeLibFuncs);
++                        AddStream, Cache);
+     return RunBackends(BackendProc.get());
+   }
+ 
+@@ -2278,7 +2245,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
+   LLVM_DEBUG(dbgs() << "[TwoRounds] Running the first round of codegen\n");
+   auto FirstRoundLTO = std::make_unique<FirstRoundThinBackend>(
+       Conf, ThinLTO.CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
+-      CG.AddStream, CG.Cache, BitcodeLibFuncs, IR.AddStream, IR.Cache);
++      CG.AddStream, CG.Cache, IR.AddStream, IR.Cache);
+   if (Error E = RunBackends(FirstRoundLTO.get()))
+     return E;
+ 
+@@ -2294,7 +2261,7 @@ Error LTO::runThinLTO(AddStreamFn AddStream, FileCache Cache,
+   LLVM_DEBUG(dbgs() << "[TwoRounds] Running the second round of codegen\n");
+   auto SecondRoundLTO = std::make_unique<SecondRoundThinBackend>(
+       Conf, ThinLTO.CombinedIndex, Parallelism, ModuleToDefinedGVSummaries,
+-      AddStream, Cache, BitcodeLibFuncs, IR.getResult(), CombinedHash);
++      AddStream, Cache, IR.getResult(), CombinedHash);
+   return RunBackends(SecondRoundLTO.get());
+ }
+ 
+@@ -2801,7 +2768,7 @@ ThinBackend lto::createOutOfProcessThinBackend(
+   auto Func =
+       [=](const Config &Conf, ModuleSummaryIndex &CombinedIndex,
+           const DenseMap<StringRef, GVSummaryMapTy> &ModuleToDefinedGVSummaries,
+-          AddStreamFn, FileCache Cache, ArrayRef<StringRef> BitcodeLibFuncs) {
++          AddStreamFn, FileCache Cache) {
+         return std::make_unique<OutOfProcessThinBackend>(
+             Conf, CombinedIndex, Parallelism, ModuleToDefinedGVSummaries, Cache,
+             OnWrite, ShouldEmitIndexFiles, ShouldEmitImportsFiles,
+diff --git a/llvm/lib/LTO/LTOBackend.cpp b/llvm/lib/LTO/LTOBackend.cpp
+index 16a42e526eb8..7ee2557a68bd 100644
+--- a/llvm/lib/LTO/LTOBackend.cpp
++++ b/llvm/lib/LTO/LTOBackend.cpp
+@@ -259,8 +259,7 @@ createTargetMachine(const Config &Conf, const Target *TheTarget, Module &M) {
+ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
+                            unsigned OptLevel, bool IsThinLTO,
+                            ModuleSummaryIndex *ExportSummary,
+-                           const ModuleSummaryIndex *ImportSummary,
+-                           const DenseSet<StringRef> &BitcodeLibFuncs) {
++                           const ModuleSummaryIndex *ImportSummary) {
+   std::optional<PGOOptions> PGOOpt;
+   if (!Conf.SampleProfile.empty())
+     PGOOpt = PGOOptions(Conf.SampleProfile, "", Conf.ProfileRemapping,
+@@ -302,20 +301,6 @@ static void runNewPMPasses(const Config &Conf, Module &Mod, TargetMachine *TM,
+       new TargetLibraryInfoImpl(TM->getTargetTriple(), TM->Options.VecLib));
+   if (Conf.Freestanding)
+     TLII->disableAllFunctions();
+-
+-  // Determine whether or not its safe to emit calls to each libfunc. Libfuncs
+-  // that might have been present in the current LTO unit, but are not, have
+-  // lost their only opportunity to be defined, and calls must not be emitted to
+-  // them.
+-  // FIXME: BitcodeLibFuncs isn't yet set for distributed ThinLTO.
+-  TargetLibraryInfo TLI(*TLII);
+-  for (unsigned I = 0, E = static_cast<unsigned>(LibFunc::NumLibFuncs); I != E;
+-       ++I) {
+-    LibFunc F = static_cast<LibFunc>(I);
+-    if (BitcodeLibFuncs.contains(TLI.getName(F)))
+-      TLII->setUnavailable(F);
+-  }
+-
+   FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
+ 
+   // Parse a custom AA pipeline if asked to.
+@@ -399,8 +384,7 @@ static bool isEmptyModule(const Module &Mod) {
+ bool lto::opt(const Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
+               bool IsThinLTO, ModuleSummaryIndex *ExportSummary,
+               const ModuleSummaryIndex *ImportSummary,
+-              const std::vector<uint8_t> &CmdArgs,
+-              ArrayRef<StringRef> BitcodeLibFuncs) {
++              const std::vector<uint8_t> &CmdArgs) {
+   llvm::TimeTraceScope timeScope("opt");
+   if (EmbedBitcode == LTOBitcodeEmbedding::EmbedPostMergePreOptimized) {
+     // FIXME: the motivation for capturing post-merge bitcode and command line
+@@ -425,11 +409,9 @@ bool lto::opt(const Config &Conf, TargetMachine *TM, unsigned Task, Module &Mod,
+   // analysis in the case of a ThinLTO build where this might be an empty
+   // regular LTO combined module, with a large combined index from ThinLTO.
+   if (!isEmptyModule(Mod)) {
+-    DenseSet<StringRef> BitcodeLibFuncsSet(BitcodeLibFuncs.begin(),
+-                                           BitcodeLibFuncs.end());
+     // FIXME: Plumb the combined index into the new pass manager.
+     runNewPMPasses(Conf, Mod, TM, Conf.OptLevel, IsThinLTO, ExportSummary,
+-                   ImportSummary, BitcodeLibFuncsSet);
++                   ImportSummary);
+   }
+   return !Conf.PostOptModuleHook || Conf.PostOptModuleHook(Task, Mod);
+ }
+@@ -595,8 +577,7 @@ Error lto::finalizeOptimizationRemarks(LLVMRemarkFileHandle DiagOutputFile) {
+ 
+ Error lto::backend(const Config &C, AddStreamFn AddStream,
+                    unsigned ParallelCodeGenParallelismLevel, Module &Mod,
+-                   ModuleSummaryIndex &CombinedIndex,
+-                   ArrayRef<StringRef> BitcodeLibFuncs) {
++                   ModuleSummaryIndex &CombinedIndex) {
+   llvm::TimeTraceScope timeScope("LTO backend");
+   Expected<const Target *> TOrErr = initAndLookupTarget(C, Mod);
+   if (!TOrErr)
+@@ -608,7 +589,7 @@ Error lto::backend(const Config &C, AddStreamFn AddStream,
+   if (!C.CodeGenOnly) {
+     if (!opt(C, TM.get(), 0, Mod, /*IsThinLTO=*/false,
+              /*ExportSummary=*/&CombinedIndex, /*ImportSummary=*/nullptr,
+-             /*CmdArgs*/ std::vector<uint8_t>(), BitcodeLibFuncs))
++             /*CmdArgs*/ std::vector<uint8_t>()))
+       return Error::success();
+   }
+ 
+@@ -648,8 +629,7 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
+                        const FunctionImporter::ImportMapTy &ImportList,
+                        const GVSummaryMapTy &DefinedGlobals,
+                        MapVector<StringRef, BitcodeModule> *ModuleMap,
+-                       bool CodeGenOnly, ArrayRef<StringRef> BitcodeLibFuncs,
+-                       AddStreamFn IRAddStream,
++                       bool CodeGenOnly, AddStreamFn IRAddStream,
+                        const std::vector<uint8_t> &CmdArgs) {
+   llvm::TimeTraceScope timeScope("Thin backend", Mod.getModuleIdentifier());
+   Expected<const Target *> TOrErr = initAndLookupTarget(Conf, Mod);
+@@ -688,7 +668,7 @@ Error lto::thinBackend(const Config &Conf, unsigned Task, AddStreamFn AddStream,
+         // Perform optimization and code generation for ThinLTO.
+         if (!opt(Conf, TM, Task, Mod, /*IsThinLTO=*/true,
+                  /*ExportSummary=*/nullptr, /*ImportSummary=*/&CombinedIndex,
+-                 CmdArgs, BitcodeLibFuncs))
++                 CmdArgs))
+           return finalizeOptimizationRemarks(std::move(DiagnosticOutputFile));
+ 
+         // Save the current module before the first codegen round.
+diff --git a/llvm/lib/LTO/LTOCodeGenerator.cpp b/llvm/lib/LTO/LTOCodeGenerator.cpp
+index 8b9bcfb1d473..46be71da5a09 100644
+--- a/llvm/lib/LTO/LTOCodeGenerator.cpp
++++ b/llvm/lib/LTO/LTOCodeGenerator.cpp
+@@ -614,7 +614,7 @@ bool LTOCodeGenerator::optimize() {
+   TargetMach = createTargetMachine();
+   if (!opt(Config, TargetMach.get(), 0, *MergedModule, /*IsThinLTO=*/false,
+            /*ExportSummary=*/&CombinedIndex, /*ImportSummary=*/nullptr,
+-           /*CmdArgs*/ std::vector<uint8_t>(), /*BitcodeLibFuncs=*/{})) {
++           /*CmdArgs*/ std::vector<uint8_t>())) {
+     emitError("LTO middle-end optimizations failed");
+     return false;
+   }
+@@ -639,7 +639,7 @@ bool LTOCodeGenerator::compileOptimized(AddStreamFn AddStream,
+ 
+   Config.CodeGenOnly = true;
+   Error Err = backend(Config, AddStream, ParallelismLevel, *MergedModule,
+-                      CombinedIndex, /*BitcodeLibFuncs=*/{});
++                      CombinedIndex);
+   assert(!Err && "unexpected code-generation failure");
+   (void)Err;
+ 
+diff --git a/llvm/lib/LTO/ThinLTOCodeGenerator.cpp b/llvm/lib/LTO/ThinLTOCodeGenerator.cpp
+index 6397fdffed68..93b672ae7840 100644
+--- a/llvm/lib/LTO/ThinLTOCodeGenerator.cpp
++++ b/llvm/lib/LTO/ThinLTOCodeGenerator.cpp
+@@ -292,10 +292,8 @@ addUsedSymbolToPreservedGUID(const lto::InputFile &File,
+                              DenseSet<GlobalValue::GUID> &PreservedGUID) {
+   Triple TT(File.getTargetTriple());
+   RTLIB::RuntimeLibcallsInfo Libcalls(TT);
+-  TargetLibraryInfoImpl TLII(TT);
+-  TargetLibraryInfo TLI(TLII);
+   for (const auto &Sym : File.symbols())
+-    if (Sym.isUsed() || Sym.isLibcall(TLI, Libcalls))
++    if (Sym.isUsed() || Sym.isLibcall(Libcalls))
+       PreservedGUID.insert(
+           GlobalValue::getGUIDAssumingExternalLinkage(Sym.getIRName()));
+ }
+diff --git a/llvm/test/LTO/Resolution/X86/libcall-external.ll b/llvm/test/LTO/Resolution/X86/libcall-external.ll
+deleted file mode 100644
+index 46756b387668..000000000000
+--- a/llvm/test/LTO/Resolution/X86/libcall-external.ll
++++ /dev/null
+@@ -1,25 +0,0 @@
+-;; When a libcall was not brought into the link, it can be used iff it is
+-;; defined in native code, not bitcode.
+-; RUN: opt %s -o %t.o -mtriple x86_64-unknown-linux-musl
+-; RUN: llvm-lto2 run -o %t.bitcode.o \
+-; RUN:   -r %t.o,foo,plx -r %t.o,memcmp,x -save-temps %t.o \
+-; RUN:   --bitcode-libfuncs=bcmp 
+-; RUN: llvm-dis %t.bitcode.o.0.4.opt.bc -o - | FileCheck --check-prefixes=CHECK,BITCODE %s
+-; RUN: llvm-lto2 run -o %t.native.o \
+-; RUN:   -r %t.o,foo,plx -r %t.o,memcmp,x -save-temps %t.o
+-; RUN: llvm-dis %t.native.o.0.4.opt.bc -o - | FileCheck --check-prefixes=CHECK,NATIVE %s
+-define i1 @foo(ptr %0, ptr %1, i64 %2) {
+-  ; CHECK-LABEL: define{{.*}}i1 @foo
+-  ; BITCODE-NEXT: %cmp = {{.*}}call i32 @memcmp
+-  ; BITCODE-NEXT: %eq = icmp eq i32 %cmp, 0
+-  ; NATIVE-NEXT: %bcmp = {{.*}}call i32 @bcmp
+-  ; NATIVE-NEXT: %eq = icmp eq i32 %bcmp, 0
+-  ; CHECK-NEXT: ret i1 %eq
+-
+-
+-  %cmp = call i32 @memcmp(ptr %0, ptr %1, i64 %2)
+-  %eq = icmp eq i32 %cmp, 0
+-  ret i1 %eq
+-}
+-
+-declare i32 @memcmp(ptr, ptr, i64)
+diff --git a/llvm/test/LTO/Resolution/X86/libcall-in-thin-link.ll b/llvm/test/LTO/Resolution/X86/libcall-in-thin-link.ll
+deleted file mode 100644
+index fe8e492580d4..000000000000
+--- a/llvm/test/LTO/Resolution/X86/libcall-in-thin-link.ll
++++ /dev/null
+@@ -1,35 +0,0 @@
+-;; If a libcall was extracted in a thin link, it can be used even if not
+-;; present in the current TU.
+-
+-; RUN: rm -rf %t && split-file %s %t && cd %t
+-; RUN: opt foo.ll -o foo.o -module-summary -mtriple x86_64-unknown-linux-musl
+-; RUN: opt bcmp.ll -o bcmp.o -module-summary -mtriple x86_64-unknown-linux-musl
+-; RUN: llvm-lto2 run -o lto.o \
+-; RUN:   -r foo.o,foo,plx \
+-; RUN:   -r foo.o,memcmp,x \
+-; RUN:   -r bcmp.o,bcmp,pl \
+-; RUN:   -r bcmp.o,bcmp_impl,x foo.o bcmp.o -save-temps
+-; RUN: llvm-dis lto.o.1.4.opt.bc -o - | FileCheck %s
+-
+-;--- foo.ll
+-define i1 @foo(ptr %0, ptr %1, i64 %2) {
+-  ; CHECK-LABEL: define{{.*}}i1 @foo
+-  ; CHECK-NEXT: %bcmp = {{.*}}call i32 @bcmp
+-  ; CHECK-NEXT: %eq = icmp eq i32 %bcmp, 0
+-  ; CHECK-NEXT: ret i1 %eq
+-
+-  %cmp = call i32 @memcmp(ptr %0, ptr %1, i64 %2)
+-  %eq = icmp eq i32 %cmp, 0
+-  ret i1 %eq
+-}
+-
+-declare i32 @memcmp(ptr, ptr, i64)
+-
+-;--- bcmp.ll
+-define i32 @bcmp(ptr %0, ptr %1, i64 %2) noinline {
+-  %r = call i32 @bcmp_impl(ptr %0, ptr %1, i64 %2)
+-  ret i32 %r
+-}
+-
+-declare i32 @bcmp_impl(ptr, ptr, i64)
+-
+diff --git a/llvm/test/LTO/Resolution/X86/libcall-in-tu.ll b/llvm/test/LTO/Resolution/X86/libcall-in-tu.ll
+deleted file mode 100644
+index cddf5d30697d..000000000000
+--- a/llvm/test/LTO/Resolution/X86/libcall-in-tu.ll
++++ /dev/null
+@@ -1,34 +0,0 @@
+-;; This test comes from a real world scenario in LTO, where the definition of
+-;; bcmp was deleted because it has no uses, but later instcombine re-introduced
+-;; a call to bcmp() as part of SimplifyLibCalls. Such deletions must not be
+-;; allowed.
+-
+-; RUN: opt %s -o %t.o -mtriple x86_64-unknown-linux-musl
+-; RUN: llvm-lto2 run -o %t.lto.o \
+-; RUN:   -r %t.o,foo,plx \
+-; RUN:   -r %t.o,memcmp,x \
+-; RUN:   -r %t.o,bcmp,pl \
+-; RUN:   -r %t.o,bcmp_impl,x %t.o -save-temps
+-; RUN: llvm-dis %t.lto.o.0.4.opt.bc -o - | FileCheck %s
+-
+-define i1 @foo(ptr %0, ptr %1, i64 %2) {
+-  ; CHECK-LABEL: define{{.*}}i1 @foo
+-  ; CHECK-NEXT: %bcmp = {{.*}}call i32 @bcmp
+-  ; CHECK-NEXT: %eq = icmp eq i32 %bcmp, 0
+-  ; CHECK-NEXT: ret i1 %eq
+-
+-  %cmp = call i32 @memcmp(ptr %0, ptr %1, i64 %2)
+-  %eq = icmp eq i32 %cmp, 0
+-  ret i1 %eq
+-}
+-
+-declare i32 @memcmp(ptr, ptr, i64)
+-declare i32 @bcmp_impl(ptr, ptr, i64)
+-
+-;; Ensure bcmp is not removed from module because it is external.
+-; CHECK: define dso_local i32 @bcmp
+-define i32 @bcmp(ptr %0, ptr %1, i64 %2) noinline {
+-  %r = call i32 @bcmp_impl(ptr %0, ptr %1, i64 %2)
+-  ret i32 %r
+-}
+-
+diff --git a/llvm/tools/llvm-lto2/llvm-lto2.cpp b/llvm/tools/llvm-lto2/llvm-lto2.cpp
+index 839324e39685..8c676251cb39 100644
+--- a/llvm/tools/llvm-lto2/llvm-lto2.cpp
++++ b/llvm/tools/llvm-lto2/llvm-lto2.cpp
+@@ -234,19 +234,6 @@ static cl::opt<bool>
+     AllVtablesHaveTypeInfos("all-vtables-have-type-infos", cl::Hidden,
+                             cl::desc("All vtables have type infos"));
+ 
+-// Specifying a symbol here states that it is a library symbol that had a
+-// definition in bitcode, but was not extracted. Such symbols cannot safely
+-// be referenced, since they have already lost their opportunity to be defined.
+-//
+-// FIXME: Listing all bitcode libfunc symbols here is clunky. A higher-level way
+-// to indicate which TUs made it into the link might be better, but this would
+-// require more detailed tracking of the sources of constructs in the IR.
+-// Alternatively, there may be some other data structure that could hold this
+-// information.
+-static cl::list<std::string> BitcodeLibFuncs(
+-    "bitcode-libfuncs", cl::Hidden,
+-    cl::desc("set of unextracted libfuncs implemented in bitcode"));
+-
+ static cl::opt<bool> TimeTrace("time-trace", cl::desc("Record time trace"));
+ 
+ static cl::opt<unsigned> TimeTraceGranularity(
+@@ -527,9 +514,6 @@ static int run(int argc, char **argv) {
+   if (HasErrors)
+     return 1;
+ 
+-  Lto.setBitcodeLibFuncs(
+-      SmallVector<StringRef>(BitcodeLibFuncs.begin(), BitcodeLibFuncs.end()));
+-
+   FileCache Cache;
+   if (!CacheDir.empty())
+     Cache = check(localCache("ThinLTO", "Thin", CacheDir, AddBuffer),
+-- 
+2.55.0.229.g6434b31f56-goog
+

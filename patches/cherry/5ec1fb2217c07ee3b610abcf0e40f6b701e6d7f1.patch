@@ -1,0 +1,102 @@
+From 5ec1fb2217c07ee3b610abcf0e40f6b701e6d7f1 Mon Sep 17 00:00:00 2001
+From: Matt Arsenault <Matthew.Arsenault@amd.com>
+Date: Fri, 10 Apr 2026 23:34:04 +0200
+Subject: [PATCH] Revert "RuntimeLibcalls: Add mustprogress to common function
+ attributes (#167080)" (#191524)
+
+This reverts commit eb5297e0ade96fe8a6297763f28219be97dfac76.
+
+This is redundant with willreturn.
+---
+ llvm/lib/IR/RuntimeLibcalls.cpp                             | 6 +++---
+ llvm/test/Transforms/Util/DeclareRuntimeLibcalls/armpl.ll   | 4 ++--
+ llvm/test/Transforms/Util/DeclareRuntimeLibcalls/basic.ll   | 6 +++---
+ .../Util/DeclareRuntimeLibcalls/merge_attributes.ll         | 2 +-
+ .../Transforms/Util/DeclareRuntimeLibcalls/sincos_stret.ll  | 4 ++--
+ llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sleef.ll   | 4 ++--
+ 6 files changed, 13 insertions(+), 13 deletions(-)
+
+diff --git a/llvm/lib/IR/RuntimeLibcalls.cpp b/llvm/lib/IR/RuntimeLibcalls.cpp
+index e9b5a72adb26..96aef0234261 100644
+--- a/llvm/lib/IR/RuntimeLibcalls.cpp
++++ b/llvm/lib/IR/RuntimeLibcalls.cpp
+@@ -163,10 +163,10 @@ RuntimeLibcallsInfo::getFunctionTy(LLVMContext &Ctx, const Triple &TT,
+                                    RTLIB::LibcallImpl LibcallImpl) const {
+   // TODO: NoCallback probably unsafe in general
+   static constexpr Attribute::AttrKind CommonFnAttrs[] = {
+-      Attribute::MustProgress, Attribute::NoCallback, Attribute::NoFree,
+-      Attribute::NoSync,       Attribute::NoUnwind,   Attribute::WillReturn};
++      Attribute::NoCallback, Attribute::NoFree, Attribute::NoSync,
++      Attribute::NoUnwind, Attribute::WillReturn};
+   static constexpr Attribute::AttrKind MemoryFnAttrs[] = {
+-      Attribute::MustProgress, Attribute::NoUnwind, Attribute::WillReturn};
++      Attribute::NoUnwind, Attribute::WillReturn};
+   static constexpr Attribute::AttrKind CommonPtrArgAttrs[] = {
+       Attribute::NoAlias, Attribute::WriteOnly, Attribute::NonNull};
+ 
+diff --git a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/armpl.ll b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/armpl.ll
+index 4c7cb41445f5..3ea18f7c8c92 100644
+--- a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/armpl.ll
++++ b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/armpl.ll
+@@ -46,5 +46,5 @@
+ ; CHECK: declare aarch64_vector_pcs void @armpl_vsincosq_f64(<2 x double>, ptr noalias nonnull writeonly align 16, ptr noalias nonnull writeonly align 16) [[ATTRS_PTR_ARG]]
+ 
+ 
+-; CHECK: attributes [[ATTRS]] = { mustprogress nocallback nofree nosync nounwind willreturn }
+-; CHECK: attributes [[ATTRS_PTR_ARG]] = { mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: write) }
++; CHECK: attributes [[ATTRS]] = { nocallback nofree nosync nounwind willreturn }
++; CHECK: attributes [[ATTRS_PTR_ARG]] = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+diff --git a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/basic.ll b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/basic.ll
+index f1a039dc033a..863f899309b7 100644
+--- a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/basic.ll
++++ b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/basic.ll
+@@ -64,6 +64,6 @@ define float @sinf(float %x) {
+ 
+ ; CHECK: declare void @truncl(...)
+ 
+-; CHECK: attributes [[CALLOC_ATTRS]] = { mustprogress nofree nounwind willreturn allockind("alloc") allocsize(0,1) "alloc-family"="malloc" }
+-; CHECK: attributes [[FREE_ATTRS]] = { mustprogress nounwind willreturn allockind("free") "alloc-family"="malloc" }
+-; CHECK: attributes [[MALLOC_ATTRS]] = { mustprogress nofree nounwind willreturn allockind("alloc,uninitialized") allocsize(0) "alloc-family"="malloc" }
++; CHECK: attributes [[CALLOC_ATTRS]] = { nofree nounwind willreturn allockind("alloc") allocsize(0,1) "alloc-family"="malloc" }
++; CHECK: attributes [[FREE_ATTRS]] = { nounwind willreturn allockind("free") "alloc-family"="malloc" }
++; CHECK: attributes [[MALLOC_ATTRS]] = { nofree nounwind willreturn allockind("alloc,uninitialized") allocsize(0) "alloc-family"="malloc" }
+diff --git a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/merge_attributes.ll b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/merge_attributes.ll
+index af876a7988d4..ffbf11d4106d 100644
+--- a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/merge_attributes.ll
++++ b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/merge_attributes.ll
+@@ -8,4 +8,4 @@ define noundef nofpclass(nan) float @sqrtf(float %x) "foo" {
+ ; FIXME: Individual fields of nofpclass not merged
+ ; CHECK: define noundef nofpclass(ninf nsub nnorm) float @sqrtf(float %x) [[SQRT_ATTR:#[0-9]+]] {
+ 
+-; CHECK: attributes [[SQRT_ATTR]] = { mustprogress nocallback nofree nosync nounwind willreturn memory(errnomem: write) "foo" }
++; CHECK: attributes [[SQRT_ATTR]] = { nocallback nofree nosync nounwind willreturn memory(errnomem: write) "foo" }
+diff --git a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sincos_stret.ll b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sincos_stret.ll
+index c7da97d410a9..57cb016bcb7f 100644
+--- a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sincos_stret.ll
++++ b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sincos_stret.ll
+@@ -16,8 +16,8 @@
+ ; SRET: declare void @__sincos_stret(ptr sret({ double, double }) align 4, double) [[SINCOS_ATTRS:#[0-9]+]]
+ ; SRET: declare void @__sincosf_stret(ptr sret({ float, float }) align 4, float) [[SINCOS_ATTRS:#[0-9]+]]
+ 
+-; CHECK: attributes [[SINCOS_ATTRS]] = { mustprogress nocallback nofree nosync nounwind willreturn memory(errnomem: write) }
+-; SRET: attributes [[SINCOS_ATTRS]] = { mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: write, errnomem: write) }
++; CHECK: attributes [[SINCOS_ATTRS]] = { nocallback nofree nosync nounwind willreturn memory(errnomem: write) }
++; SRET: attributes [[SINCOS_ATTRS]] = { nocallback nofree nosync nounwind willreturn memory(argmem: write, errnomem: write) }
+ 
+ ; NONE-NOT: __sincos_stret
+ ; NONE-NOT: __sincosf_stret
+diff --git a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sleef.ll b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sleef.ll
+index 73895b7565f5..c248303a7aff 100644
+--- a/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sleef.ll
++++ b/llvm/test/Transforms/Util/DeclareRuntimeLibcalls/sleef.ll
+@@ -34,5 +34,5 @@
+ 
+ ; CHECK: declare void @_ZGVsNxvl8l8_sincospi(<vscale x 2 x double>, ptr noalias nonnull writeonly align 16, ptr noalias nonnull writeonly align 16) [[ATTRS_PTR_ARG]]
+ 
+-; CHECK: attributes [[ATTRS_PTR_ARG]] = { mustprogress nocallback nofree nosync nounwind willreturn memory(argmem: write) }
+-; CHECK: attributes [[ATTRS]] = { mustprogress nocallback nofree nosync nounwind willreturn }
++; CHECK: attributes [[ATTRS_PTR_ARG]] = { nocallback nofree nosync nounwind willreturn memory(argmem: write) }
++; CHECK: attributes [[ATTRS]] = { nocallback nofree nosync nounwind willreturn }
+-- 
+2.55.0.229.g6434b31f56-goog
+

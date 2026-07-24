@@ -1094,6 +1094,48 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"RuntimeLibcalls: Add mustprogress to common function attributes (#167080)\" (#191524)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5ec1fb2217c07ee3b610abcf0e40f6b701e6d7f1.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614195
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[lldb][DWARFASTParserClang] Handle pointer-to-member-data non-type te\u2026\" (#191798)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/a98ecc9027426941851ac32ff75cb599acf49221.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614343
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[libclc][CMake] Use clang/llvm-ar on Windows (#186726)\" (#191745)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/12f636d4425ae2c89479ae65a581b8bc5ef53571.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614453
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI][AArch64] Add AArch64 LFI rewrites for system instructions (#186896)"
         },
         "platforms": [
@@ -1150,6 +1192,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[Fuchsia] Stack analysis flags for runtimes\" (#192515)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/bec1019d14d9c9b79b0b5e29ae4b1114942fb67b.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614856
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI][Doc] Update documentation for planned features (#192128)"
         },
         "platforms": [
@@ -1159,6 +1215,20 @@
         "version_range": {
             "from": 614150,
             "until": 615006
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"Reland \"[LTO][LLD] Prevent invalid LTO libfunc transforms (#164916)\"\" (#192741)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/24154a55d698a98e7b6d2aae1778b79f15ce5b09.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615018
         }
     },
     {
@@ -1192,6 +1262,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[SelectionDAG] Salvage debuginfo when combining load and z|s ext instrs. (#188544)\" (#193554)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/91fe498ccc31ca2ac3cfe9d83bd8c9e22be3b566.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615587
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[C++20] [Modules] Don't profiling the callee of CXXFoldExpr (#190732)\" (#193975)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/52534a1e1207aa1a983d7ee47e5e3a871b7373e5.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615918
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI][AArch64] Add rewrites for control flow (#192602)"
         },
         "platforms": [
@@ -1220,6 +1318,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"SROA: Recognize llvm.protected.field.ptr intrinsics.\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5aa71ad4223ab4656c6cbec55b605adebc7c36ae.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 616283
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Avoid indirect branches from cold sections when BTI is enabled (#194727)"
         },
         "platforms": [
@@ -1234,6 +1346,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Revert \"[DenseMap] Add memory barrier for sanitizers in getInlineBuckets/getLargeRep (#183457)\" (#196143)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/020b0a0ab5b80cab963794bc54b1f2b4056d9c64.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 617483
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"Avoid assert in substqualifier (#182707)\" (#196755)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/254259b4ed748ea637428e56de8a7e1d402f0afe.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 617814
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI] Report reserved register modification in error message (#195160)"
         },
         "platforms": [
@@ -1243,6 +1383,20 @@
         "version_range": {
             "from": 614150,
             "until": 618183
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Reapply [SimplifyCFG] Extend jump-threading to allow live local defs (#197850)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/39d3090d005c5dd697c9b33ae5e43a200a2ccc48.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 619523
         }
     },
     {
@@ -1341,6 +1495,20 @@
         "version_range": {
             "from": 614150,
             "until": 627059
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[dsymutil] Add support for pseudo probes (#186877)\" (#206789)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ded4902fe10242e4581860f92056719fa4591b2c.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 627291
         }
     },
     {
