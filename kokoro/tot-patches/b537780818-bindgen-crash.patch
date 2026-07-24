@@ -1,0 +1,81 @@
+diff --git a/external/rust/android-crates-io/crates/bindgen/ir/comp.rs b/external/rust/android-crates-io/crates/bindgen/ir/comp.rs
+index 655e0f1fa..eae6400e5 100644
+--- a/external/rust/android-crates-io/crates/bindgen/ir/comp.rs
++++ b/external/rust/android-crates-io/crates/bindgen/ir/comp.rs
+@@ -203,7 +203,7 @@ impl Field {
+         match *self {
+             Field::Bitfields(BitfieldUnit { layout, .. }) => Some(layout),
+             Field::DataMember(ref data) => {
+-                ctx.resolve_type(data.ty).layout(ctx)
++                ctx.safe_resolve_type(data.ty)?.layout(ctx)
+             }
+         }
+     }
+@@ -754,7 +754,10 @@ impl CompFields {
+             name: &str,
+         ) -> bool {
+             methods.iter().any(|method| {
+-                let method_name = ctx.resolve_func(method.signature()).name();
++                let Some(func) = ctx.resolve_func_fallible(method.signature()) else {
++                    return false;
++                };
++                let method_name = func.name();
+                 method_name == name || ctx.rust_mangle(method_name) == name
+             })
+         }
+@@ -1172,9 +1175,10 @@ impl CompInfo {
+             }
+             CompFields::Before(ref raw_fields) => {
+                 for field in raw_fields {
+-                    let field_ty = ctx.resolve_type(field.0.ty);
+-                    if let Some(layout) = field_ty.layout(ctx) {
+-                        callback(layout);
++                    if let Some(field_ty) = ctx.safe_resolve_type(field.0.ty) {
++                        if let Some(layout) = field_ty.layout(ctx) {
++                            callback(layout);
++                        }
+                     }
+                 }
+             }
+diff --git a/external/rust/android-crates-io/crates/bindgen/ir/context.rs b/external/rust/android-crates-io/crates/bindgen/ir/context.rs
+index c0201a114..e099eaaa8 100644
+--- a/external/rust/android-crates-io/crates/bindgen/ir/context.rs
++++ b/external/rust/android-crates-io/crates/bindgen/ir/context.rs
+@@ -1464,6 +1464,15 @@ If you encounter an error missing from this list, please file an issue or a PR!"
+         self.resolve_item(func_id).kind().expect_function()
+     }
+ 
++    /// Resolve the given `ItemId` as a function, or `None` if there is no item
++    /// with the given ID.
++    ///
++    /// Panics if the ID resolves to an item that is not a function.
++    pub(crate) fn resolve_func_fallible(&self, func_id: FunctionId) -> Option<&Function> {
++        self.resolve_item_fallible(func_id)
++            .map(|t| t.kind().expect_function())
++    }
++
+     /// Resolve the given `ItemId` as a type, or `None` if there is no item with
+     /// the given ID.
+     ///
+diff --git a/external/rust/android-crates-io/crates/bindgen/ir/ty.rs b/external/rust/android-crates-io/crates/bindgen/ir/ty.rs
+index 38a7f6344..077802cef 100644
+--- a/external/rust/android-crates-io/crates/bindgen/ir/ty.rs
++++ b/external/rust/android-crates-io/crates/bindgen/ir/ty.rs
+@@ -212,7 +212,7 @@ impl Type {
+                 TypeKind::Comp(ref ci) => ci.layout(ctx),
+                 TypeKind::Array(inner, 0) => Some(Layout::new(
+                     0,
+-                    ctx.resolve_type(inner).layout(ctx)?.align,
++                    ctx.safe_resolve_type(inner)?.layout(ctx)?.align,
+                 )),
+                 // FIXME(emilio): This is a hack for anonymous union templates.
+                 // Use the actual pointer size!
+@@ -221,7 +221,7 @@ impl Type {
+                     ctx.target_pointer_size(),
+                 )),
+                 TypeKind::ResolvedTypeRef(inner) => {
+-                    ctx.resolve_type(inner).layout(ctx)
++                    ctx.safe_resolve_type(inner)?.layout(ctx)
+                 }
+                 _ => None,
+             }
