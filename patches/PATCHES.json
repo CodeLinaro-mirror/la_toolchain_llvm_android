@@ -1334,6 +1334,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang][Modules] Keep current-TU global-module-fragment internal-linkage functions viable in overload resolution (#210825)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/564b027db16dc14c2027cd5a2fbb8bf1d3877b85.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 627322
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
