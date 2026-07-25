@@ -1,0 +1,109 @@
+From 564b027db16dc14c2027cd5a2fbb8bf1d3877b85 Mon Sep 17 00:00:00 2001
+From: David Brittain <combinatorial@users.noreply.github.com>
+Date: Tue, 21 Jul 2026 18:57:32 -0700
+Subject: [PATCH] [clang][Modules] Keep current-TU global-module-fragment
+ internal-linkage functions viable in overload resolution (#210825)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fixes #210822
+
+A `static` (or anonymous-namespace) function declared in the global
+module fragment of the current TU is usable within the module unit
+([module.global.frag]/p1), but `Sema::AddOverloadCandidate` dropped it
+from the overload set when `Function->isInAnotherModuleUnit()` misfired
+— which it does when the enclosing template is instantiated after the
+GMF closes (pending instantiations run in
+`ActOnEndOfTranslationUnitFragment`, before the named module is in
+scope). The candidate was removed with the hidden
+`ovl_fail_module_mismatched` kind, so the error had no candidate notes.
+
+The existing carve-out (#104701) only exempted inline /
+implicitly-instantiated GMF functions. This also exempts
+internal-linkage functions from the current TU's GMF
+(`isFromGlobalModule() && !isFromASTFile()`); genuinely imported
+internal-linkage functions stay subject to the rule.
+
+`clang/test/Modules` and `clang/test/CXX/module` show no new failures;
+the `expose-static-inline-from-gmf-*` tests still pass. Adds a
+regression test.
+
+This change was developed with substantial assistance from an AI tool
+(Claude Code). The AI carried out the investigation and root-cause
+analysis, wrote the code change and the regression test, and drafted
+this description.
+---
+ clang/lib/Sema/SemaOverload.cpp               | 11 +++++-
+ .../gmf-internal-linkage-in-template.cppm     | 37 +++++++++++++++++++
+ 2 files changed, 47 insertions(+), 1 deletion(-)
+ create mode 100644 clang/test/Modules/gmf-internal-linkage-in-template.cppm
+
+diff --git a/clang/lib/Sema/SemaOverload.cpp b/clang/lib/Sema/SemaOverload.cpp
+index dc912e8e95fc..d66dea0d918f 100644
+--- a/clang/lib/Sema/SemaOverload.cpp
++++ b/clang/lib/Sema/SemaOverload.cpp
+@@ -7388,7 +7388,16 @@ void Sema::AddOverloadCandidate(
+         Function->isFromGlobalModule() &&
+         (IsImplicitlyInstantiated || Function->isInlined());
+ 
+-    if (ND->getFormalLinkage() == Linkage::Internal && !IsInlineFunctionInGMF) {
++    // Don't exclude internal-linkage entities from the current TU's global
++    // module fragment.
++    const Module *CurrentModule = getCurrentModule();
++    const bool IsCurrentUnitGMFDecl =
++        Function->isFromGlobalModule() && CurrentModule &&
++        Function->getOwningModule()->getTopLevelModule() ==
++            CurrentModule->getTopLevelModule();
++
++    if (ND->getFormalLinkage() == Linkage::Internal && !IsInlineFunctionInGMF &&
++        !IsCurrentUnitGMFDecl) {
+       Candidate.Viable = false;
+       Candidate.FailureKind = ovl_fail_module_mismatched;
+       return;
+diff --git a/clang/test/Modules/gmf-internal-linkage-in-template.cppm b/clang/test/Modules/gmf-internal-linkage-in-template.cppm
+new file mode 100644
+index 000000000000..faa41fe2ba04
+--- /dev/null
++++ b/clang/test/Modules/gmf-internal-linkage-in-template.cppm
+@@ -0,0 +1,37 @@
++// Verify that an internal-linkage function declared in the global module
++// fragment of the current translation unit remains usable from within the
++// module unit when it is only reached through a template instantiation that is
++// performed after the global module fragment is closed (i.e. the instantiation
++// is triggered by another entity in the global module fragment).
++//
++// This is a regression test: such a plain 'static' (non-inline) helper used to
++// be wrongly removed from the overload set, producing a bogus "no matching
++// function" error with no candidate notes.
++//
++// RUN: %clang_cc1 -std=c++20 %s -emit-module-interface -o %t.pcm -verify
++// RUN: %clang_cc1 -std=c++23 %s -emit-module-interface -o %t.pcm -verify
++
++// expected-no-diagnostics
++
++module;
++static void slow(unsigned long *o) { *o = 0; }
++static void slow(unsigned int *o) { *o = 0; }
++
++template <typename T> void parse(T *o) { slow(o); }
++
++// These inline functions are in the global module fragment; the template
++// specializations they use are instantiated when the fragment is closed.
++inline unsigned long read64() {
++  unsigned long t;
++  parse(&t);
++  return t;
++}
++inline unsigned int read32() {
++  unsigned int t;
++  parse(&t);
++  return t;
++}
++
++export module a;
++
++export inline unsigned long use() { return read64() + read32(); }
+-- 
+2.55.0.229.g6434b31f56-goog
+
