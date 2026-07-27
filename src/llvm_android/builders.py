@@ -103,6 +103,7 @@ class Stage1Builder(base_builders.LLVMBuilder):
         defines['CLANG_ENABLE_ARCMT'] = 'OFF'
         if not self.build_extra_tools:
             defines['CLANG_ENABLE_STATIC_ANALYZER'] = 'OFF'
+            defines['CLANG_TIDY_ENABLE_STATIC_ANALYZER'] = 'OFF'
 
         defines['LLVM_BUILD_TOOLS'] = 'ON'
 
