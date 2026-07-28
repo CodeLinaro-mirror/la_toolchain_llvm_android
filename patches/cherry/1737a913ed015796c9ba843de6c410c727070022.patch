@@ -1,0 +1,56 @@
+From 1737a913ed015796c9ba843de6c410c727070022 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jan=20Andr=C3=A9=20Reuter?= <j.reuter@fz-juelich.de>
+Date: Tue, 14 Apr 2026 16:54:57 +0200
+Subject: [PATCH] [OpenMP][OMPT] Revert `control_tool.c` changes from #191429
+ (#192069)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On s390x, the changes to `control_tool.c` cause a different return
+address to be returned from the call to `print_current_address(0)`. Due
+to the strictness of the current address returned by this call, this
+lead to a test failure.
+
+Since the return values of `omp_control_tool` are checked in separate
+tests already, revert the changes to ensure that the return address
+stays at the expected value.
+
+Signed-off-by: Jan André Reuter <j.reuter@fz-juelich.de>
+---
+ openmp/runtime/test/ompt/misc/control_tool.c | 5 +----
+ 1 file changed, 1 insertion(+), 4 deletions(-)
+
+diff --git a/openmp/runtime/test/ompt/misc/control_tool.c b/openmp/runtime/test/ompt/misc/control_tool.c
+index e4b0c82f83cb..4b671e9eeab4 100644
+--- a/openmp/runtime/test/ompt/misc/control_tool.c
++++ b/openmp/runtime/test/ompt/misc/control_tool.c
+@@ -6,16 +6,14 @@
+ #define TEST_NEED_PRINT_FRAME_FROM_OUTLINED_FN
+ #include "callback.h"
+ #include <omp.h>
+-#include <stdio.h>
+ 
+ int main() {
+ #pragma omp parallel num_threads(1)
+   {
+     print_frame_from_outlined_fn(1);
+     print_frame(0);
+-    int result = omp_control_tool(omp_control_tool_flush, 1, NULL);
++    omp_control_tool(omp_control_tool_flush, 1, NULL);
+     print_current_address(0);
+-    printf("control_tool result = %d\n", result);
+   }
+ 
+   // clang-format off
+@@ -28,7 +26,6 @@ int main() {
+   // CHECK: {{^}}[[MASTER_ID]]: __builtin_frame_address(0)=[[REENTER_FRAME:(0x)?[0-f]*]]
+   // CHECK: {{^}}[[MASTER_ID]]: ompt_event_control_tool: command=3, modifier=1, arg=[[NULL]], codeptr_ra=[[RETURN_ADDRESS:(0x)?[0-f]*]], current_task_frame.exit=[[EXIT_FRAME]], current_task_frame.reenter={{(0x)?[0-f]*}}
+   // CHECK-NEXT: {{^}}[[MASTER_ID]]: current_address={{.*}}[[RETURN_ADDRESS]]
+-  // CHECK-NEXT: control_tool result = 0
+   // clang-format on
+ 
+   return 0;
+-- 
+2.55.0.487.gaf234c4eb3-goog
+

@@ -1,0 +1,934 @@
+From 456bf22d5dfd0010c376190b4fca83d5d7cbb857 Mon Sep 17 00:00:00 2001
+From: Lukacma <Marian.Lukac@arm.com>
+Date: Fri, 17 Apr 2026 15:29:29 +0100
+Subject: [PATCH] Remove __arm_atomic_store_with_stshh from llvm (#192419)
+
+This patch is revert of #181386 with some manual changes applied due to
+revert conflicts.
+
+Current implementation of __arm_atomic_store_with_stshh is incorrect as
+it doesn't enforce the memory ordering constraints as can be seen
+[here](https://godbolt.org/z/n5YnbaT8E). Different solution will need to
+be implemented, but removing for now so users don't pick this up.
+---
+ clang/include/clang/Basic/BuiltinsAArch64.td  |   5 -
+ .../clang/Basic/DiagnosticSemaKinds.td        |   8 -
+ .../lib/CIR/CodeGen/CIRGenBuiltinAArch64.cpp  |   7 -
+ clang/lib/CodeGen/TargetBuiltins/ARM.cpp      |  27 --
+ clang/lib/Headers/arm_acle.h                  |   8 -
+ clang/lib/Sema/SemaARM.cpp                    | 100 -------
+ .../CodeGen/AArch64/pcdphint-atomic-store.c   |  71 -----
+ clang/test/CodeGen/arm_acle.c                 |  11 -
+ clang/test/CodeGen/builtins-arm64.c           |   5 -
+ .../test/Sema/AArch64/pcdphint-atomic-store.c |  74 ------
+ llvm/include/llvm/IR/IntrinsicsAArch64.td     |   6 -
+ llvm/lib/IR/Verifier.cpp                      |  19 --
+ .../AArch64/AArch64ExpandPseudoInsts.cpp      |  70 -----
+ llvm/lib/Target/AArch64/AArch64InstrInfo.td   |  13 -
+ .../CodeGen/AArch64/pcdphint-atomic-store.ll  | 243 ------------------
+ .../test/Verifier/AArch64/intrinsic-immarg.ll |  47 ----
+ 16 files changed, 714 deletions(-)
+ delete mode 100644 clang/test/CodeGen/AArch64/pcdphint-atomic-store.c
+ delete mode 100644 clang/test/Sema/AArch64/pcdphint-atomic-store.c
+ delete mode 100644 llvm/test/CodeGen/AArch64/pcdphint-atomic-store.ll
+
+diff --git a/clang/include/clang/Basic/BuiltinsAArch64.td b/clang/include/clang/Basic/BuiltinsAArch64.td
+index 48ad4cb16f14..8e5dbb5f4172 100644
+--- a/clang/include/clang/Basic/BuiltinsAArch64.td
++++ b/clang/include/clang/Basic/BuiltinsAArch64.td
+@@ -171,11 +171,6 @@ let Attributes = [NoThrow], Features = "ls64" in {
+ 	def st64bv0 : AArch64TargetBuiltin<"uint64_t (void *, uint64_t const *)">;
+ }
+ 
+-// Atomic store with PCDPHINT
+-let Attributes = [CustomTypeChecking] in {
+-	def atomic_store_with_stshh : AArch64TargetBuiltin<"void (...)">;
+-}
+-
+ // Armv9.3-A Guarded Control Stack
+ let Attributes = [NoThrow], Features = "gcs" in {
+ 	def gcspopm : AArch64TargetBuiltin<"uint64_t (uint64_t)">;
+diff --git a/clang/include/clang/Basic/DiagnosticSemaKinds.td b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+index 96c87b2fecad..1380eb97cdd7 100644
+--- a/clang/include/clang/Basic/DiagnosticSemaKinds.td
++++ b/clang/include/clang/Basic/DiagnosticSemaKinds.td
+@@ -9600,14 +9600,6 @@ def err_atomic_builtin_must_be_pointer_intfltptr : Error<
+ def err_atomic_builtin_pointer_size : Error<
+   "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16 byte "
+   "type (%0 invalid)">;
+-def err_arm_atomic_store_with_stshh_bad_type : Error<
+-  "address argument to '__arm_atomic_store_with_stshh' must be a pointer to an "
+-  "8,16,32, or 64-bit integer type (%0 invalid)">;
+-def err_arm_atomic_store_with_stshh_bad_value_type : Error<
+-  "value argument to '__arm_atomic_store_with_stshh' must be %0; got %1">;
+-def err_arm_atomic_store_with_stshh_bad_order : Error<
+-  "memory order argument to '__arm_atomic_store_with_stshh' must be one of "
+-  "__ATOMIC_RELAXED, __ATOMIC_RELEASE, or __ATOMIC_SEQ_CST">;
+ def err_atomic_exclusive_builtin_pointer_size : Error<
+   "address argument to load or store exclusive builtin must be a pointer to "
+   // Because the range of legal sizes for load/store exclusive varies with the
+diff --git a/clang/lib/CIR/CodeGen/CIRGenBuiltinAArch64.cpp b/clang/lib/CIR/CodeGen/CIRGenBuiltinAArch64.cpp
+index 53c8603b02a2..302218ec2567 100644
+--- a/clang/lib/CIR/CodeGen/CIRGenBuiltinAArch64.cpp
++++ b/clang/lib/CIR/CodeGen/CIRGenBuiltinAArch64.cpp
+@@ -1732,13 +1732,6 @@ CIRGenFunction::emitAArch64BuiltinExpr(unsigned builtinID, const CallExpr *expr,
+     return mlir::Value{};
+   }
+ 
+-  if (builtinID == clang::AArch64::BI__builtin_arm_atomic_store_with_stshh) {
+-    cgm.errorNYI(expr->getSourceRange(),
+-                 std::string("unimplemented AArch64 builtin call: ") +
+-                     getContext().BuiltinInfo.getName(builtinID));
+-    return mlir::Value{};
+-  }
+-
+   if (builtinID == clang::AArch64::BI__builtin_arm_rndr ||
+       builtinID == clang::AArch64::BI__builtin_arm_rndrrs) {
+     cgm.errorNYI(expr->getSourceRange(),
+diff --git a/clang/lib/CodeGen/TargetBuiltins/ARM.cpp b/clang/lib/CodeGen/TargetBuiltins/ARM.cpp
+index 3e0ec2c14342..c7dc15b8cadc 100644
+--- a/clang/lib/CodeGen/TargetBuiltins/ARM.cpp
++++ b/clang/lib/CodeGen/TargetBuiltins/ARM.cpp
+@@ -4659,33 +4659,6 @@ Value *CodeGenFunction::EmitAArch64BuiltinExpr(unsigned BuiltinID,
+     return Builder.CreateCall(F, Args);
+   }
+ 
+-  if (BuiltinID == clang::AArch64::BI__builtin_arm_atomic_store_with_stshh) {
+-    Value *StoreAddr = EmitScalarExpr(E->getArg(0));
+-    Value *StoreValue = EmitScalarExpr(E->getArg(1));
+-
+-    auto *OrderC = cast<ConstantInt>(EmitScalarExpr(E->getArg(2)));
+-    auto *PolicyC = cast<ConstantInt>(EmitScalarExpr(E->getArg(3)));
+-
+-    // Compute pointee bit-width from arg0 and create as i32 constant
+-    QualType ValQT =
+-        E->getArg(0)->getType()->castAs<PointerType>()->getPointeeType();
+-    unsigned SizeBits = getContext().getTypeSize(ValQT);
+-    auto *SizeC = llvm::ConstantInt::get(Int32Ty, SizeBits);
+-
+-    Value *StoreValue64 = Builder.CreateIntCast(StoreValue, Int64Ty,
+-                                                ValQT->isSignedIntegerType());
+-
+-    Function *F = CGM.getIntrinsic(Intrinsic::aarch64_stshh_atomic_store,
+-                                   {StoreAddr->getType()});
+-
+-    // Emit a single intrinsic so backend can expand to STSHH followed by
+-    // atomic store, to guarantee STSHH immediately precedes STR insn
+-    return Builder.CreateCall(
+-        F, {StoreAddr, StoreValue64,
+-            ConstantInt::get(Int32Ty, OrderC->getZExtValue()),
+-            ConstantInt::get(Int32Ty, PolicyC->getZExtValue()), SizeC});
+-  }
+-
+   if (BuiltinID == clang::AArch64::BI__builtin_arm_rndr ||
+       BuiltinID == clang::AArch64::BI__builtin_arm_rndrrs) {
+ 
+diff --git a/clang/lib/Headers/arm_acle.h b/clang/lib/Headers/arm_acle.h
+index 929c88cf72ef..9a6b6a837fa5 100644
+--- a/clang/lib/Headers/arm_acle.h
++++ b/clang/lib/Headers/arm_acle.h
+@@ -840,14 +840,6 @@ __rndrrs(uint64_t *__p) {
+ }
+ #endif
+ 
+-/* Atomic store with PCDPHINT */
+-#if defined(__ARM_64BIT_STATE) && __ARM_64BIT_STATE
+-#define __arm_atomic_store_with_stshh(ptr, data, memory_order,                 \
+-                                      retention_policy)                        \
+-  __builtin_arm_atomic_store_with_stshh(ptr, data, memory_order,               \
+-                                        retention_policy)
+-#endif
+-
+ /* 11.2 Guarded Control Stack intrinsics */
+ #if defined(__ARM_64BIT_STATE) && __ARM_64BIT_STATE
+ static __inline__ void * __attribute__((__always_inline__, __nodebug__))
+diff --git a/clang/lib/Sema/SemaARM.cpp b/clang/lib/Sema/SemaARM.cpp
+index e54c8228e5ff..29cf6fcd5be7 100644
+--- a/clang/lib/Sema/SemaARM.cpp
++++ b/clang/lib/Sema/SemaARM.cpp
+@@ -1107,103 +1107,6 @@ bool SemaARM::CheckARMBuiltinFunctionCall(const TargetInfo &TI,
+   }
+ }
+ 
+-static bool CheckAArch64AtomicStoreWithStshhCall(SemaARM &S,
+-                                                 CallExpr *TheCall) {
+-  Sema &SemaRef = S.SemaRef;
+-  ASTContext &Context = S.getASTContext();
+-  // Ensure we have the proper number of arguments.
+-  if (SemaRef.checkArgCount(TheCall, 4))
+-    return true;
+-
+-  // Normalize arg0/arg1 into value form, and check valid
+-  ExprResult PtrRes =
+-      SemaRef.DefaultFunctionArrayLvalueConversion(TheCall->getArg(0));
+-  ExprResult ValRes =
+-      SemaRef.DefaultFunctionArrayLvalueConversion(TheCall->getArg(1));
+-
+-  if (PtrRes.isInvalid() || ValRes.isInvalid())
+-    return true;
+-
+-  Expr *OrderArg = TheCall->getArg(2);
+-  TheCall->setArg(0, PtrRes.get());
+-  TheCall->setArg(1, ValRes.get());
+-
+-  // Defer validation for dependent memory_order arguments.
+-  if (OrderArg->isValueDependent())
+-    return false;
+-
+-  Expr *PointerArg = PtrRes.get();
+-  QualType PtrType = PointerArg->getType();
+-
+-  // Check arg 0 is a pointer type, err out if not
+-  const PointerType *PointerTy = PtrType->getAs<PointerType>();
+-  if (!PointerTy) {
+-    SemaRef.Diag(PointerArg->getBeginLoc(),
+-                 diag::err_atomic_builtin_must_be_pointer)
+-        << PtrType << 0 << PointerArg->getSourceRange();
+-    return true;
+-  }
+-
+-  // Reject const-qualified pointee types
+-  QualType ValType = PointerTy->getPointeeType();
+-  if (ValType.isConstQualified()) {
+-    SemaRef.Diag(PointerArg->getBeginLoc(),
+-                 diag::err_atomic_builtin_cannot_be_const)
+-        << PtrType << PointerArg->getSourceRange();
+-    return true;
+-  }
+-
+-  ValType = ValType.getUnqualifiedType();
+-  unsigned Bits = ValType->isIntegerType() ? Context.getTypeSize(ValType) : 0;
+-  if (Bits != 8 && Bits != 16 && Bits != 32 && Bits != 64) {
+-    SemaRef.Diag(PointerArg->getBeginLoc(),
+-                 diag::err_arm_atomic_store_with_stshh_bad_type)
+-        << PtrType << PointerArg->getSourceRange();
+-    return true;
+-  }
+-
+-  Expr *ValArg = TheCall->getArg(1);
+-  QualType ValArgType = ValArg->getType().getUnqualifiedType();
+-
+-  // Check value type and width
+-  if (!Context.hasSameType(ValArgType, ValType)) {
+-    SemaRef.Diag(ValArg->getBeginLoc(),
+-                 diag::err_arm_atomic_store_with_stshh_bad_value_type)
+-        << ValType << ValArg->getType() << ValArg->getSourceRange();
+-    return true;
+-  }
+-
+-  // Require an order value.
+-  std::optional<llvm::APSInt> OrderValOpt =
+-      OrderArg->getIntegerConstantExpr(Context);
+-  if (!OrderValOpt) {
+-    SemaRef.Diag(OrderArg->getBeginLoc(),
+-                 diag::err_arm_atomic_store_with_stshh_bad_order)
+-        << OrderArg->getSourceRange();
+-    return true;
+-  }
+-
+-  // __ATOMIC_RELAXED=0, __ATOMIC_RELEASE=3, __ATOMIC_SEQ_CST=5.
+-  int64_t Order = OrderValOpt->getSExtValue();
+-  if (Order != 0 && Order != 3 && Order != 5) {
+-    SemaRef.Diag(OrderArg->getBeginLoc(),
+-                 diag::err_arm_atomic_store_with_stshh_bad_order)
+-        << OrderArg->getSourceRange();
+-    return true;
+-  }
+-
+-  // Value type already matches ValType above; apply a no-op cast for
+-  // consistency with other builtin argument rewriting paths.
+-  ExprResult ValArgRes = SemaRef.ImpCastExprToType(ValArg, ValType, CK_NoOp);
+-  if (ValArgRes.isInvalid())
+-    return true;
+-
+-  TheCall->setArg(1, ValArgRes.get());
+-
+-  // Arg 3 (retention policy) must be between KEEP(0) and STRM(1).
+-  return SemaRef.BuiltinConstantArgRange(TheCall, 3, 0, 1);
+-}
+-
+ bool SemaARM::CheckAArch64BuiltinFunctionCall(const TargetInfo &TI,
+                                               unsigned BuiltinID,
+                                               CallExpr *TheCall) {
+@@ -1214,9 +1117,6 @@ bool SemaARM::CheckAArch64BuiltinFunctionCall(const TargetInfo &TI,
+     return CheckARMBuiltinExclusiveCall(TI, BuiltinID, TheCall);
+   }
+ 
+-  if (BuiltinID == AArch64::BI__builtin_arm_atomic_store_with_stshh)
+-    return CheckAArch64AtomicStoreWithStshhCall(*this, TheCall);
+-
+   if (BuiltinID == AArch64::BI__builtin_arm_prefetch) {
+     return SemaRef.BuiltinConstantArgRange(TheCall, 1, 0, 1) ||
+            SemaRef.BuiltinConstantArgRange(TheCall, 2, 0, 3) ||
+diff --git a/clang/test/CodeGen/AArch64/pcdphint-atomic-store.c b/clang/test/CodeGen/AArch64/pcdphint-atomic-store.c
+deleted file mode 100644
+index f48f1d6344bc..000000000000
+--- a/clang/test/CodeGen/AArch64/pcdphint-atomic-store.c
++++ /dev/null
+@@ -1,71 +0,0 @@
+-// NOTE: Assertions have been autogenerated by utils/update_cc_test_checks.py UTC_ARGS: --version 6
+-// RUN: %clang_cc1 -triple aarch64-none-linux-gnu -emit-llvm -o - %s | FileCheck %s
+-
+-#include <arm_acle.h>
+-
+-// CHECK-LABEL: define dso_local void @test_u8(
+-// CHECK-SAME: ptr noundef [[P:%.*]], i8 noundef [[V:%.*]]) #[[ATTR0:[0-9]+]] {
+-// CHECK-NEXT:  [[ENTRY:.*:]]
+-// CHECK-NEXT:    [[P_ADDR:%.*]] = alloca ptr, align 8
+-// CHECK-NEXT:    [[V_ADDR:%.*]] = alloca i8, align 1
+-// CHECK-NEXT:    store ptr [[P]], ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    store i8 [[V]], ptr [[V_ADDR]], align 1
+-// CHECK-NEXT:    [[TMP0:%.*]] = load ptr, ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = load i8, ptr [[V_ADDR]], align 1
+-// CHECK-NEXT:    [[TMP2:%.*]] = zext i8 [[TMP1]] to i64
+-// CHECK-NEXT:    call void @llvm.aarch64.stshh.atomic.store.p0(ptr [[TMP0]], i64 [[TMP2]], i32 0, i32 0, i32 8)
+-// CHECK-NEXT:    ret void
+-//
+-void test_u8(unsigned char *p, unsigned char v) {
+-  __arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-}
+-
+-// CHECK-LABEL: define dso_local void @test_u16(
+-// CHECK-SAME: ptr noundef [[P:%.*]], i16 noundef [[V:%.*]]) #[[ATTR0]] {
+-// CHECK-NEXT:  [[ENTRY:.*:]]
+-// CHECK-NEXT:    [[P_ADDR:%.*]] = alloca ptr, align 8
+-// CHECK-NEXT:    [[V_ADDR:%.*]] = alloca i16, align 2
+-// CHECK-NEXT:    store ptr [[P]], ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    store i16 [[V]], ptr [[V_ADDR]], align 2
+-// CHECK-NEXT:    [[TMP0:%.*]] = load ptr, ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = load i16, ptr [[V_ADDR]], align 2
+-// CHECK-NEXT:    [[TMP2:%.*]] = zext i16 [[TMP1]] to i64
+-// CHECK-NEXT:    call void @llvm.aarch64.stshh.atomic.store.p0(ptr [[TMP0]], i64 [[TMP2]], i32 3, i32 1, i32 16)
+-// CHECK-NEXT:    ret void
+-//
+-void test_u16(unsigned short *p, unsigned short v) {
+-  __arm_atomic_store_with_stshh(p, v, __ATOMIC_RELEASE, 1);
+-}
+-
+-// CHECK-LABEL: define dso_local void @test_u32(
+-// CHECK-SAME: ptr noundef [[P:%.*]], i32 noundef [[V:%.*]]) #[[ATTR0]] {
+-// CHECK-NEXT:  [[ENTRY:.*:]]
+-// CHECK-NEXT:    [[P_ADDR:%.*]] = alloca ptr, align 8
+-// CHECK-NEXT:    [[V_ADDR:%.*]] = alloca i32, align 4
+-// CHECK-NEXT:    store ptr [[P]], ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    store i32 [[V]], ptr [[V_ADDR]], align 4
+-// CHECK-NEXT:    [[TMP0:%.*]] = load ptr, ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = load i32, ptr [[V_ADDR]], align 4
+-// CHECK-NEXT:    [[TMP2:%.*]] = zext i32 [[TMP1]] to i64
+-// CHECK-NEXT:    call void @llvm.aarch64.stshh.atomic.store.p0(ptr [[TMP0]], i64 [[TMP2]], i32 5, i32 0, i32 32)
+-// CHECK-NEXT:    ret void
+-//
+-void test_u32(unsigned int *p, unsigned int v) {
+-  __arm_atomic_store_with_stshh(p, v, __ATOMIC_SEQ_CST, 0);
+-}
+-
+-// CHECK-LABEL: define dso_local void @test_u64(
+-// CHECK-SAME: ptr noundef [[P:%.*]], i64 noundef [[V:%.*]]) #[[ATTR0]] {
+-// CHECK-NEXT:  [[ENTRY:.*:]]
+-// CHECK-NEXT:    [[P_ADDR:%.*]] = alloca ptr, align 8
+-// CHECK-NEXT:    [[V_ADDR:%.*]] = alloca i64, align 8
+-// CHECK-NEXT:    store ptr [[P]], ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    store i64 [[V]], ptr [[V_ADDR]], align 8
+-// CHECK-NEXT:    [[TMP0:%.*]] = load ptr, ptr [[P_ADDR]], align 8
+-// CHECK-NEXT:    [[TMP1:%.*]] = load i64, ptr [[V_ADDR]], align 8
+-// CHECK-NEXT:    call void @llvm.aarch64.stshh.atomic.store.p0(ptr [[TMP0]], i64 [[TMP1]], i32 0, i32 1, i32 64)
+-// CHECK-NEXT:    ret void
+-//
+-void test_u64(unsigned long *p, unsigned long v) {
+-  __arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 1);
+-}
+diff --git a/clang/test/CodeGen/arm_acle.c b/clang/test/CodeGen/arm_acle.c
+index 3b97f90e806f..cd18fa63bfdb 100644
+--- a/clang/test/CodeGen/arm_acle.c
++++ b/clang/test/CodeGen/arm_acle.c
+@@ -1821,14 +1821,3 @@ int test_rndrrs(uint64_t *__addr) {
+   return __rndrrs(__addr);
+ }
+ #endif
+-
+-#if defined(__ARM_64BIT_STATE)
+-// AArch64-LABEL: @test_stshh_atomic_store(
+-// AArch64-NEXT:  entry:
+-// AArch64:         call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 {{.*}}, i32 0, i32 0, i32 32)
+-// AArch64-NEXT:    ret void
+-//
+-void test_stshh_atomic_store(int *p, int v) {
+-  __arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-}
+-#endif
+diff --git a/clang/test/CodeGen/builtins-arm64.c b/clang/test/CodeGen/builtins-arm64.c
+index 5344a2c5c6c5..3d054c79f177 100644
+--- a/clang/test/CodeGen/builtins-arm64.c
++++ b/clang/test/CodeGen/builtins-arm64.c
+@@ -39,11 +39,6 @@ void hints(void) {
+   __builtin_arm_sevl();   //CHECK: call {{.*}} @llvm.aarch64.hint(i32 5)
+ }
+ 
+-void stshh_atomic_store(int *p, int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // CHECK: call void @llvm.aarch64.stshh.atomic.store.p0(ptr {{.*}}, i64 {{.*}}, i32 0, i32 0, i32 32)
+-}
+-
+ void barriers(void) {
+   __builtin_arm_dmb(1);  //CHECK: call {{.*}} @llvm.aarch64.dmb(i32 1)
+   __builtin_arm_dsb(2);  //CHECK: call {{.*}} @llvm.aarch64.dsb(i32 2)
+diff --git a/clang/test/Sema/AArch64/pcdphint-atomic-store.c b/clang/test/Sema/AArch64/pcdphint-atomic-store.c
+deleted file mode 100644
+index 5b4bf27003a5..000000000000
+--- a/clang/test/Sema/AArch64/pcdphint-atomic-store.c
++++ /dev/null
+@@ -1,74 +0,0 @@
+-// RUN: %clang_cc1 -triple aarch64-none-linux-gnu -fsyntax-only -verify %s
+-// RUN: %clang_cc1 -triple aarch64-none-linux-gnu -emit-llvm -o /dev/null -verify %s
+-
+-#include <arm_acle.h>
+-
+-void test_signed_ok(int *p, int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-}
+-
+-void test_invalid_retention_policy(unsigned int *p, unsigned int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 2);
+-  // expected-error@-1 {{argument value 2 is outside the valid range [0, 1]}}
+-}
+-
+-void test_const_pointer(const unsigned int *p, unsigned int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{address argument to atomic builtin cannot be const-qualified}}
+-}
+-
+-void test_non_integer_pointer(float *p, float v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{address argument to '__arm_atomic_store_with_stshh' must be a pointer to an 8,16,32, or 64-bit integer type}}
+-}
+-
+-void test_invalid_bit_width(__int128 *p, __int128 v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{address argument to '__arm_atomic_store_with_stshh' must be a pointer to an 8,16,32, or 64-bit integer type}}
+-}
+-
+-struct IncompleteType;
+-void test_incomplete_pointee(struct IncompleteType *p, int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{address argument to '__arm_atomic_store_with_stshh' must be a pointer to an 8,16,32, or 64-bit integer type}}
+-}
+-
+-void test_invalid_memory_order(unsigned int *p, unsigned int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_ACQUIRE, 0);
+-  // expected-error@-1 {{memory order argument to '__arm_atomic_store_with_stshh' must be one of __ATOMIC_RELAXED, __ATOMIC_RELEASE, or __ATOMIC_SEQ_CST}}
+-}
+-
+-void test_invalid_memory_order_consume(unsigned int *p, unsigned int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_CONSUME, 0);
+-  // expected-error@-1 {{memory order argument to '__arm_atomic_store_with_stshh' must be one of __ATOMIC_RELAXED, __ATOMIC_RELEASE, or __ATOMIC_SEQ_CST}}
+-}
+-
+-void test_invalid_memory_order_acq_rel(unsigned int *p, unsigned int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_ACQ_REL, 0);
+-  // expected-error@-1 {{memory order argument to '__arm_atomic_store_with_stshh' must be one of __ATOMIC_RELAXED, __ATOMIC_RELEASE, or __ATOMIC_SEQ_CST}}
+-}
+-
+-void test_value_size_mismatch(int *p, short v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{value argument to '__arm_atomic_store_with_stshh' must be 'int'; got 'short'}}
+-}
+-
+-void test_non_integer_value(int *p, float v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{value argument to '__arm_atomic_store_with_stshh' must be 'int'; got 'float'}}
+-}
+-
+-void test_too_few_args(int *p, int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED);
+-  // expected-error@-1 {{too few arguments to function call, expected 4, have 3}}
+-}
+-
+-void test_too_many_args(int *p, int v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0, 1);
+-  // expected-error@-1 {{too many arguments to function call, expected 4, have 5}}
+-}
+-
+-void test_value_i128_mismatch(int *p, __int128 v) {
+-  __builtin_arm_atomic_store_with_stshh(p, v, __ATOMIC_RELAXED, 0);
+-  // expected-error@-1 {{value argument to '__arm_atomic_store_with_stshh' must be 'int'; got '__int128'}}
+-}
+diff --git a/llvm/include/llvm/IR/IntrinsicsAArch64.td b/llvm/include/llvm/IR/IntrinsicsAArch64.td
+index e2734d0d5401..578f54561910 100644
+--- a/llvm/include/llvm/IR/IntrinsicsAArch64.td
++++ b/llvm/include/llvm/IR/IntrinsicsAArch64.td
+@@ -65,12 +65,6 @@ def int_aarch64_sys  : DefaultAttrsIntrinsic<[], [llvm_i32_ty, llvm_i32_ty,
+ // HINT
+ 
+ def int_aarch64_hint : DefaultAttrsIntrinsic<[], [llvm_i32_ty]>;
+-def int_aarch64_stshh_atomic_store
+-    : Intrinsic<[],
+-                [llvm_anyptr_ty, llvm_i64_ty, llvm_i32_ty, llvm_i32_ty,
+-                 llvm_i32_ty],
+-                [IntrHasSideEffects, ImmArg<ArgIndex<2>>,
+-                 ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>]>;
+ 
+ def int_aarch64_break : Intrinsic<[], [llvm_i32_ty],
+     [IntrNoMem, IntrHasSideEffects, IntrNoReturn, IntrCold, ImmArg<ArgIndex<0>>]>;
+diff --git a/llvm/lib/IR/Verifier.cpp b/llvm/lib/IR/Verifier.cpp
+index d4ade9c7ce53..9dba574f6e9e 100644
+--- a/llvm/lib/IR/Verifier.cpp
++++ b/llvm/lib/IR/Verifier.cpp
+@@ -6932,25 +6932,6 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
+           Call);
+     break;
+   }
+-  case Intrinsic::aarch64_stshh_atomic_store: {
+-    uint64_t Order = cast<ConstantInt>(Call.getArgOperand(2))->getZExtValue();
+-    Check(Order == static_cast<uint64_t>(AtomicOrderingCABI::relaxed) ||
+-              Order == static_cast<uint64_t>(AtomicOrderingCABI::release) ||
+-              Order == static_cast<uint64_t>(AtomicOrderingCABI::seq_cst),
+-          "order argument to llvm.aarch64.stshh.atomic.store must be 0, 3 or 5",
+-          Call);
+-
+-    Check(cast<ConstantInt>(Call.getArgOperand(3))->getZExtValue() < 2,
+-          "policy argument to llvm.aarch64.stshh.atomic.store must be 0 or 1",
+-          Call);
+-
+-    uint64_t Size = cast<ConstantInt>(Call.getArgOperand(4))->getZExtValue();
+-    Check(Size == 8 || Size == 16 || Size == 32 || Size == 64,
+-          "size argument to llvm.aarch64.stshh.atomic.store must be 8, 16, "
+-          "32 or 64",
+-          Call);
+-    break;
+-  }
+   case Intrinsic::callbr_landingpad: {
+     const auto *CBR = dyn_cast<CallBrInst>(Call.getOperand(0));
+     Check(CBR, "intrinstic requires callbr operand", &Call);
+diff --git a/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp b/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
+index f3aea26b3bba..77dd6793ea1c 100644
+--- a/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
++++ b/llvm/lib/Target/AArch64/AArch64ExpandPseudoInsts.cpp
+@@ -26,7 +26,6 @@
+ #include "llvm/CodeGen/MachineFunctionPass.h"
+ #include "llvm/CodeGen/MachineInstr.h"
+ #include "llvm/CodeGen/MachineInstrBuilder.h"
+-#include "llvm/CodeGen/MachineInstrBundle.h"
+ #include "llvm/CodeGen/MachineOperand.h"
+ #include "llvm/CodeGen/TargetSubtargetInfo.h"
+ #include "llvm/IR/DebugLoc.h"
+@@ -89,8 +88,6 @@ private:
+   bool expandCALL_BTI(MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI);
+   bool expandStoreSwiftAsyncContext(MachineBasicBlock &MBB,
+                                     MachineBasicBlock::iterator MBBI);
+-  bool expandSTSHHAtomicStore(MachineBasicBlock &MBB,
+-                              MachineBasicBlock::iterator MBBI);
+   struct ConditionalBlocks {
+     MachineBasicBlock &CondBB;
+     MachineBasicBlock &EndBB;
+@@ -1066,71 +1063,6 @@ bool AArch64ExpandPseudoImpl::expandStoreSwiftAsyncContext(
+   return true;
+ }
+ 
+-bool AArch64ExpandPseudoImpl::expandSTSHHAtomicStore(
+-    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) {
+-  MachineInstr &MI = *MBBI;
+-  DebugLoc DL(MI.getDebugLoc());
+-
+-  unsigned Order = MI.getOperand(2).getImm();
+-  unsigned Policy = MI.getOperand(3).getImm();
+-  unsigned Size = MI.getOperand(4).getImm();
+-
+-  bool IsRelaxed = Order == 0;
+-  unsigned StoreOpc = 0;
+-
+-  // __ATOMIC_RELAXED uses STR. __ATOMIC_{RELEASE/SEQ_CST} use STLR.
+-  switch (Size) {
+-  case 8:
+-    StoreOpc = IsRelaxed ? AArch64::STRBBui : AArch64::STLRB;
+-    break;
+-  case 16:
+-    StoreOpc = IsRelaxed ? AArch64::STRHHui : AArch64::STLRH;
+-    break;
+-  case 32:
+-    StoreOpc = IsRelaxed ? AArch64::STRWui : AArch64::STLRW;
+-    break;
+-  case 64:
+-    StoreOpc = IsRelaxed ? AArch64::STRXui : AArch64::STLRX;
+-    break;
+-  default:
+-    llvm_unreachable("Unexpected STSHH atomic store size");
+-  }
+-
+-  // Emit the hint with the retention policy immediate.
+-  MachineInstr *Hint = BuildMI(MBB, MBBI, DL, TII->get(AArch64::STSHH))
+-                           .addImm(Policy)
+-                           .getInstr();
+-
+-  // Emit the associated store instruction.
+-  Register ValReg = MI.getOperand(0).getReg();
+-
+-  if (Size < 64) {
+-    const TargetRegisterInfo *TRI =
+-        MBB.getParent()->getSubtarget().getRegisterInfo();
+-    Register SubReg = TRI->getSubReg(ValReg, AArch64::sub_32);
+-    if (SubReg)
+-      ValReg = SubReg;
+-  }
+-
+-  MachineInstrBuilder Store = BuildMI(MBB, MBBI, DL, TII->get(StoreOpc))
+-                                  .addReg(ValReg)
+-                                  .add(MI.getOperand(1));
+-
+-  // Relaxed uses base+imm addressing with a zero offset.
+-  if (IsRelaxed)
+-    Store.addImm(0);
+-
+-  // Preserve memory operands and any implicit uses/defs.
+-  Store->setMemRefs(*MBB.getParent(), MI.memoperands());
+-  transferImpOps(MI, Store, Store);
+-
+-  // Bundle the hint and store so they remain adjacent.
+-  finalizeBundle(MBB, Hint->getIterator(), std::next(Store->getIterator()));
+-
+-  MI.eraseFromParent();
+-  return true;
+-}
+-
+ AArch64ExpandPseudoImpl::ConditionalBlocks
+ AArch64ExpandPseudoImpl::expandConditionalPseudo(
+     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI, DebugLoc DL,
+@@ -1825,8 +1757,6 @@ bool AArch64ExpandPseudoImpl::expandMI(MachineBasicBlock &MBB,
+     return expandCALL_BTI(MBB, MBBI);
+   case AArch64::StoreSwiftAsyncContext:
+     return expandStoreSwiftAsyncContext(MBB, MBBI);
+-  case AArch64::STSHH_ATOMIC_STORE_SZ:
+-    return expandSTSHHAtomicStore(MBB, MBBI);
+   case AArch64::RestoreZAPseudo:
+   case AArch64::CommitZASavePseudo:
+   case AArch64::MSRpstatePseudo: {
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.td b/llvm/lib/Target/AArch64/AArch64InstrInfo.td
+index ab304744087f..ca377de8deb7 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.td
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.td
+@@ -1568,19 +1568,6 @@ def : InstAlias<"nop", (NOP)>;
+ 
+ def STSHH: STSHHI;
+ 
+-let hasSideEffects = 1, mayStore = 1, isCodeGenOnly = 1 in {
+-let Size = 8 in
+-def STSHH_ATOMIC_STORE_SZ
+-    : Pseudo<(outs), (ins GPR64:$val, GPR64sp:$addr, i32imm:$order,
+-                          i32imm:$policy, i32imm:$size), []>,
+-             Sched<[WriteAtomic]>;
+-}
+-
+-def : Pat<(int_aarch64_stshh_atomic_store GPR64sp:$addr, GPR64:$val,
+-           (i32 timm:$order), (i32 timm:$policy), (i32 timm:$size)),
+-          (STSHH_ATOMIC_STORE_SZ GPR64:$val, GPR64sp:$addr, (i32 timm:$order),
+-           (i32 timm:$policy), (i32 timm:$size))>;
+-
+ // In order to be able to write readable assembly, LLVM should accept assembly
+ // inputs that use Branch Target Identification mnemonics, even with BTI disabled.
+ // However, in order to be compatible with other assemblers (e.g. GAS), LLVM
+diff --git a/llvm/test/CodeGen/AArch64/pcdphint-atomic-store.ll b/llvm/test/CodeGen/AArch64/pcdphint-atomic-store.ll
+deleted file mode 100644
+index 6e48cb348ca0..000000000000
+--- a/llvm/test/CodeGen/AArch64/pcdphint-atomic-store.ll
++++ /dev/null
+@@ -1,243 +0,0 @@
+-; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py UTC_ARGS: --version 6
+-; RUN: llc -mtriple=aarch64 -mattr=+v9.6a < %s | FileCheck %s
+-; RUN: llc -mtriple=aarch64 -mattr=+v9.6a -global-isel=1 < %s | FileCheck %s
+-
+-define void @test_keep_relaxed_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_relaxed_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    strb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 8)
+-  ret void
+-}
+-
+-define void @test_keep_relaxed_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_relaxed_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    strh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 16)
+-  ret void
+-}
+-
+-define void @test_keep_relaxed_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_relaxed_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    str w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 32)
+-  ret void
+-}
+-
+-define void @test_keep_relaxed_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_relaxed_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    str x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 64)
+-  ret void
+-}
+-
+-define void @test_keep_release_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_release_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlrb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 0, i32 8)
+-  ret void
+-}
+-
+-define void @test_keep_release_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_release_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlrh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 0, i32 16)
+-  ret void
+-}
+-
+-define void @test_keep_release_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_release_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlr w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 0, i32 32)
+-  ret void
+-}
+-
+-define void @test_keep_release_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_release_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlr x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 0, i32 64)
+-  ret void
+-}
+-
+-define void @test_keep_seqcst_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_seqcst_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlrb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 0, i32 8)
+-  ret void
+-}
+-
+-define void @test_keep_seqcst_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_seqcst_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlrh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 0, i32 16)
+-  ret void
+-}
+-
+-define void @test_keep_seqcst_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_seqcst_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlr w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 0, i32 32)
+-  ret void
+-}
+-
+-define void @test_keep_seqcst_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_keep_seqcst_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh keep
+-; CHECK-NEXT:    stlr x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 0, i32 64)
+-  ret void
+-}
+-
+-define void @test_strm_relaxed_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_relaxed_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    strb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 1, i32 8)
+-  ret void
+-}
+-
+-define void @test_strm_relaxed_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_relaxed_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    strh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 1, i32 16)
+-  ret void
+-}
+-
+-define void @test_strm_relaxed_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_relaxed_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    str w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 1, i32 32)
+-  ret void
+-}
+-
+-define void @test_strm_relaxed_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_relaxed_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    str x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 1, i32 64)
+-  ret void
+-}
+-
+-define void @test_strm_release_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_release_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlrb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 1, i32 8)
+-  ret void
+-}
+-
+-define void @test_strm_release_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_release_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlrh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 1, i32 16)
+-  ret void
+-}
+-
+-define void @test_strm_release_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_release_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlr w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 1, i32 32)
+-  ret void
+-}
+-
+-define void @test_strm_release_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_release_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlr x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 3, i32 1, i32 64)
+-  ret void
+-}
+-
+-define void @test_strm_seqcst_i8(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_seqcst_i8:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlrb w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 1, i32 8)
+-  ret void
+-}
+-
+-define void @test_strm_seqcst_i16(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_seqcst_i16:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlrh w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 1, i32 16)
+-  ret void
+-}
+-
+-define void @test_strm_seqcst_i32(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_seqcst_i32:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlr w1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 1, i32 32)
+-  ret void
+-}
+-
+-define void @test_strm_seqcst_i64(ptr %p, i64 %v) {
+-; CHECK-LABEL: test_strm_seqcst_i64:
+-; CHECK:       // %bb.0:
+-; CHECK-NEXT:    stshh strm
+-; CHECK-NEXT:    stlr x1, [x0]
+-; CHECK-NEXT:    ret
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 5, i32 1, i32 64)
+-  ret void
+-}
+diff --git a/llvm/test/Verifier/AArch64/intrinsic-immarg.ll b/llvm/test/Verifier/AArch64/intrinsic-immarg.ll
+index cd702f18cd70..e17c11d66dac 100644
+--- a/llvm/test/Verifier/AArch64/intrinsic-immarg.ll
++++ b/llvm/test/Verifier/AArch64/intrinsic-immarg.ll
+@@ -11,50 +11,3 @@ define void @range_prefetch(ptr %src, i64 %metadata) {
+ 
+   ret void
+ }
+-
+-declare void @llvm.aarch64.stshh.atomic.store.p0(ptr, i64, i32 immarg, i32 immarg, i32 immarg)
+-
+-define void @stshh_atomic_store_order_non_imm(ptr %p, i64 %v, i32 %arg0) {
+-  ; CHECK: immarg operand has non-immediate parameter
+-  ; CHECK-NEXT: i32 %arg0
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 %arg0, i32 0, i32 64)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 %arg0, i32 0, i32 64)
+-  ret void
+-}
+-
+-define void @stshh_atomic_store_policy_non_imm(ptr %p, i64 %v, i32 %arg0) {
+-  ; CHECK: immarg operand has non-immediate parameter
+-  ; CHECK-NEXT: i32 %arg0
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 %arg0, i32 64)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 %arg0, i32 64)
+-  ret void
+-}
+-
+-define void @stshh_atomic_store_size_non_imm(ptr %p, i64 %v, i32 %arg0) {
+-  ; CHECK: immarg operand has non-immediate parameter
+-  ; CHECK-NEXT: i32 %arg0
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 %arg0)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 %arg0)
+-  ret void
+-}
+-
+-define void @stshh_atomic_store_order_out_of_range(ptr %p, i64 %v) {
+-  ; CHECK: order argument to llvm.aarch64.stshh.atomic.store must be 0, 3 or 5
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 1, i32 0, i32 64)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 1, i32 0, i32 64)
+-  ret void
+-}
+-
+-define void @stshh_atomic_store_policy_out_of_range(ptr %p, i64 %v) {
+-  ; CHECK: policy argument to llvm.aarch64.stshh.atomic.store must be 0 or 1
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 2, i32 64)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 2, i32 64)
+-  ret void
+-}
+-
+-define void @stshh_atomic_store_size_out_of_range(ptr %p, i64 %v) {
+-  ; CHECK: size argument to llvm.aarch64.stshh.atomic.store must be 8, 16, 32 or 64
+-  ; CHECK-NEXT: call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 0)
+-  call void @llvm.aarch64.stshh.atomic.store.p0(ptr %p, i64 %v, i32 0, i32 0, i32 0)
+-  ret void
+-}
+-- 
+2.55.0.487.gaf234c4eb3-goog
+

@@ -1094,6 +1094,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [RISC-V][LoongArch] Revert Musttail Fixes (#191508)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/501417baa60f2eb0a66ca3bb04caf70150ebc2f7.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614182
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"RuntimeLibcalls: Add mustprogress to common function attributes (#167080)\" (#191524)"
         },
         "platforms": [
@@ -1103,6 +1117,20 @@
         "version_range": {
             "from": 614150,
             "until": 614195
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [Clang] Track constraint's SubstIndex only if it contains outer parameter packs (#191484)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/0fd821d5e90b0664742e1af9db56d0fd0e6c0285.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614253
         }
     },
     {
@@ -1145,6 +1173,20 @@
         "version_range": {
             "from": 614150,
             "until": 614486
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [OpenMP][OMPT] Revert `control_tool.c` changes from #191429 (#192069)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/1737a913ed015796c9ba843de6c410c727070022.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614534
         }
     },
     {
@@ -1206,6 +1248,34 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] Remove __arm_atomic_store_with_stshh from llvm (#192419)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/456bf22d5dfd0010c376190b4fca83d5d7cbb857.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614953
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [ThinLTO] Drop !inline_history metadata when importing functions (#192564)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6c3d84cbdf987e3f2eb113fb4e9212c56b54c6b5.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615003
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI][Doc] Update documentation for planned features (#192128)"
         },
         "platforms": [
@@ -1229,6 +1299,20 @@
         "version_range": {
             "from": 614150,
             "until": 615018
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [BPF] Handle aliases in CodeGenModule::EmitExternalDeclaration. Fixes #192365 (#192374)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/43e798e4d831b5133e3cf6d30c6315e3e4a71078.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 615030
         }
     },
     {
@@ -1360,6 +1444,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [lldb] Revert recent changes to HostThreadPosix::Reset (#196306)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/aa1be070fbae07581f2e59b2df776f38215f4760.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 617561
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"Avoid assert in substqualifier (#182707)\" (#196755)"
         },
         "platforms": [
@@ -1397,6 +1495,20 @@
         "version_range": {
             "from": 614150,
             "until": 619523
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] Revert \"[Clang] prevent constexpr crash on invalid overrides\" (#199895)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6ed05a0b53dc777408305333dcbeec9dac4ea687-v2.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 619985
         }
     },
     {

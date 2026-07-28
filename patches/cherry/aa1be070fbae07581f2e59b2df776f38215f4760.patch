@@ -1,0 +1,83 @@
+From aa1be070fbae07581f2e59b2df776f38215f4760 Mon Sep 17 00:00:00 2001
+From: David Spickett <david.spickett@arm.com>
+Date: Thu, 7 May 2026 13:54:06 +0100
+Subject: [PATCH] [lldb] Revert recent changes to HostThreadPosix::Reset
+ (#196306)
+
+These are suspected to have caused instability in CI testing
+https://github.com/llvm/llvm-project/issues/191372.
+
+This reverts commits 4c225918a9e78463c9bf9cc0a26be5ae2ed1c827 and
+d7fac0f42a3a8a6d6cf827d1f8b38663f872fe0f (#179470 and #177572).
+
+The second change could technically stay in, but it was using the first
+change to fix a bug in lldb-server. So I think it's better to revert
+both so we don't mistakenly think the bug is still fixed.
+---
+ lldb/include/lldb/Host/posix/HostThreadPosix.h       |  2 +-
+ .../source/Host/common/MonitoringProcessLauncher.cpp | 11 +++--------
+ lldb/source/Host/posix/HostThreadPosix.cpp           | 12 ++++++++----
+ 3 files changed, 12 insertions(+), 13 deletions(-)
+
+diff --git a/lldb/include/lldb/Host/posix/HostThreadPosix.h b/lldb/include/lldb/Host/posix/HostThreadPosix.h
+index 32be7154fa1d..6c8e09fc1103 100644
+--- a/lldb/include/lldb/Host/posix/HostThreadPosix.h
++++ b/lldb/include/lldb/Host/posix/HostThreadPosix.h
+@@ -25,7 +25,7 @@ public:
+   Status Join(lldb::thread_result_t *result) override;
+   Status Cancel() override;
+ 
+-  void Reset() override;
++  Status Detach();
+ };
+ 
+ } // namespace lldb_private
+diff --git a/lldb/source/Host/common/MonitoringProcessLauncher.cpp b/lldb/source/Host/common/MonitoringProcessLauncher.cpp
+index 2d9379f69774..cf1d6b900cdf 100644
+--- a/lldb/source/Host/common/MonitoringProcessLauncher.cpp
++++ b/lldb/source/Host/common/MonitoringProcessLauncher.cpp
+@@ -56,17 +56,12 @@ MonitoringProcessLauncher::LaunchProcess(const ProcessLaunchInfo &launch_info,
+     assert(launch_info.GetMonitorProcessCallback());
+     llvm::Expected<HostThread> maybe_thread =
+         process.StartMonitoring(launch_info.GetMonitorProcessCallback());
+-    if (!maybe_thread) {
++    if (!maybe_thread)
+       error = Status::FromErrorStringWithFormatv(
+           "failed to launch host thread: {}",
+           llvm::toString(maybe_thread.takeError()));
+-    } else {
+-      if (log)
+-        log->PutCString("started monitoring child process.");
+-
+-      // Allow the thread to exit on its own once its work is done.
+-      maybe_thread->Reset();
+-    }
++    if (log)
++      log->PutCString("started monitoring child process.");
+   } else {
+     // Invalid process ID, something didn't go well
+     if (error.Success())
+diff --git a/lldb/source/Host/posix/HostThreadPosix.cpp b/lldb/source/Host/posix/HostThreadPosix.cpp
+index 92f172ecd00a..a53a8cc9d838 100644
+--- a/lldb/source/Host/posix/HostThreadPosix.cpp
++++ b/lldb/source/Host/posix/HostThreadPosix.cpp
+@@ -50,8 +50,12 @@ Status HostThreadPosix::Cancel() {
+   return error;
+ }
+ 
+-void HostThreadPosix::Reset() {
+-  if (IsJoinable())
+-    ::pthread_detach(m_thread);
+-  HostNativeThreadBase::Reset();
++Status HostThreadPosix::Detach() {
++  Status error;
++  if (IsJoinable()) {
++    int err = ::pthread_detach(m_thread);
++    error = Status(err, eErrorTypePOSIX);
++  }
++  Reset();
++  return error;
+ }
+-- 
+2.55.0.487.gaf234c4eb3-goog
+

@@ -1,0 +1,55 @@
+From 43e798e4d831b5133e3cf6d30c6315e3e4a71078 Mon Sep 17 00:00:00 2001
+From: Alexander Kornienko <alexfh@google.com>
+Date: Sat, 18 Apr 2026 03:50:39 +0200
+Subject: [PATCH] [BPF] Handle aliases in
+ CodeGenModule::EmitExternalDeclaration. Fixes #192365 (#192374)
+
+Adds handling of global aliases in
+CodeGenModule::EmitExternalDeclaration. This fixes a clang crash on some
+real code, see llvm#192365.
+---
+ clang/lib/CodeGen/CodeGenModule.cpp            |  4 ++++
+ clang/test/CodeGenCXX/bpf-debug-info-alias.cpp | 16 ++++++++++++++++
+ 2 files changed, 20 insertions(+)
+ create mode 100644 clang/test/CodeGenCXX/bpf-debug-info-alias.cpp
+
+diff --git a/clang/lib/CodeGen/CodeGenModule.cpp b/clang/lib/CodeGen/CodeGenModule.cpp
+index 79c98f82a766..c635a6c175b2 100644
+--- a/clang/lib/CodeGen/CodeGenModule.cpp
++++ b/clang/lib/CodeGen/CodeGenModule.cpp
+@@ -5989,6 +5989,10 @@ void CodeGenModule::EmitExternalDeclaration(const DeclaratorDecl *D) {
+     return;
+ 
+   llvm::Constant *Addr = GetAddrOfGlobal(GD)->stripPointerCasts();
++  if (auto *GA = dyn_cast<llvm::GlobalAlias>(Addr)) {
++    DI->EmitGlobalAlias(GA, GD);
++    return;
++  }
+   if (const auto *VD = dyn_cast<VarDecl>(D)) {
+     DI->EmitExternalVariable(
+         cast<llvm::GlobalVariable>(Addr->stripPointerCasts()), VD);
+diff --git a/clang/test/CodeGenCXX/bpf-debug-info-alias.cpp b/clang/test/CodeGenCXX/bpf-debug-info-alias.cpp
+new file mode 100644
+index 000000000000..66d64c37ae80
+--- /dev/null
++++ b/clang/test/CodeGenCXX/bpf-debug-info-alias.cpp
+@@ -0,0 +1,16 @@
++// RUN: %clang_cc1 -triple bpfel -emit-llvm -debug-info-kind=constructor %s -o - | FileCheck %s
++
++// CHECK: @_Z9__cat_op0v = alias void (), ptr @e
++// CHECK: @alias_var = alias i32, ptr @global_var
++// CHECK-DAG: !DIImportedEntity(tag: DW_TAG_imported_declaration, name: "__cat_op0", {{.*}} entity: ![[ENTITY:[0-9]+]]
++// CHECK-DAG: ![[ENTITY]] = {{.*}}!DISubprogram(name: "__cat_op0", linkageName: "_Z9__cat_op0v"
++// CHECK-DAG: !DIImportedEntity(tag: DW_TAG_imported_declaration, name: "alias_var", {{.*}} entity: ![[ENTITY2:[0-9]+]]
++// CHECK-DAG: ![[ENTITY2]] = {{.*}}!DIGlobalVariable(name: "global_var", {{.*}}
++
++extern "C" void e() {}
++void __attribute__((alias("e"))) __cat_op0();
++void r() { __cat_op0(); }
++
++int global_var;
++extern "C" int alias_var __attribute__((alias("global_var")));
++int use_alias() { return alias_var; }
+-- 
+2.55.0.487.gaf234c4eb3-goog
+

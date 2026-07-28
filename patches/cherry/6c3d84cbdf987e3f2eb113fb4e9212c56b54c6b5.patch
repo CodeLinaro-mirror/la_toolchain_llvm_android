@@ -1,0 +1,129 @@
+From 6c3d84cbdf987e3f2eb113fb4e9212c56b54c6b5 Mon Sep 17 00:00:00 2001
+From: Arthur Eubanks <aeubanks@google.com>
+Date: Fri, 17 Apr 2026 12:46:57 -0700
+Subject: [PATCH] [ThinLTO] Drop !inline_history metadata when importing
+ functions (#192564)
+
+In #190876 we now have functions in ValueAsMetadata (!inline_history
+metadata). This has caused undefined symbol linker errors in some
+ThinLTO builds. The following is what's going on:
+
+@f in module A is getting imported from module A to module B, and it has
+a call with !inline_history pointing to @g in module A, so a declaration
+for @g is also imported into module B. But @g gets internalized in
+module A, causing the undefined symbol error at link time due to
+memprof's ICP in module B creating a call to @g since we can ICP a call
+to any declaration.
+
+To avoid pulling in a function declaration that may be wrong, simply
+drop !inline_history metadata when importing functions. They aren't
+necessary for correctness, they only prevent inlining explosion in some
+recursive edge cases. Worst case is we do another round of inlining
+through mutually recursive functions and then stop again due to newly
+added !inline_history metadata, which should be fine; the inlining
+explosion typically happens because we keep inlining through mutually
+recursive functions.
+---
+ .../llvm/Transforms/Utils/ValueMapper.h       |  4 ++++
+ llvm/lib/Linker/IRMover.cpp                   |  4 +++-
+ llvm/lib/Transforms/Utils/ValueMapper.cpp     |  6 ++++++
+ .../FunctionImport/Inputs/inline-history.ll   | 11 ++++++++++
+ .../FunctionImport/inline-history.ll          | 21 +++++++++++++++++++
+ 5 files changed, 45 insertions(+), 1 deletion(-)
+ create mode 100644 llvm/test/Transforms/FunctionImport/Inputs/inline-history.ll
+ create mode 100644 llvm/test/Transforms/FunctionImport/inline-history.ll
+
+diff --git a/llvm/include/llvm/Transforms/Utils/ValueMapper.h b/llvm/include/llvm/Transforms/Utils/ValueMapper.h
+index 28c4ae840b29..55c8862a6c32 100644
+--- a/llvm/include/llvm/Transforms/Utils/ValueMapper.h
++++ b/llvm/include/llvm/Transforms/Utils/ValueMapper.h
+@@ -113,6 +113,10 @@ enum RemapFlags {
+   /// don't use this flag. It's used when remapping is known to be un-necessary
+   /// to save some compile-time.
+   RF_DoNotRemapAtoms = 16,
++
++  /// Indicate that we are importing functions, specifically in the context of
++  /// ThinLTO. There is some ad-hoc behavior required in this mode.
++  RF_Importing = 32,
+ };
+ 
+ inline RemapFlags operator|(RemapFlags LHS, RemapFlags RHS) {
+diff --git a/llvm/lib/Linker/IRMover.cpp b/llvm/lib/Linker/IRMover.cpp
+index 03c807ead9df..c88bdbb12420 100644
+--- a/llvm/lib/Linker/IRMover.cpp
++++ b/llvm/lib/Linker/IRMover.cpp
+@@ -446,7 +446,9 @@ public:
+         AddLazyFor(std::move(AddLazyFor)), TypeMap(Set),
+         GValMaterializer(*this), LValMaterializer(*this), SharedMDs(SharedMDs),
+         IsPerformingImport(IsPerformingImport),
+-        Mapper(ValueMap, RF_ReuseAndMutateDistinctMDs | RF_IgnoreMissingLocals,
++        Mapper(ValueMap,
++               RF_ReuseAndMutateDistinctMDs | RF_IgnoreMissingLocals |
++                   (IsPerformingImport ? RF_Importing : RF_None),
+                &TypeMap, &GValMaterializer),
+         IndirectSymbolMCID(Mapper.registerAlternateMappingContext(
+             IndirectSymbolValueMap, &LValMaterializer)) {
+diff --git a/llvm/lib/Transforms/Utils/ValueMapper.cpp b/llvm/lib/Transforms/Utils/ValueMapper.cpp
+index 6e36006890df..73ba1e6a128b 100644
+--- a/llvm/lib/Transforms/Utils/ValueMapper.cpp
++++ b/llvm/lib/Transforms/Utils/ValueMapper.cpp
+@@ -993,6 +993,12 @@ void Mapper::remapInstruction(Instruction *I) {
+   if (auto *CB = dyn_cast<CallBase>(I)) {
+     if (CB->getMetadata(LLVMContext::MD_callee_type) && !CB->isIndirectCall())
+       CB->setMetadata(LLVMContext::MD_callee_type, nullptr);
++    // !inline_history metadata can contain references to other functions that
++    // we don't want to map because ThinLTO doesn't track metadata references
++    // to functions.
++    if ((Flags & RF_Importing) &&
++        CB->getMetadata(LLVMContext::MD_inline_history))
++      CB->setMetadata(LLVMContext::MD_inline_history, nullptr);
+   }
+ 
+   // Remap phi nodes' incoming blocks.
+diff --git a/llvm/test/Transforms/FunctionImport/Inputs/inline-history.ll b/llvm/test/Transforms/FunctionImport/Inputs/inline-history.ll
+new file mode 100644
+index 000000000000..a9c9d3687cd1
+--- /dev/null
++++ b/llvm/test/Transforms/FunctionImport/Inputs/inline-history.ll
+@@ -0,0 +1,11 @@
++target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++target triple = "x86_64-unknown-linux-gnu"
++
++define void @imported_func() {
++  call void @another_func(), !inline_history !0
++  ret void
++}
++
++declare void @another_func()
++
++!0 = !{ptr @another_func}
+diff --git a/llvm/test/Transforms/FunctionImport/inline-history.ll b/llvm/test/Transforms/FunctionImport/inline-history.ll
+new file mode 100644
+index 000000000000..5d24bb0dc9d5
+--- /dev/null
++++ b/llvm/test/Transforms/FunctionImport/inline-history.ll
+@@ -0,0 +1,21 @@
++; Test to ensure that we don't import !inline_history metadata on calls since
++; doing so may end up importing other function declarations in a way that isn't
++; tracked by ThinLTO, breaking IR semantics.
++
++; RUN: opt -module-summary %s -o %t.bc
++; RUN: opt -module-summary %p/Inputs/inline-history.ll -o %t2.bc
++; RUN: llvm-lto -thinlto -o %t3 %t.bc %t2.bc
++; RUN: opt -passes=function-import -summary-file %t3.thinlto.bc %t.bc -S | FileCheck %s --implicit-check-not=inline_history
++
++target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128"
++target triple = "x86_64-unknown-linux-gnu"
++
++define void @caller() {
++  call void @imported_func()
++  ret void
++}
++
++declare void @imported_func()
++
++; CHECK: define available_externally void @imported_func()
++; CHECK-NEXT: call void @another_func()
+-- 
+2.55.0.487.gaf234c4eb3-goog
+
