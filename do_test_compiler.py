@@ -21,10 +21,9 @@ import logging
 import multiprocessing
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
-from typing import List, Optional, Set
+from typing import List, Optional
 
 import context  # pylint: disable=unused-import
 from llvm_android import hosts, paths, utils, version
@@ -275,18 +274,12 @@ def build_target(android_base: Path, clang_version: version.Version,
 
     modulesList = ' '.join(modules)
     print('Start building target %s and modules %s.' % (target, modulesList))
-    try:
-        utils.check_call(
-            ['/bin/bash', '-c', 'build/soong/soong_ui.bash --make-mode ' + jobs + \
-             ' -k100 ' + modulesList],
-            cwd=android_base,
-            env=env
-        )
-    except subprocess.CalledProcessError:
-        errors = parse_error_log()
-        print("===== Error Summary =====")
-        print("".join(errors))
-        raise Exception('Build failed with errors.')
+    utils.check_call(
+        ['/bin/bash', '-c', 'build/soong/soong_ui.bash --make-mode ' + jobs + \
+         ' -k100 ' + modulesList],
+        cwd=android_base,
+        env=env
+    )
 
 
 def test_device(android_base: Path, clang_version: version.Version, device: List[str],
@@ -451,37 +444,6 @@ def main():
                                  args.with_tidy, no_mlgo)
             if not result and not args.keep_going:
                 break
-
-
-def parse_error_log() -> Set[str]:
-    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-    try:
-        with open(paths.OUT_DIR / 'error.log', 'r') as f:
-            errors = set()
-            in_failure_context = False
-            lines = f.readlines()
-            if len(lines) == 0:
-                return {'Empty error.log file'}
-            for line in lines:
-                if 'FAILED:' in line:
-                    if in_failure_context:
-                        errors.add('Unknown error, check full logs for failure')
-                    else:
-                        in_failure_context = True
-                # Catches either Clang or LLD errors.
-                # Clang format: FILE_NAME:LOC: error: ERR_MSG
-                # LLD format:   ld.lld: error: ERR_MSG
-                if ': error:' in line:
-                    # Only report the first error for each failed command.
-                    if not in_failure_context:
-                        continue
-                    # Strip ANSI color code
-                    line = ansi_escape.sub('', line)
-                    errors.add(line)
-                    in_failure_context = False
-            return errors
-    except:
-        return set()
 
 
 if __name__ == '__main__':
