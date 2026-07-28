@@ -1,0 +1,57 @@
+From 254259b4ed748ea637428e56de8a7e1d402f0afe Mon Sep 17 00:00:00 2001
+From: Oliver Hunt <oliver@apple.com>
+Date: Sat, 9 May 2026 14:41:02 -0700
+Subject: [PATCH] Revert "Avoid assert in substqualifier (#182707)" (#196755)
+
+This reverts commit e2def106757534b07a2d3ff15ddd48e14b69a66d.
+---
+ clang/docs/ReleaseNotes.rst          |  1 -
+ clang/lib/Sema/SemaDecl.cpp          |  4 +---
+ clang/test/SemaTemplate/GH176152.cpp | 12 ------------
+ 3 files changed, 1 insertion(+), 16 deletions(-)
+ delete mode 100644 clang/test/SemaTemplate/GH176152.cpp
+
+
+diff --git a/clang/lib/Sema/SemaDecl.cpp b/clang/lib/Sema/SemaDecl.cpp
+index 7c5bcd56b346..a9a4cb89d115 100644
+--- a/clang/lib/Sema/SemaDecl.cpp
++++ b/clang/lib/Sema/SemaDecl.cpp
+@@ -7926,7 +7926,7 @@ NamedDecl *Sema::ActOnVariableDeclarator(
+ 
+     if (CurContext->isRecord()) {
+       if (SC == SC_Static) {
+-        if (CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(DC)) {
++        if (const CXXRecordDecl *RD = dyn_cast<CXXRecordDecl>(DC)) {
+           // Walk up the enclosing DeclContexts to check for any that are
+           // incompatible with static data members.
+           const DeclContext *FunctionOrMethod = nullptr;
+@@ -7948,8 +7948,6 @@ NamedDecl *Sema::ActOnVariableDeclarator(
+             Diag(D.getIdentifierLoc(),
+                  diag::err_static_data_member_not_allowed_in_local_class)
+                 << Name << RD->getDeclName() << RD->getTagKind();
+-            Invalid = true;
+-            RD->setInvalidDecl();
+           } else if (AnonStruct) {
+             // C++ [class.static.data]p4: Unnamed classes and classes contained
+             // directly or indirectly within unnamed classes shall not contain
+diff --git a/clang/test/SemaTemplate/GH176152.cpp b/clang/test/SemaTemplate/GH176152.cpp
+deleted file mode 100644
+index 7d61aa292982..000000000000
+--- a/clang/test/SemaTemplate/GH176152.cpp
++++ /dev/null
+@@ -1,12 +0,0 @@
+-// RUN: %clang_cc1 -std=c++23 -fsyntax-only -verify %s
+-
+-template <class T> int f(T) {
+-  struct MyClass {
+-    static int staticField;
+-    // expected-error@-1 {{static data member 'staticField' not allowed in local struct 'MyClass'}}
+-  };
+-  int MyClass::staticField = 42;
+-  return 0;
+-}
+-
+-int x = f(0);
+-- 
+2.55.0.229.g6434b31f56-goog
+

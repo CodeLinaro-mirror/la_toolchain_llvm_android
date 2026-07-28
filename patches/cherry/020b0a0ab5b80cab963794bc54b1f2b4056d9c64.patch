@@ -1,0 +1,48 @@
+From 020b0a0ab5b80cab963794bc54b1f2b4056d9c64 Mon Sep 17 00:00:00 2001
+From: Vitaly Buka <vitalybuka@google.com>
+Date: Wed, 6 May 2026 15:22:05 -0700
+Subject: [PATCH] Revert "[DenseMap] Add memory barrier for sanitizers in
+ getInlineBuckets/getLargeRep (#183457)" (#196143)
+
+Revert #183457 and fixup #193695 as they are not needed after #194208.
+
+Related issue #182720.
+
+This reverts commit b5ac484470b9ceda96addcbc946f9ded4c5ef972.
+This reverts commit 8d5b74db2d8f54da2609d18040504153c1afe5df.
+---
+ llvm/include/llvm/ADT/DenseMap.h | 11 -----------
+ 1 file changed, 11 deletions(-)
+
+diff --git a/llvm/include/llvm/ADT/DenseMap.h b/llvm/include/llvm/ADT/DenseMap.h
+index d578163bc68d..b8b548a31acb 100644
+--- a/llvm/include/llvm/ADT/DenseMap.h
++++ b/llvm/include/llvm/ADT/DenseMap.h
+@@ -1037,12 +1037,7 @@ private:
+     // Note that this cast does not violate aliasing rules as we assert that
+     // the memory's dynamic type is the small, inline bucket buffer, and the
+     // 'storage' is a POD containing a char buffer.
+-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_HWADDRESS__)
+-    // Unless it's a sanitizer with container overflow detection. In this case
+-    // some items in buckets can be partially poisoned, triggering sanitizer
+-    // report on load.
+-    __asm__ volatile("" ::: "memory");
+-#endif
++
+     return reinterpret_cast<const BucketT *>(&storage);
+   }
+ 
+@@ -1054,9 +1049,7 @@ private:
+   const LargeRep *getLargeRep() const {
+     assert(!Small);
+     // Note, same rule about aliasing as with getInlineBuckets.
+-#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_HWADDRESS__)
+-    __asm__ volatile("" ::: "memory");
+-#endif
++
+     return reinterpret_cast<const LargeRep *>(&storage);
+   }
+ 
+-- 
+2.55.0.229.g6434b31f56-goog
+
