@@ -1,0 +1,43 @@
+From 56775ba553bf47bf14cbf4d3ec1ea3619d4f6356 Mon Sep 17 00:00:00 2001
+From: Jinsong Ji <jinsong.ji@intel.com>
+Date: Sun, 12 Apr 2026 14:34:12 -0400
+Subject: [PATCH] [llubi] Fix invalid printf format specifier for %c (#191713)
+
+Fix ASAN warning about unexpected format specifier %llc introduced
+in commit f149ab665a4b. The 'c' format specifier should not have the
+'ll' length modifier. Separated the 'c' case to use the correct format
+without the length modifier, casting to int as required by the standard.
+---
+ llvm/tools/llubi/lib/Library.cpp | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/llvm/tools/llubi/lib/Library.cpp b/llvm/tools/llubi/lib/Library.cpp
+index b0b5e3eb2c91..b7596b117daf 100644
+--- a/llvm/tools/llubi/lib/Library.cpp
++++ b/llvm/tools/llubi/lib/Library.cpp
+@@ -242,8 +242,7 @@ AnyValue Library::executePrintf(ArrayRef<AnyValue> Args) {
+     case 'u':
+     case 'o':
+     case 'x':
+-    case 'X':
+-    case 'c': {
++    case 'X': {
+       // FIXME: The format specifiers "b" and "B" are not implemented here
+       // since currently MSVC doesn't support it.
+       std::string HostFmt = CleanChunk + "ll" + Specifier;
+@@ -251,6 +250,12 @@ AnyValue Library::executePrintf(ArrayRef<AnyValue> Args) {
+                                         Arg.asInteger().getZExtValue()));
+       break;
+     }
++    case 'c': {
++      std::string HostFmt = CleanChunk + Specifier;
++      OS << format(HostFmt.c_str(),
++                   static_cast<int>(Arg.asInteger().getZExtValue()));
++      break;
++    }
+     case 'f':
+     case 'e':
+     case 'E':
+-- 
+2.55.0.487.gaf234c4eb3-goog
+

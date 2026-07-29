@@ -1136,6 +1136,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [llubi] Fix invalid printf format specifier for %c (#191713)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/56775ba553bf47bf14cbf4d3ec1ea3619d4f6356.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614295
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] Revert \"[lldb][DWARFASTParserClang] Handle pointer-to-member-data non-type te\u2026\" (#191798)"
         },
         "platforms": [
