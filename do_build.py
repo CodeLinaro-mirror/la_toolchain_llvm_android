@@ -556,7 +556,7 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
     # Add libc++[abi].so.1 and libc++[abi].1.dylib symlinks for backwards compatibility. These
     # symlinks point to the unversioned libraries (as opposed to the typical situation where
     # unversioned symlinks point to the versioned libraries).
-    if host.is_linux:
+    if host.is_linux and with_runtimes:
         if host_config.is_musl:
             triple32 = 'i686-unknown-linux-musl'
             triple64 = 'x86_64-unknown-linux-musl'
