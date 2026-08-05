@@ -1173,7 +1173,7 @@ def main():
         stage2.bolt_optimize = bolt
         stage2.bolt_instrument = args.bolt_instrument
         stage2.profdata_file = profdata
-        stage2.build_cross_runtimes = hosts.build_host().is_linux
+        stage2.build_cross_runtimes = hosts.build_host().is_linux and do_runtimes
         stage2.libzstd = libzstd_builder
 
         libxml2_builder = builders.LibXml2Builder(host_configs)
