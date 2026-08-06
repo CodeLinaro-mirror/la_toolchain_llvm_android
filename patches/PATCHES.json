@@ -1040,6 +1040,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Move std::abs into __math/abs.h (#139586)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/584cc376870505821b5ff0b0e80be85ee563ff0c.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 579457
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64] Ensure the LR is preserved if we must call __arm_get_current_vg (#145760)"
         },
         "platforms": [
@@ -1278,20 +1292,6 @@
     {
         "metadata": {
             "info": [],
-            "title": "Add stubs and headers for nl_types APIs."
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Add-stubs-and-headers-for-nl_types-APIs.patch",
-        "version_range": {
-            "from": 370808,
-            "until": 563880
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
             "title": "[BACKPORT] [lldb][lldb-server] Fix zip file lookup ignoring last entry in the zip file (#173966)"
         },
         "platforms": [
@@ -1343,6 +1343,20 @@
         "version_range": {
             "from": 574158,
             "until": 627322
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Add stubs and headers for nl_types APIs."
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Add-stubs-and-headers-for-nl_types-APIs.patch",
+        "version_range": {
+            "from": 370808,
+            "until": 563880
         }
     },
     {
