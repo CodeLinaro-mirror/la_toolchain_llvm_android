@@ -15,8 +15,8 @@
 # limitations under the License.
 #
 
+import argparse
 import os
-import sys
 
 import context  # pylint: disable=unused-import
 from llvm_android import android_version, paths, utils
@@ -29,7 +29,7 @@ _PATCH_JSON = _PATCH_DIR / 'PATCHES.json'
 _SVN_REVISION = android_version.get_svn_revision_number()
 
 
-def trim_patches_json():
+def trim_patches_json(dry_run=False):
     """Remove old patches and return list of removed patch files."""
     patch_list = PatchList.load_from_file()
     retain = list()
@@ -39,26 +39,32 @@ def trim_patches_json():
             retain.append(patch)
         else:
             trimmed_files.append(_PATCH_DIR / patch.rel_patch_path)
-    PatchList(retain).save_to_file()
+    if not dry_run:
+        PatchList(retain).save_to_file()
     return trimmed_files
 
 
 def main():
-    if len(sys.argv) > 1:
-        print(f'Usage: {sys.argv[0]}')
-        print('  Script to remove downstream patches no longer needed for ' +
-              'Android LLVM version.')
-        return
+    parser = argparse.ArgumentParser(description='Remove downstream patches no longer needed.')
+    parser.add_argument('--dry-run', action='store_true', help='Show what would be removed without making changes.')
+    args = parser.parse_args()
 
     # Start a new repo branch before trimming patches.
-    os.chdir(_LLVM_ANDROID_PATH)
-    branch_name = f'trim-patches-before-{_SVN_REVISION}'
-    utils.unchecked_call(['repo', 'abandon', branch_name, '.'])
-    utils.check_call(['repo', 'start', branch_name, '.'])
+    if not args.dry_run:
+        os.chdir(_LLVM_ANDROID_PATH)
+        branch_name = f'trim-patches-before-{_SVN_REVISION}'
+        utils.unchecked_call(['repo', 'abandon', branch_name, '.'])
+        utils.check_call(['repo', 'start', branch_name, '.'])
 
-    removed_patches = trim_patches_json()
+    removed_patches = trim_patches_json(args.dry_run)
     if not removed_patches:
         print('No patches to remove')
+        return
+
+    if args.dry_run:
+        print('Patches that would be removed:')
+        for patch in removed_patches:
+            print(f'  {patch}')
         return
 
     # Apply the changes to git and commit.
