@@ -726,6 +726,7 @@ class LLVMBuilder(LLVMBaseBuilder):
         if isinstance(self._config, configs.LinuxMuslConfig):
             shutil.copy2(self._config.sysroot / 'lib' / 'libc_musl.so', lib_dir / 'libc_musl.so')
             shutil.copy2(self._config.sysroot / 'lib' / 'libjemalloc5.so', lib_dir / 'libjemalloc5.so')
+            shutil.copy2(self._config.sysroot / 'LICENSE', lib_dir / 'LICENSE.musl')
 
     def _setup_install_dir(self) -> None:
         if self.swig_executable:
