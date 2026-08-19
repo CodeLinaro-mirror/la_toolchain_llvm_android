@@ -308,6 +308,8 @@ class LinuxConfig(_GccConfig):
         cflags = super().cflags
         if self.is_32_bit and not self.is_musl:
             cflags.append('-march=i686')
+        elif self.target_arch == hosts.Arch.X86_64:
+            cflags.append('-march=x86-64-v2')
         return cflags
 
 
