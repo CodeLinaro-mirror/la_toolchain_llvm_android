@@ -172,8 +172,10 @@ def add_lib_links(stage: str, host_config: configs.Config):
         # names pertaining to architectures have been resolved in the prebuilts
         # directory, this symlink creation can be removed.
         dst_llvm_triple = llvm_triple.replace('i386', 'i686')
-        srcglob = f'{paths.OUT_DIR}/{stage}-install/lib/clang/*/lib/{llvm_triple}'
-        for src_dir in glob.glob(srcglob):
+        install_dir = f'{paths.OUT_DIR}/{stage}-install'
+        srcglob = f'{install_dir}/lib/clang/*/lib/{llvm_triple}'
+        src_dirs = [f'{install_dir}/lib/{llvm_triple}'] + glob.glob(srcglob)
+        for src_dir in src_dirs:
             dst_dir = Path(src_dir) / '..' / dst_llvm_triple
             if dst_dir.exists():
                 shutil.rmtree(dst_dir)
