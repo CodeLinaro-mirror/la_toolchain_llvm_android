@@ -10,8 +10,9 @@ high half of the input vector.
 
 Fixes #174688
 ---
- llvm/lib/Target/ARM/ARMInstrNEON.td | 24 ++++++++++++++++++++++++
- 1 file changed, 24 insertions(+)
+ llvm/lib/Target/ARM/ARMInstrNEON.td       | 24 +++++++++++++++++++++++
+ llvm/test/CodeGen/ARM/neon-dot-product.ll | 12 ++++--------
+ 2 files changed, 28 insertions(+), 8 deletions(-)
 
 diff --git a/llvm/lib/Target/ARM/ARMInstrNEON.td b/llvm/lib/Target/ARM/ARMInstrNEON.td
 index 3335f52f1555..8ee17d8367dc 100644
@@ -55,6 +56,38 @@ index 3335f52f1555..8ee17d8367dc 100644
  // v8.6A matrix multiplication extension
  let Predicates = [HasMatMulInt8] in {
    class N3VMatMul<bit B, bit U, string Asm, string AsmTy,
+diff --git a/llvm/test/CodeGen/ARM/neon-dot-product.ll b/llvm/test/CodeGen/ARM/neon-dot-product.ll
+index 2c8c740c700e..a51becee111b 100644
+--- a/llvm/test/CodeGen/ARM/neon-dot-product.ll
++++ b/llvm/test/CodeGen/ARM/neon-dot-product.ll
+@@ -97,11 +97,9 @@ define <4 x i32> @sdot_multi(<4 x i32> %vacc0x0123, <16 x i8> %va, <16 x i8> %vb
+ ; CHECK-LABEL: sdot_multi:
+ ; CHECK:       @ %bb.0: @ %entry
+ ; CHECK-NEXT:    vsdot.s8 q0, q2, d2[0]
+-; CHECK-NEXT:    vdup.32 q8, d3[0]
+ ; CHECK-NEXT:    vsdot.s8 q0, q2, d2[1]
+-; CHECK-NEXT:    vdup.32 q9, d3[1]
+-; CHECK-NEXT:    vsdot.s8 q0, q2, q8
+-; CHECK-NEXT:    vsdot.s8 q0, q2, q9
++; CHECK-NEXT:    vsdot.s8 q0, q2, d3[0]
++; CHECK-NEXT:    vsdot.s8 q0, q2, d3[1]
+ ; CHECK-NEXT:    bx lr
+ entry:
+   %0 = bitcast <16 x i8> %va to <4 x i32>
+@@ -125,11 +123,9 @@ define <4 x i32> @udot_multi(<4 x i32> %vacc0x0123, <16 x i8> %va, <16 x i8> %vb
+ ; CHECK-LABEL: udot_multi:
+ ; CHECK:       @ %bb.0: @ %entry
+ ; CHECK-NEXT:    vudot.u8 q0, q2, d2[0]
+-; CHECK-NEXT:    vdup.32 q8, d3[0]
+ ; CHECK-NEXT:    vudot.u8 q0, q2, d2[1]
+-; CHECK-NEXT:    vdup.32 q9, d3[1]
+-; CHECK-NEXT:    vudot.u8 q0, q2, q8
+-; CHECK-NEXT:    vudot.u8 q0, q2, q9
++; CHECK-NEXT:    vudot.u8 q0, q2, d3[0]
++; CHECK-NEXT:    vudot.u8 q0, q2, d3[1]
+ ; CHECK-NEXT:    bx lr
+ entry:
+   %0 = bitcast <16 x i8> %va to <4 x i32>
 -- 
 2.55.0.737.g08866a6d13-goog
 
