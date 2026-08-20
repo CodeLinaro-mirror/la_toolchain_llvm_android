@@ -1,0 +1,102 @@
+From 8dd2846fcf7b0ad254f3768149d28fe87af9b15d Mon Sep 17 00:00:00 2001
+From: Marco Borgeaud <marco.borgeaud@sonarsource.com>
+Date: Thu, 2 Oct 2025 14:13:09 +0200
+Subject: [PATCH] [analyzer] Harden RegionStoreManager::bindArray (#153177)
+
+Fixes https://github.com/llvm/llvm-project/issues/147686 by handling
+symbolic values similarly to bindStruct and handling constant values.
+The latter is actually more of a workaround: bindArray should not have
+to deal with such constants.
+
+CPP-6688
+---
+ clang/lib/StaticAnalyzer/Core/RegionStore.cpp | 10 +++-
+ clang/test/Analysis/initializer.cpp           | 48 +++++++++++++++++++
+ 2 files changed, 56 insertions(+), 2 deletions(-)
+
+diff --git a/clang/lib/StaticAnalyzer/Core/RegionStore.cpp b/clang/lib/StaticAnalyzer/Core/RegionStore.cpp
+index 8e9d6fe59e6a..af0ef52334bd 100644
+--- a/clang/lib/StaticAnalyzer/Core/RegionStore.cpp
++++ b/clang/lib/StaticAnalyzer/Core/RegionStore.cpp
+@@ -2658,14 +2658,20 @@ RegionStoreManager::bindArray(LimitedRegionBindingsConstRef B,
+     return bindAggregate(B, R, V);
+   }
+ 
+-  // Handle lazy compound values.
++  // FIXME Single value constant should have been handled before this call to
++  // bindArray. This is only a hotfix to not crash.
++  if (Init.isConstant())
++    return bindAggregate(B, R, Init);
++
+   if (std::optional LCV = Init.getAs<nonloc::LazyCompoundVal>()) {
+     if (std::optional NewB = tryBindSmallArray(B, R, AT, *LCV))
+       return *NewB;
+-
+     return bindAggregate(B, R, Init);
+   }
+ 
++  if (isa<nonloc::SymbolVal>(Init))
++    return bindAggregate(B, R, Init);
++
+   if (Init.isUnknown())
+     return bindAggregate(B, R, UnknownVal());
+ 
+diff --git a/clang/test/Analysis/initializer.cpp b/clang/test/Analysis/initializer.cpp
+index 713e12116857..88758f7c3ac1 100644
+--- a/clang/test/Analysis/initializer.cpp
++++ b/clang/test/Analysis/initializer.cpp
+@@ -610,3 +610,51 @@ void top() {
+   consume(parseMatchComponent());
+ }
+ } // namespace elementwise_copy_small_array_from_post_initializer_of_cctor
++
++namespace gh147686 {
++// The problem reported in https://github.com/llvm/llvm-project/issues/147686
++// is sensitive to the initializer form: using parenthesis to initialize m_ptr
++// resulted in crashes when analyzing *m_ptr = '\0'; but using braces is fine.
++
++struct A {
++  A() : m_ptr(m_buf) { *m_ptr = '\0'; } // no-crash
++  A(int overload) : m_ptr{m_buf} { *m_ptr = '\0'; }
++  A(char src) : m_ptr(m_buf) { *m_ptr = src; } // no-crash
++  A(char src, int overload) : m_ptr{m_buf} { *m_ptr = src; }
++  char m_buf[64] = {0};
++  char * m_ptr;
++};
++
++void test1() {
++  A a;
++  clang_analyzer_eval(a.m_buf[0] == 0); // expected-warning{{TRUE}}
++  // FIXME The next eval should result in TRUE.
++  clang_analyzer_eval(*a.m_ptr == 0); // expected-warning{{UNKNOWN}}
++}
++
++void test2() {
++  A a(314);
++  clang_analyzer_eval(a.m_buf[0] == 0); // expected-warning{{TRUE}}
++  clang_analyzer_eval(*a.m_ptr == 0); // expected-warning{{TRUE}}
++}
++
++void test3() {
++  A a(0);
++  clang_analyzer_eval(a.m_buf[0] == 0); // expected-warning{{TRUE}}
++  clang_analyzer_eval(*a.m_ptr == 0); // expected-warning{{TRUE}}
++}
++
++void test3Bis(char arg) {
++  A a(arg);
++  // FIXME This test should behave like test3.
++  clang_analyzer_eval(a.m_buf[0] == arg); // expected-warning{{FALSE}} // expected-warning{{TRUE}}
++  clang_analyzer_eval(*a.m_ptr == arg); // expected-warning{{UNKNOWN}}
++}
++
++void test4(char arg) {
++  A a(arg, 314);
++  clang_analyzer_eval(a.m_buf[0] == arg); // expected-warning{{TRUE}}
++  clang_analyzer_eval(*a.m_ptr == arg); // expected-warning{{TRUE}}
++}
++
++} // namespace gh147686
+-- 
+2.55.0.737.g08866a6d13-goog
+
