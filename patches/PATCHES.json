@@ -1236,6 +1236,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [analyzer] Harden RegionStoreManager::bindArray (#153177)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8dd2846fcf7b0ad254f3768149d28fe87af9b15d.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 592552
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [AArch64][SME] Disable tail calls for callees that require saving ZT0 (#165371)"
         },
         "platforms": [
