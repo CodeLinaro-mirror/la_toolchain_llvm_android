@@ -262,18 +262,23 @@ def update_clang(prebuilt_dir: Path, host, build_number, use_current_branch,
         musl_package = f'{download_dir}/clang-{build_number}-linux_musl-x86.tar.xz'
         if os.path.exists(extract_subdir):
             shutil.rmtree(extract_subdir)
-        utils.extract_tarball(prebuilt_dir, musl_package, [
+        musl_files = [
             "--wildcards",
             "*/lib/libclang.so*",
             "*/lib/*/libc++.so*",
             "*/lib/libc_musl.so",
-            "*/lib/libjemalloc5.so",
-            "*/lib/LICENSE.musl",
             "*/lib/aarch64-unknown-linux-musl/libc++.a",
             "*/lib/aarch64-unknown-linux-musl/libc++abi.a",
             "*/lib/x86_64-unknown-linux-musl/libc++.a",
             "*/lib/x86_64-unknown-linux-musl/libc++abi.a",
-            ])
+        ]
+        tar_content = utils.check_output(['tar', '-tf', str(musl_package)])
+        if 'libjemalloc5.so' in tar_content:
+            musl_files.append("*/lib/libjemalloc5.so")
+        if 'LICENSE.musl' in tar_content:
+            musl_files.append("*/lib/LICENSE.musl")
+
+        utils.extract_tarball(prebuilt_dir, musl_package, musl_files)
         install_clang_directory(extract_subdir, musl_install_subdir, overwrite)
 
         for triple in ('aarch64-unknown-linux-musl', 'x86_64-unknown-linux-musl'):
