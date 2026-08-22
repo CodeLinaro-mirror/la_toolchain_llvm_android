@@ -511,6 +511,13 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
         shutil.copy2(toolchain_builder.output_dir / 'bin' / ('FileCheck' + ext), bin_dir)
 
     necessary_lib_files = set()
+    if host.is_windows:
+        libclang_mingw = lib_dir / 'libclang.dll.a'
+        libclang_msvc = lib_dir / 'libclang.lib'
+        shutil.copy2(libclang_mingw, libclang_msvc)
+        necessary_lib_files.add('libclang.dll.a')
+        necessary_lib_files.add('libclang.lib')
+
     if with_runtimes:
         if not (host.is_windows and win_sdk.is_enabled()):
             necessary_lib_files |= {
