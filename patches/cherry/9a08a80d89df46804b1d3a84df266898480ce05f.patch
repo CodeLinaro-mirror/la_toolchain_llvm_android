@@ -1,0 +1,568 @@
+From 9a08a80d89df46804b1d3a84df266898480ce05f Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Fri, 21 Aug 2026 13:44:01 -0700
+Subject: [PATCH] lldb: Linux: clean up dead and mis-ordered includes (#217435)
+
+Add a few obviously missing includes. Use fully qualified paths more
+consistently.
+
+This will help later planned refactorings, and better complies with the
+style guide.
+
+Link: https://llvm.org/docs/CodingStandards.html#include-style
+Link: https://github.com/llvm/llvm-project/issues/217413
+---
+ .../Process/Linux/IntelPTCollector.cpp        |  8 +++----
+ .../Plugins/Process/Linux/IntelPTCollector.h  |  9 ++++----
+ .../Process/Linux/IntelPTMultiCoreTrace.cpp   |  4 +++-
+ .../Process/Linux/IntelPTMultiCoreTrace.h     |  5 +++--
+ .../Linux/IntelPTPerThreadProcessTrace.cpp    |  1 -
+ .../Linux/IntelPTPerThreadProcessTrace.h      | 10 ++++++---
+ .../Process/Linux/IntelPTProcessTrace.h       |  1 +
+ .../Linux/IntelPTSingleBufferTrace.cpp        |  2 ++
+ .../Process/Linux/IntelPTSingleBufferTrace.h  |  6 +++++-
+ .../Linux/IntelPTThreadTraceCollection.cpp    |  3 +++
+ .../Linux/IntelPTThreadTraceCollection.h      |  5 ++++-
+ .../Process/Linux/NativeProcessLinux.cpp      | 21 +++++++------------
+ .../Process/Linux/NativeProcessLinux.h        | 13 ++++++------
+ .../Linux/NativeRegisterContextLinux_arm.cpp  |  9 ++++----
+ .../NativeRegisterContextLinux_arm64.cpp      | 18 +++++++---------
+ .../NativeRegisterContextLinux_arm64dbreg.cpp |  5 ++---
+ ...NativeRegisterContextLinux_loongarch64.cpp |  9 ++++----
+ .../NativeRegisterContextLinux_ppc64le.cpp    | 13 ++++++------
+ .../NativeRegisterContextLinux_riscv64.cpp    | 12 +++++------
+ .../Process/Linux/NativeThreadLinux.cpp       | 18 +++++++---------
+ .../Plugins/Process/Linux/SingleStepCheck.cpp | 16 +++++++-------
+ 21 files changed, 92 insertions(+), 96 deletions(-)
+
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTCollector.cpp b/lldb/source/Plugins/Process/Linux/IntelPTCollector.cpp
+index 06551a4ff5a0..5355e5cc54d9 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTCollector.cpp
++++ b/lldb/source/Plugins/Process/Linux/IntelPTCollector.cpp
+@@ -7,20 +7,18 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IntelPTCollector.h"
+-#include "Perf.h"
++
++#include "Plugins/Process/Linux/Procfs.h"
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "Procfs.h"
+ #include "lldb/Utility/StreamString.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/Support/Error.h"
+ #include "llvm/Support/MathExtras.h"
+-#include <algorithm>
+-#include <cstddef>
++
+ #include <fcntl.h>
+ #include <fstream>
+ #include <linux/perf_event.h>
+ #include <optional>
+-#include <sstream>
+ #include <sys/ioctl.h>
+ #include <sys/syscall.h>
+ 
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTCollector.h b/lldb/source/Plugins/Process/Linux/IntelPTCollector.h
+index 4598616650b8..9adf77720a48 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTCollector.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTCollector.h
+@@ -9,14 +9,15 @@
+ #ifndef liblldb_IntelPTCollector_H_
+ #define liblldb_IntelPTCollector_H_
+ 
+-#include "IntelPTMultiCoreTrace.h"
+-#include "IntelPTPerThreadProcessTrace.h"
+-#include "IntelPTSingleBufferTrace.h"
+-#include "Perf.h"
++#include "Plugins/Process/Linux/IntelPTMultiCoreTrace.h"
++#include "Plugins/Process/Linux/IntelPTPerThreadProcessTrace.h"
++#include "Plugins/Process/Linux/IntelPTSingleBufferTrace.h"
++#include "Plugins/Process/Linux/Perf.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+ #include "lldb/Utility/Status.h"
+ #include "lldb/Utility/TraceIntelPTGDBRemotePackets.h"
+ #include "lldb/lldb-types.h"
++
+ #include <linux/perf_event.h>
+ #include <sys/mman.h>
+ #include <unistd.h>
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.cpp b/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.cpp
+index 376bd5c1fc98..767d40f3a200 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.cpp
++++ b/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.cpp
+@@ -7,8 +7,10 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IntelPTMultiCoreTrace.h"
++
++#include "Plugins/Process/Linux/Procfs.h"
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "Procfs.h"
++
+ #include <optional>
+ 
+ using namespace lldb;
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.h b/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.h
+index 4179136cd8ea..239d3b1c8741 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTMultiCoreTrace.h
+@@ -9,12 +9,13 @@
+ #ifndef liblldb_IntelPTMultiCoreTrace_H_
+ #define liblldb_IntelPTMultiCoreTrace_H_
+ 
+-#include "IntelPTProcessTrace.h"
+-#include "IntelPTSingleBufferTrace.h"
++#include "Plugins/Process/Linux/IntelPTProcessTrace.h"
++#include "Plugins/Process/Linux/IntelPTSingleBufferTrace.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+ #include "lldb/Utility/TraceIntelPTGDBRemotePackets.h"
+ #include "lldb/lldb-types.h"
+ #include "llvm/Support/Error.h"
++
+ #include <memory>
+ #include <optional>
+ 
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.cpp b/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.cpp
+index a1636ad8b9f7..446705394479 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.cpp
++++ b/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.cpp
+@@ -7,7 +7,6 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IntelPTPerThreadProcessTrace.h"
+-#include <optional>
+ 
+ using namespace lldb;
+ using namespace lldb_private;
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.h b/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.h
+index 8c76323845f7..ee0ef4a65eaf 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTPerThreadProcessTrace.h
+@@ -9,10 +9,14 @@
+ #ifndef liblldb_IntelPTPerThreadProcessTrace_H_
+ #define liblldb_IntelPTPerThreadProcessTrace_H_
+ 
+-#include "IntelPTProcessTrace.h"
+-#include "IntelPTSingleBufferTrace.h"
+-#include "IntelPTThreadTraceCollection.h"
++#include "Plugins/Process/Linux/IntelPTProcessTrace.h"
++#include "Plugins/Process/Linux/IntelPTSingleBufferTrace.h"
++#include "Plugins/Process/Linux/IntelPTThreadTraceCollection.h"
++
++#include <cstdint>
++#include <memory>
+ #include <optional>
++#include <vector>
+ 
+ namespace lldb_private {
+ namespace process_linux {
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTProcessTrace.h b/lldb/source/Plugins/Process/Linux/IntelPTProcessTrace.h
+index 6bd15ade9858..03f7ff558beb 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTProcessTrace.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTProcessTrace.h
+@@ -10,6 +10,7 @@
+ #define liblldb_IntelPTProcessTrace_H_
+ 
+ #include "lldb/Utility/TraceIntelPTGDBRemotePackets.h"
++
+ #include <memory>
+ #include <optional>
+ 
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.cpp b/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.cpp
+index 8c69989702c2..11a04fb63bf4 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.cpp
++++ b/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.cpp
+@@ -7,11 +7,13 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IntelPTSingleBufferTrace.h"
++
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+ #include "lldb/Utility/Status.h"
+ #include "lldb/Utility/StreamString.h"
+ #include "llvm/Support/MemoryBuffer.h"
+ #include "llvm/TargetParser/Host.h"
++
+ #include <linux/perf_event.h>
+ #include <sstream>
+ #include <sys/syscall.h>
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.h b/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.h
+index 9427e1ea196b..f3008227b3bf 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTSingleBufferTrace.h
+@@ -9,11 +9,15 @@
+ #ifndef liblldb_IntelPTSingleBufferTrace_H_
+ #define liblldb_IntelPTSingleBufferTrace_H_
+ 
+-#include "Perf.h"
++#include "Plugins/Process/Linux/Perf.h"
+ #include "lldb/Utility/TraceIntelPTGDBRemotePackets.h"
+ #include "lldb/lldb-types.h"
+ #include "llvm/Support/Error.h"
++
++#include <cstddef>
++#include <cstdint>
+ #include <memory>
++#include <vector>
+ 
+ namespace lldb_private {
+ namespace process_linux {
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.cpp b/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.cpp
+index 5bce6da4c4a9..31bd9a4c8ebc 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.cpp
++++ b/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.cpp
+@@ -7,7 +7,10 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IntelPTThreadTraceCollection.h"
++
++#include <cstdint>
+ #include <optional>
++#include <vector>
+ 
+ using namespace lldb;
+ using namespace lldb_private;
+diff --git a/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.h b/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.h
+index 550cd46127ed..ad4731e2dc17 100644
+--- a/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.h
++++ b/lldb/source/Plugins/Process/Linux/IntelPTThreadTraceCollection.h
+@@ -9,8 +9,11 @@
+ #ifndef liblldb_IntelPTPerThreadTraceCollection_H_
+ #define liblldb_IntelPTPerThreadTraceCollection_H_
+ 
+-#include "IntelPTSingleBufferTrace.h"
++#include "Plugins/Process/Linux/IntelPTSingleBufferTrace.h"
++
++#include <cstdint>
+ #include <optional>
++#include <vector>
+ 
+ namespace lldb_private {
+ namespace process_linux {
+diff --git a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+index 2dabae4eb8d3..d5d5c1a9fabe 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+@@ -8,22 +8,10 @@
+ 
+ #include "NativeProcessLinux.h"
+ 
+-#include <cerrno>
+-#include <cstdint>
+-#include <cstring>
+-#include <unistd.h>
+-
+-#include <fstream>
+-#include <mutex>
+-#include <optional>
+-#include <sstream>
+-#include <string>
+-#include <unordered_map>
+-
+-#include "NativeThreadLinux.h"
++#include "Plugins/Process/Linux/NativeThreadLinux.h"
++#include "Plugins/Process/Linux/Procfs.h"
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+ #include "Plugins/Process/Utility/LinuxProcMaps.h"
+-#include "Procfs.h"
+ #include "lldb/Core/ModuleSpec.h"
+ #include "lldb/Host/Host.h"
+ #include "lldb/Host/HostProcess.h"
+@@ -49,12 +37,17 @@
+ #include "llvm/Support/FileSystem.h"
+ #include "llvm/Support/Threading.h"
+ 
++#include <cerrno>
++#include <cstdint>
++#include <cstring>
+ #include <linux/unistd.h>
++#include <optional>
+ #include <sys/socket.h>
+ #include <sys/syscall.h>
+ #include <sys/types.h>
+ #include <sys/user.h>
+ #include <sys/wait.h>
++#include <unistd.h>
+ 
+ #ifdef __aarch64__
+ #include <asm/hwcap.h>
+diff --git a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.h b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.h
+index d345f165a75d..6418aeaedfce 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.h
++++ b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.h
+@@ -9,9 +9,10 @@
+ #ifndef liblldb_NativeProcessLinux_H_
+ #define liblldb_NativeProcessLinux_H_
+ 
+-#include <csignal>
+-#include <unordered_set>
+-
++#include "Plugins/Process/Linux/IntelPTCollector.h"
++#include "Plugins/Process/Linux/NativeThreadLinux.h"
++#include "Plugins/Process/POSIX/NativeProcessELF.h"
++#include "Plugins/Process/Utility/NativeProcessSoftwareSingleStep.h"
+ #include "lldb/Host/Debug.h"
+ #include "lldb/Host/HostThread.h"
+ #include "lldb/Host/linux/Support.h"
+@@ -22,10 +23,8 @@
+ #include "lldb/lldb-types.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ 
+-#include "IntelPTCollector.h"
+-#include "NativeThreadLinux.h"
+-#include "Plugins/Process/POSIX/NativeProcessELF.h"
+-#include "Plugins/Process/Utility/NativeProcessSoftwareSingleStep.h"
++#include <csignal>
++#include <unordered_set>
+ 
+ namespace lldb_private {
+ class Status;
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+index c83cea2bbf5b..df056fa160c9 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+@@ -15,20 +15,19 @@
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm.h"
+ #include "lldb/Host/HostInfo.h"
++#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-#include <elf.h>
+-#include <sys/uio.h>
+-
+ #if defined(__arm64__) || defined(__aarch64__)
+-#include "NativeRegisterContextLinux_arm64dbreg.h"
++#include "Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.h"
+ #endif
+ 
+-#include "lldb/Host/linux/Ptrace.h"
+ #include <asm/ptrace.h>
++#include <elf.h>
++#include <sys/uio.h>
+ 
+ #define REG_CONTEXT_SIZE (GetGPRSize() + sizeof(m_fpr) + sizeof(m_tls))
+ 
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+index c7bd5d7bec25..77491295b1f2 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+@@ -9,9 +9,15 @@
+ #if defined(__arm64__) || defined(__aarch64__)
+ 
+ #include "NativeRegisterContextLinux_arm64.h"
+-#include "NativeRegisterContextLinux_arm.h"
+-#include "NativeRegisterContextLinux_arm64dbreg.h"
+ 
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/Linux/NativeRegisterContextLinux_arm.h"
++#include "Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.h"
++#include "Plugins/Process/Linux/Procfs.h"
++#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
++#include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
++#include "Plugins/Process/Utility/RegisterFlagsDetector_arm64.h"
++#include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+ #include "lldb/Host/linux/Ptrace.h"
+@@ -20,12 +26,7 @@
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-#include "Plugins/Process/Linux/NativeProcessLinux.h"
+-#include "Plugins/Process/Linux/Procfs.h"
+-#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
+-#include "Plugins/Process/Utility/RegisterFlagsDetector_arm64.h"
+-#include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
++#include "llvm/BinaryFormat/ELF.h"
+ 
+ // System includes - They have to be included after framework includes because
+ // they define some macros which collide with variable names in other modules
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
+index 53ee8fdb2b48..0c5a8840853c 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
+@@ -11,12 +11,11 @@
+ #include "NativeRegisterContextLinux_arm64dbreg.h"
+ #include "lldb/Host/linux/Ptrace.h"
+ 
+-#include <asm/ptrace.h>
+ // System includes - They have to be included after framework includes because
+ // they define some macros which collide with variable names in other modules
+-#include <sys/uio.h>
+-// NT_PRSTATUS and NT_FPREGSET definition
++#include <asm/ptrace.h>
+ #include <elf.h>
++#include <sys/uio.h>
+ 
+ using namespace lldb;
+ using namespace lldb_private;
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
+index c4841950f1e0..dbf6ff5941e5 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
+@@ -10,6 +10,10 @@
+ 
+ #include "NativeRegisterContextLinux_loongarch64.h"
+ 
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/Linux/Procfs.h"
++#include "Plugins/Process/Utility/RegisterInfoPOSIX_loongarch64.h"
++#include "Plugins/Process/Utility/lldb-loongarch-register-enums.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+@@ -17,11 +21,6 @@
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-#include "Plugins/Process/Linux/NativeProcessLinux.h"
+-#include "Plugins/Process/Linux/Procfs.h"
+-#include "Plugins/Process/Utility/RegisterInfoPOSIX_loongarch64.h"
+-#include "Plugins/Process/Utility/lldb-loongarch-register-enums.h"
+-
+ // NT_PRSTATUS and NT_FPREGSET definition
+ #include <elf.h>
+ // struct iovec definition
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_ppc64le.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_ppc64le.cpp
+index 0b8571a8d670..fdfebe681265 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_ppc64le.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_ppc64le.cpp
+@@ -13,6 +13,10 @@
+ 
+ #include "NativeRegisterContextLinux_ppc64le.h"
+ 
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/Linux/Procfs.h"
++#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
++#include "Plugins/Process/Utility/RegisterInfoPOSIX_ppc64le.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+@@ -20,16 +24,11 @@
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-#include "Plugins/Process/Linux/NativeProcessLinux.h"
+-#include "Plugins/Process/Linux/Procfs.h"
+-#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "Plugins/Process/Utility/RegisterInfoPOSIX_ppc64le.h"
+-
+ // System includes - They have to be included after framework includes because
+ // they define some macros which collide with variable names in other modules
+-#include <sys/socket.h>
+-#include <elf.h>
+ #include <asm/ptrace.h>
++#include <elf.h>
++#include <sys/socket.h>
+ 
+ #define REG_CONTEXT_SIZE                                                       \
+   (GetGPRSize() + GetFPRSize() + sizeof(m_vmx_ppc64le) + sizeof(m_vsx_ppc64le))
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_riscv64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_riscv64.cpp
+index 45b6c8ff9905..59798334015e 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_riscv64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_riscv64.cpp
+@@ -10,23 +10,21 @@
+ 
+ #include "NativeRegisterContextLinux_riscv64.h"
+ 
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/Linux/Procfs.h"
++#include "Plugins/Process/Utility/RegisterInfoPOSIX_riscv64.h"
++#include "Plugins/Process/Utility/lldb-riscv-register-enums.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-#include "Plugins/Process/Linux/NativeProcessLinux.h"
+-#include "Plugins/Process/Linux/Procfs.h"
+-#include "Plugins/Process/Utility/RegisterInfoPOSIX_riscv64.h"
+-#include "Plugins/Process/Utility/lldb-riscv-register-enums.h"
+-
+ // System includes - They have to be included after framework includes because
+ // they define some macros which collide with variable names in other modules
++#include <elf.h>
+ #include <sys/ptrace.h>
+ #include <sys/uio.h>
+-// NT_PRSTATUS and NT_FPREGSET definition
+-#include <elf.h>
+ 
+ using namespace lldb;
+ using namespace lldb_private;
+diff --git a/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
+index 96f54d63bc2a..69b2b21ade81 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
+@@ -8,13 +8,11 @@
+ 
+ #include "NativeThreadLinux.h"
+ 
+-#include <csignal>
+-#include <sstream>
+-
+-#include "NativeProcessLinux.h"
+-#include "NativeRegisterContextLinux.h"
+-#include "SingleStepCheck.h"
+-
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/Linux/NativeRegisterContextLinux.h"
++#include "Plugins/Process/Linux/SingleStepCheck.h"
++#include "Plugins/Process/POSIX/CrashReason.h"
++#include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
+ #include "lldb/Host/HostNativeThread.h"
+ #include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Host/linux/Support.h"
+@@ -23,12 +21,10 @@
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/State.h"
+ #include "lldb/lldb-enumerations.h"
+-
+ #include "llvm/ADT/SmallString.h"
+ 
+-#include "Plugins/Process/POSIX/CrashReason.h"
+-#include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
+-
++#include <csignal>
++#include <sstream>
+ #include <sys/syscall.h>
+ // Try to define a macro to encapsulate the tgkill syscall
+ #define tgkill(pid, tid, sig)                                                  \
+diff --git a/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp b/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
+index e7124ef8e549..fe5cb2323aac 100644
+--- a/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
++++ b/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
+@@ -8,20 +8,18 @@
+ 
+ #include "SingleStepCheck.h"
+ 
++#include "Plugins/Process/Linux/NativeProcessLinux.h"
++#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
++#include "lldb/Host/linux/Ptrace.h"
++#include "lldb/Utility/Status.h"
++#include "llvm/Support/Compiler.h"
++#include "llvm/Support/Errno.h"
++
+ #include <csignal>
+ #include <sched.h>
+ #include <sys/wait.h>
+ #include <unistd.h>
+ 
+-#include "NativeProcessLinux.h"
+-
+-#include "llvm/Support/Compiler.h"
+-#include "llvm/Support/Errno.h"
+-
+-#include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "lldb/Host/linux/Ptrace.h"
+-#include "lldb/Utility/Status.h"
+-
+ using namespace lldb;
+ using namespace lldb_private;
+ using namespace lldb_private::process_linux;

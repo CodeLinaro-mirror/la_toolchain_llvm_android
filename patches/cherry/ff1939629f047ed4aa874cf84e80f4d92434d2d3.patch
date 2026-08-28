@@ -1,0 +1,46 @@
+From ff1939629f047ed4aa874cf84e80f4d92434d2d3 Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Thu, 27 Aug 2026 15:26:26 -0700
+Subject: [PATCH] lldb: Linux: restore __ptrace_request typedef for bionic+musl
+ (#219237)
+
+glibc declares ptrace as taking an enum __ptrace_request as its first
+argument. Because C++ does not allow implicit conversion from int to an
+enumeration type, callers must cast int arguments to __ptrace_request
+(e.g., static_cast<__ptrace_request>(req)).
+
+However, bionic and musl declare ptrace as taking an int and do not
+define __ptrace_request. Providing a fallback typedef int
+__ptrace_request
+allows the static_cast to compile across all three libcs.
+
+I removed this typedef by accident in
+ef9085f5bdb52b27258c150bd7e1fd812fc406c8.
+
+Fixes: commit ef9085f5bdb5 ("lldb: Linux: empty Ptrace.h pollyfill")
+Link: https://github.com/llvm/llvm-project/issues/217413
+---
+ lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+index 0efd781c2ae58..6a73999fe0b74 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+@@ -82,6 +82,13 @@
+ #define PTRACE_SETREGSET 0x4205
+ #endif
+ 
++// glibc declares ptrace taking enum __ptrace_request (which requires a cast in
++// C++), whereas bionic and musl declare it taking int and do not define
++// __ptrace_request.
++#ifndef __GLIBC__
++typedef int __ptrace_request;
++#endif
++
+ using namespace lldb;
+ using namespace lldb_private;
+ using namespace lldb_private::process_linux;
+-- 
+2.55.0.766.g2966f0265a-goog
+

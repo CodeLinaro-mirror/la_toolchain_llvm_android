@@ -1,0 +1,37 @@
+From ee0f03d2b84b56b99115f15ebcdb39da7a5de300 Mon Sep 17 00:00:00 2001
+From: David Spickett <david.spickett@arm.com>
+Date: Thu, 27 Aug 2026 09:55:02 +0100
+Subject: [PATCH] [lldb][Linux][ARM] Fix build after ptrace header removal
+ (#219148)
+
+f69fbd6415ab3a0743d14f0e345f9b61720ce187 / #218045 removed our own
+ptrace header, which was fine elsewhere but on Arm we also included
+asm/ptrace.h.
+
+We don't have to though, and removing it fixes build errors like:
+```
+In file included from /buildbot/lldb-arm-ubuntu/llvmproject/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp:31:
+/usr/include/arm-linux-gnueabihf/sys/ptrace.h:74:3: error: expected identifier
+   74 |   PTRACE_GETREGS = 12,
+      |   ^
+```
+Which is because asm/ptrace.h has already defined PTRACE_GETREGS to 12.
+---
+ .../Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp     | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+index 09ae8d38a1416..a44eb032b8dc1 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+@@ -26,7 +26,6 @@
+ 
+ // System includes - They have to be included after framework includes because
+ // they define some macros which collide with variable names in other modules.
+-#include <asm/ptrace.h>
+ #include <elf.h>
+ #include <sys/ptrace.h>
+ #include <sys/uio.h>
+-- 
+2.55.0.766.g2966f0265a-goog
+
