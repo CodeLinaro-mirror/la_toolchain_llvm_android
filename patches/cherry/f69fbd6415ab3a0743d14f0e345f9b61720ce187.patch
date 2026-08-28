@@ -1,0 +1,250 @@
+From 8f45861017ef10e329ff9adf4b89601f44832906 Mon Sep 17 00:00:00 2001
+From: Group Agent Android-llvm <groupagent-android-llvm@google.com>
+Date: Wed, 26 Aug 2026 22:48:58 +0000
+Subject: [PATCH] lldb: Linux: delete Ptrace.h pollyfill (#218045)
+
+As the comment in sources alludes to:
+
+> System includes - They have to be included after framework includes
+because
+> they define some macros which collide with variable names in other
+modules.
+
+These collisions would ideally not happen, but they are unlikely to be
+fixed any time soon. The workaround is to define what we need in the
+places that we need it. This was done in a previous commit and so the
+header can now be removed.
+
+Link: https://github.com/llvm/llvm-project/pull/217435
+Fixes: https://github.com/llvm/llvm-project/issues/217413
+---
+ lldb/include/lldb/Host/linux/Ptrace.h          | 18 ------------------
+ .../Process/Linux/NativeProcessLinux.cpp       | 10 ++++++++--
+ .../Linux/NativeRegisterContextLinux.cpp       |  4 +++-
+ .../Linux/NativeRegisterContextLinux_arm.cpp   |  4 +++-
+ .../Linux/NativeRegisterContextLinux_arm64.cpp |  4 ++--
+ .../NativeRegisterContextLinux_arm64dbreg.cpp  |  4 ++--
+ .../NativeRegisterContextLinux_loongarch64.cpp |  6 +++---
+ .../Linux/NativeRegisterContextLinux_x86.cpp   |  1 +
+ .../Process/Linux/NativeThreadLinux.cpp        |  6 +++++-
+ .../Plugins/Process/Linux/SingleStepCheck.cpp  |  5 ++++-
+ 10 files changed, 31 insertions(+), 31 deletions(-)
+ delete mode 100644 lldb/include/lldb/Host/linux/Ptrace.h
+
+diff --git a/lldb/include/lldb/Host/linux/Ptrace.h b/lldb/include/lldb/Host/linux/Ptrace.h
+deleted file mode 100644
+index 8b3719113d3c..000000000000
+--- a/lldb/include/lldb/Host/linux/Ptrace.h
++++ /dev/null
+@@ -1,18 +0,0 @@
+-//===-- Ptrace.h ------------------------------------------------*- C++ -*-===//
+-//
+-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+-// See https://llvm.org/LICENSE.txt for license information.
+-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+-//
+-//===----------------------------------------------------------------------===//
+-
+-// This file defines ptrace functions & structures
+-
+-#ifndef liblldb_Host_linux_Ptrace_h_
+-#define liblldb_Host_linux_Ptrace_h_
+-
+-#include <sys/ptrace.h>
+-
+-// Support ptrace extensions even when compiled without required kernel support
+-
+-#endif // liblldb_Host_linux_Ptrace_h_
+diff --git a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+index 91165dc71b20..ca4a1f07ae5b 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeProcessLinux.cpp
+@@ -20,7 +20,6 @@
+ #include "lldb/Host/ThreadLauncher.h"
+ #include "lldb/Host/common/NativeRegisterContext.h"
+ #include "lldb/Host/linux/Host.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Host/linux/Uio.h"
+ #include "lldb/Host/posix/ProcessLauncherPosixFork.h"
+ #include "lldb/Symbol/ObjectFile.h"
+@@ -40,8 +39,12 @@
+ #include <cerrno>
+ #include <cstdint>
+ #include <cstring>
+-#include <linux/unistd.h>
+ #include <optional>
++
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
++#include <linux/unistd.h>
++#include <sys/ptrace.h>
+ #include <sys/socket.h>
+ #include <sys/syscall.h>
+ #include <sys/types.h>
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux.cpp
+index 98a55a7dbe4c..896a14c6fd26 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux.cpp
+@@ -13,9 +13,11 @@
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+ #include "lldb/Host/common/NativeThreadProtocol.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/RegisterValue.h"
+ 
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
++#include <sys/ptrace.h>
+ #include <sys/uio.h>
+ 
+ #ifndef PTRACE_GETREGS
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+index a4176cc43528..8a6b1882aa8d 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm.cpp
+@@ -15,7 +15,6 @@
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm.h"
+ #include "lldb/Host/HostInfo.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/RegisterValue.h"
+@@ -25,8 +24,11 @@
+ #include "Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.h"
+ #endif
+ 
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
+ #include <asm/ptrace.h>
+ #include <elf.h>
++#include <sys/ptrace.h>
+ #include <sys/uio.h>
+ 
+ #define REG_CONTEXT_SIZE (GetGPRSize() + sizeof(m_fpr) + sizeof(m_tls))
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+index b286386b5271..4fcfa3f70bdd 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64.cpp
+@@ -20,7 +20,6 @@
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_arm64.h"
+ #include "lldb/Host/HostInfo.h"
+ #include "lldb/Host/common/NativeProcessProtocol.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/RegisterValue.h"
+@@ -29,7 +28,8 @@
+ #include "llvm/BinaryFormat/ELF.h"
+ 
+ // System includes - They have to be included after framework includes because
+-// they define some macros which collide with variable names in other modules
++// they define some macros which collide with variable names in other modules.
++#include <sys/ptrace.h>
+ #include <sys/uio.h>
+ // NT_PRSTATUS and NT_FPREGSET definition
+ #include <elf.h>
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
+index 29862389459f..e3eab4b266cd 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_arm64dbreg.cpp
+@@ -9,12 +9,12 @@
+ #if defined(__arm64__) || defined(__aarch64__)
+ 
+ #include "NativeRegisterContextLinux_arm64dbreg.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ 
+ // System includes - They have to be included after framework includes because
+-// they define some macros which collide with variable names in other modules
++// they define some macros which collide with variable names in other modules.
+ #include <asm/ptrace.h>
+ #include <elf.h>
++#include <sys/ptrace.h>
+ #include <sys/uio.h>
+ 
+ #ifndef PTRACE_GETREGSET
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
+index 2f23c675bdb0..3b74d0b44088 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_loongarch64.cpp
+@@ -15,15 +15,15 @@
+ #include "Plugins/Process/Utility/RegisterInfoPOSIX_loongarch64.h"
+ #include "Plugins/Process/Utility/lldb-loongarch-register-enums.h"
+ #include "lldb/Host/HostInfo.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/DataBufferHeap.h"
+ #include "lldb/Utility/Log.h"
+ #include "lldb/Utility/RegisterValue.h"
+ #include "lldb/Utility/Status.h"
+ 
+-// NT_PRSTATUS and NT_FPREGSET definition
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
+ #include <elf.h>
+-// struct iovec definition
++#include <sys/ptrace.h>
+ #include <sys/uio.h>
+ 
+ #ifndef PTRACE_GETREGSET
+diff --git a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_x86.cpp b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_x86.cpp
+index 8c2a3cfe3b5d..df7685c22af1 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_x86.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeRegisterContextLinux_x86.cpp
+@@ -20,6 +20,7 @@
+ #include <cpuid.h>
+ #include <linux/elf.h>
+ #include <optional>
++#include <sys/ptrace.h>
+ 
+ #ifndef PTRACE_GET_THREAD_AREA
+ #define PTRACE_GET_THREAD_AREA 25
+diff --git a/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp b/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
+index 69b2b21ade81..0fdb293c1963 100644
+--- a/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
++++ b/lldb/source/Plugins/Process/Linux/NativeThreadLinux.cpp
+@@ -14,7 +14,6 @@
+ #include "Plugins/Process/POSIX/CrashReason.h"
+ #include "Plugins/Process/Utility/MemoryTagManagerAArch64MTE.h"
+ #include "lldb/Host/HostNativeThread.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Host/linux/Support.h"
+ #include "lldb/Utility/LLDBAssert.h"
+ #include "lldb/Utility/LLDBLog.h"
+@@ -25,7 +24,12 @@
+ 
+ #include <csignal>
+ #include <sstream>
++
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
++#include <sys/ptrace.h>
+ #include <sys/syscall.h>
++
+ // Try to define a macro to encapsulate the tgkill syscall
+ #define tgkill(pid, tid, sig)                                                  \
+   syscall(__NR_tgkill, static_cast<::pid_t>(pid), static_cast<::pid_t>(tid),   \
+diff --git a/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp b/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
+index fe5cb2323aac..3c2675a1e973 100644
+--- a/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
++++ b/lldb/source/Plugins/Process/Linux/SingleStepCheck.cpp
+@@ -10,13 +10,16 @@
+ 
+ #include "Plugins/Process/Linux/NativeProcessLinux.h"
+ #include "Plugins/Process/POSIX/ProcessPOSIXLog.h"
+-#include "lldb/Host/linux/Ptrace.h"
+ #include "lldb/Utility/Status.h"
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/Errno.h"
+ 
+ #include <csignal>
++
++// System includes - They have to be included after framework includes because
++// they define some macros which collide with variable names in other modules.
+ #include <sched.h>
++#include <sys/ptrace.h>
+ #include <sys/wait.h>
+ #include <unistd.h>
+ 
+-- 
+2.55.0.691.gc56d675ccc-goog
+

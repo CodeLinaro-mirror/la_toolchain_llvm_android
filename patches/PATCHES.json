@@ -562,6 +562,76 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] lldb: Linux: clean up dead and mis-ordered includes (#217435)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9a08a80d89df46804b1d3a84df266898480ce05f.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 631640
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] lldb: Linux: empty Ptrace.h pollyfill (#218038)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9ca6ed70aca0f6f2e57b077e47ea4467bcc8c9df.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632089
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] lldb: Linux: delete Ptrace.h pollyfill (#218045)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/f69fbd6415ab3a0743d14f0e345f9b61720ce187.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632282
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [lldb][Linux][ARM] Fix build after ptrace header removal (#219148)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ee0f03d2b84b56b99115f15ebcdb39da7a5de300.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632355
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] lldb: Linux: restore __ptrace_request typedef for bionic+musl (#219237)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ff1939629f047ed4aa874cf84e80f4d92434d2d3.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632471
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
@@ -654,20 +724,6 @@
         "rel_patch_path": "Disable-integer-sanitizer-for-__libcpp_blsr.patch",
         "version_range": {
             "from": 563880,
-            "until": null
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Fix for x86 ndk sysroot define being mixed with parameter for i686 lldb build"
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Fix-for-x86-ndk-sysroot-define.patch",
-        "version_range": {
-            "from": 574158,
             "until": null
         }
     },
