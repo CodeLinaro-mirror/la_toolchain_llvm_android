@@ -632,6 +632,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] libcxx: fixups for __BIONIC__ (#219591)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b0829c5a09a9cc480718df21d90c454be5dddb88.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633017
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
