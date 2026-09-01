@@ -1,0 +1,79 @@
+From b0829c5a09a9cc480718df21d90c454be5dddb88 Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Tue, 1 Sep 2026 09:46:04 -0700
+Subject: [PATCH] libcxx: fixups for __BIONIC__ (#219591)
+
+A few header guards seem to check various libc's, but not Android's libc
+(Bionic).
+
+Bionic supports:
+- arc4random
+- copy_file_range
+- getcwd() extension
+
+Link:
+https://android-review.git.corp.google.com/c/platform/bionic/+/41445
+Link:
+https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/SYSCALLS.TXT
+Link:
+https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/upstream-openbsd/lib/libc/crypt/arc4random.c
+---
+ libcxx/include/__config              | 2 +-
+ libcxx/include/__cxx03/__config      | 2 +-
+ libcxx/src/filesystem/operations.cpp | 8 +++++---
+ 3 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/libcxx/include/__config b/libcxx/include/__config
+index 942b0a9dbefa..1985a082095f 100644
+--- a/libcxx/include/__config
++++ b/libcxx/include/__config
+@@ -132,7 +132,7 @@
+ //      When this option is used, the token passed to `std::random_device`'s
+ //      constructor *must* be "/dev/urandom" -- anything else is an error.
+ #  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||                     \
+-      defined(__DragonFly__)
++      defined(__DragonFly__) || defined(__BIONIC__)
+ #    define _LIBCPP_USING_ARC4_RANDOM
+ #  elif defined(__wasi__) || defined(__EMSCRIPTEN__)
+ #    define _LIBCPP_USING_GETENTROPY
+diff --git a/libcxx/include/__cxx03/__config b/libcxx/include/__cxx03/__config
+index d955429cc4dd..780ff0b6ff4b 100644
+--- a/libcxx/include/__cxx03/__config
++++ b/libcxx/include/__cxx03/__config
+@@ -279,7 +279,7 @@ _LIBCPP_HARDENING_MODE_DEBUG
+ //      When this option is used, the token passed to `std::random_device`'s
+ //      constructor *must* be "/dev/urandom" -- anything else is an error.
+ #  if defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) ||                     \
+-      defined(__DragonFly__)
++      defined(__DragonFly__) || defined(__BIONIC__)
+ #    define _LIBCPP_USING_ARC4_RANDOM
+ #  elif defined(__wasi__) || defined(__EMSCRIPTEN__)
+ #    define _LIBCPP_USING_GETENTROPY
+diff --git a/libcxx/src/filesystem/operations.cpp b/libcxx/src/filesystem/operations.cpp
+index 745db87ce373..f7736eafab32 100644
+--- a/libcxx/src/filesystem/operations.cpp
++++ b/libcxx/src/filesystem/operations.cpp
+@@ -40,8 +40,10 @@
+ #include <fcntl.h> /* values for fchmodat */
+ #include <time.h>
+ 
+-// since Linux 4.5 and FreeBSD 13, but the Linux libc wrapper is only provided by glibc >= 2.27 and musl
+-#if _LIBCPP_GLIBC_PREREQ(2, 27) || _LIBCPP_HAS_MUSL_LIBC || defined(__FreeBSD__)
++// Since Linux 4.5 and FreeBSD 13, but the Linux libc wrapper is only provided
++// by glibc >= 2.27, musl, and Bionic.
++#if _LIBCPP_GLIBC_PREREQ(2, 27) || _LIBCPP_HAS_MUSL_LIBC || defined(__FreeBSD__) ||                                    \
++    (defined(__BIONIC__) && __ANDROID_API__ >= 34)
+ #  define _LIBCPP_FILESYSTEM_USE_COPY_FILE_RANGE
+ #endif
+ 
+@@ -563,7 +565,7 @@ void __create_symlink(path const& from, path const& to, error_code* ec) {
+ path __current_path(error_code* ec) {
+   ErrorHandler<path> err("current_path", ec);
+ 
+-#if defined(_LIBCPP_WIN32API) || defined(__GLIBC__) || defined(__APPLE__)
++#if defined(_LIBCPP_WIN32API) || defined(__GLIBC__) || defined(__APPLE__) || defined(__BIONIC__)
+   // Common extension outside of POSIX getcwd() spec, without needing to
+   // preallocate a buffer. Also supported by a number of other POSIX libcs.
+   int size              = 0;
+-- 
+2.43.0
