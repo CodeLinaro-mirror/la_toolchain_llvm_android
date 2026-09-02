@@ -576,6 +576,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Android][Driver] Enable PAC/BTI for Android by Default (#218066)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fb43136f2fbc04bcdc9249182ac137b6881fe1ab.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 631934
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] lldb: Linux: empty Ptrace.h pollyfill (#218038)"
         },
         "platforms": [
@@ -627,6 +641,20 @@
         "version_range": {
             "from": 614150,
             "until": 632471
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Enable _LIBCPP_HAS_TRIVIAL_MUTEX_DESTRUCTION for Bionic (#218055)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4b71ac21e2a5934bcbfb3a4d5951ce4c94a57240.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632879
         }
     },
     {
