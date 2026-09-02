@@ -646,6 +646,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Add _LIBCPP_NO_SANITIZE for std::__assume_aligned (#220296)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5f3e8f36d69f7758eb3df00cc51a9f047726723e.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633045
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
