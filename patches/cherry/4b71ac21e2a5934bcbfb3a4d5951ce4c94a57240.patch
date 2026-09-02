@@ -1,0 +1,37 @@
+From 4b71ac21e2a5934bcbfb3a4d5951ce4c94a57240 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Mon, 31 Aug 2026 14:21:30 -0700
+Subject: [PATCH] [libc++] Enable _LIBCPP_HAS_TRIVIAL_MUTEX_DESTRUCTION for
+ Bionic (#218055)
+
+As mentioned in the comment, pthread_mutex_destory is a nop for regular
+mutexes for Bionic, like glibc. We can enable
+_LIBCPP_HAS_TRIVIAL_MUTEX_DESTRUCTION for Bionic causing std::mutex to
+have trivial destructors. This change prevents compilers from
+registering exit-time destructors for global/static mutexes exit-time
+crashes and silencing warnings under -Wexit-time-destructors.
+
+Fixes: https://github.com/android/ndk/issues/1261
+---
+ libcxx/include/__config | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/libcxx/include/__config b/libcxx/include/__config
+index 31c573ba5dca..fddcae5bc663 100644
+--- a/libcxx/include/__config
++++ b/libcxx/include/__config
+@@ -260,10 +260,8 @@ typedef __char32_t char32_t;
+ // pthread_mutex_destroy can allow the kernel to release resources.
+ // See https://llvm.org/D64298 for details.
+ //
+-// TODO(EricWF): Enable this optimization on Bionic after speaking to their
+-//               respective stakeholders.
+ // clang-format off
+-#  if (_LIBCPP_HAS_THREAD_API_PTHREAD && defined(__GLIBC__)) ||                                                        \
++#  if (_LIBCPP_HAS_THREAD_API_PTHREAD && (defined(__GLIBC__) || defined(__BIONIC__))) ||                                \
+       (_LIBCPP_HAS_THREAD_API_C11 && defined(__Fuchsia__)) ||                                                          \
+        _LIBCPP_HAS_THREAD_API_WIN32
+ // clang-format on
+-- 
+2.55.0.897.gb25b4bd76c-goog
+
