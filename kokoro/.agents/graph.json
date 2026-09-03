@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "project_name": "toolchain/llvm_android/kokoro",
+  "nodes": {
+    "toolchain/llvm_android/kokoro": {
+      "legacy_paths": [
+        "kokoro"
+      ],
+      "domains": [
+        {
+          "type": "ARCHITECTURE",
+          "path": [
+            "toolchain/llvm_android/kokoro/.agents/ARCHITECTURE.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [
+            "toolchain/llvm_android:toolchain/llvm_android",
+            "toolchain/llvm_android/docker:toolchain/llvm_android/docker",
+            "toolchain/llvm_android/patches:toolchain/llvm_android/patches",
+            "toolchain/llvm_android/src/llvm_android:toolchain/llvm_android/src/llvm_android"
+          ],
+          "exports": []
+        },
+        {
+          "type": "CODE_REVIEW",
+          "path": [
+            "toolchain/llvm_android/kokoro/.agents/REVIEW.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [
+            "toolchain/llvm_android:toolchain/llvm_android",
+            "toolchain/llvm_android/docker:toolchain/llvm_android/docker",
+            "toolchain/llvm_android/patches:toolchain/llvm_android/patches",
+            "toolchain/llvm_android/src/llvm_android:toolchain/llvm_android/src/llvm_android"
+          ],
+          "exports": []
+        }
+      ]
+    }
+  },
+  "in_tree": true
+}

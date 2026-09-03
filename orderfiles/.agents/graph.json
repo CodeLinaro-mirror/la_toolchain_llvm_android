@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "project_name": "toolchain/llvm_android/orderfiles",
+  "nodes": {
+    "toolchain/llvm_android/orderfiles": {
+      "legacy_paths": [
+        "orderfiles"
+      ],
+      "domains": [
+        {
+          "type": "ARCHITECTURE",
+          "path": [
+            "toolchain/llvm_android/orderfiles/.agents/ARCHITECTURE.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [],
+          "exports": []
+        },
+        {
+          "type": "CODE_REVIEW",
+          "path": [
+            "toolchain/llvm_android/orderfiles/.agents/REVIEW.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [],
+          "exports": []
+        }
+      ]
+    }
+  },
+  "in_tree": true
+}

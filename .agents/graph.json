@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "project_name": "toolchain/llvm_android",
+  "nodes": {
+    "toolchain/llvm_android": {
+      "legacy_paths": [
+        "."
+      ],
+      "domains": [
+        {
+          "type": "ARCHITECTURE",
+          "path": [
+            "toolchain/llvm_android/.agents/ARCHITECTURE.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [
+            "toolchain/llvm_android/orderfiles:toolchain/llvm_android/orderfiles",
+            "toolchain/llvm_android/patches:toolchain/llvm_android/patches",
+            "toolchain/llvm_android/src/llvm_android:toolchain/llvm_android/src/llvm_android"
+          ],
+          "exports": []
+        },
+        {
+          "type": "CODE_REVIEW",
+          "path": [
+            "toolchain/llvm_android/.agents/REVIEW.md"
+          ],
+          "recorded_hash": "c58dd95f2b4669ed109b04b9a2b8e73e1f6f98ef",
+          "imports": [
+            "toolchain/llvm_android/orderfiles:toolchain/llvm_android/orderfiles",
+            "toolchain/llvm_android/patches:toolchain/llvm_android/patches",
+            "toolchain/llvm_android/src/llvm_android:toolchain/llvm_android/src/llvm_android"
+          ],
+          "exports": []
+        }
+      ]
+    }
+  },
+  "in_tree": true
+}
