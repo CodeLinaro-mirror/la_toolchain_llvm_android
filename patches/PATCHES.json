@@ -688,6 +688,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [clang] Enable -fstack-clash-protection by default for Android (#209279)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/d6b2176126d716110eea8bf90c611eb6833f10ba.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633445
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
