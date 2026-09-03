@@ -810,5 +810,19 @@
             "from": 605313,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Add temporary triage handler for libcxx hardening"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Add-temporary-triage-handler-for-libcxx-hardening.patch",
+        "version_range": {
+            "from": 596125,
+            "until": null
+        }
     }
 ]
