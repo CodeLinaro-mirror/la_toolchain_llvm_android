@@ -1,0 +1,66 @@
+From fb43136f2fbc04bcdc9249182ac137b6881fe1ab Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Mon, 24 Aug 2026 15:13:38 -0700
+Subject: [PATCH] [Android][Driver] Enable PAC/BTI for Android by Default
+ (#218066)
+
+We enabled PAC and BTI by default in the Android Ecosystem so it makes
+sense to set it as the default for Android in the Clang driver. This
+change will make sure anyone compiling for Android (like through NDK)
+automatically gets PAC/BTI. It should not cause issues with older
+Android devices since they become nops.
+
+Fixes: https://github.com/android/ndk/issues/1914
+---
+ clang/lib/Driver/ToolChains/Clang.cpp        |  5 +++--
+ clang/test/Driver/aarch64-security-options.c | 12 ++++++++++++
+ 2 files changed, 15 insertions(+), 2 deletions(-)
+diff --git a/clang/lib/Driver/ToolChains/Clang.cpp b/clang/lib/Driver/ToolChains/Clang.cpp
+index dabc8c8d964d..f3aeed61a064 100644
+--- a/clang/lib/Driver/ToolChains/Clang.cpp
++++ b/clang/lib/Driver/ToolChains/Clang.cpp
+@@ -1392,7 +1392,7 @@ static void CollectARMPACBTIOptions(const ToolChain &TC, const ArgList &Args,
+                                        options::OPT_mbranch_protection_EQ)
+                      : Args.getLastArg(options::OPT_mbranch_protection_EQ);
+   if (!A) {
+-    if (Triple.isOSOpenBSD() && isAArch64) {
++    if ((Triple.isOSOpenBSD() || Triple.isAndroid()) && isAArch64) {
+       CmdArgs.push_back("-msign-return-address=non-leaf");
+       CmdArgs.push_back("-msign-return-address-key=a_key");
+       CmdArgs.push_back("-mbranch-target-enforce");
+@@ -1414,7 +1414,8 @@ static void CollectARMPACBTIOptions(const ToolChain &TC, const ArgList &Args,
+       D.Diag(diag::err_drv_unsupported_option_argument)
+           << A->getSpelling() << Scope;
+     Key = "a_key";
+-    IndirectBranches = Triple.isOSOpenBSD() && isAArch64;
++    IndirectBranches =
++        (Triple.isOSOpenBSD() || Triple.isAndroid()) && isAArch64;
+     BranchProtectionPAuthLR = false;
+     GuardedControlStack = false;
+   } else {
+diff --git a/clang/test/Driver/aarch64-security-options.c b/clang/test/Driver/aarch64-security-options.c
+index 967a6122a333..125e90b2b51f 100644
+--- a/clang/test/Driver/aarch64-security-options.c
++++ b/clang/test/Driver/aarch64-security-options.c
+@@ -33,6 +33,18 @@
+ // RUN: %clang --target=aarch64 -### -o /dev/null -mbranch-protection=standard /dev/null 2>&1 | \
+ // RUN: FileCheck --allow-empty %s --check-prefix=LINKER-DRIVER
+ 
++// Check that Android enables PAC and BTI by default on AArch64.
++// RUN: %clang --target=aarch64-linux-android -### -c %s 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RA-NON-LEAF --check-prefix=KEY-A --check-prefix=BTE-ON --check-prefix=GCS-OFF --check-prefix=WARN
++
++// Check that the Android default can be overridden.
++// RUN: %clang --target=aarch64-linux-android -mbranch-protection=none -### -c %s 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RA-OFF --check-prefix=KEY --check-prefix=BTE-OFF --check-prefix=GCS-OFF --check-prefix=WARN
++
++// Check that Android enables BTI by default when -msign-return-address is passed.
++// RUN: %clang --target=aarch64-linux-android -msign-return-address=non-leaf -### -c %s 2>&1 | \
++// RUN: FileCheck %s --check-prefix=RA-NON-LEAF --check-prefix=KEY-A --check-prefix=BTE-ON --check-prefix=GCS-OFF --check-prefix=WARN
++
+ // WARN-NOT: warning: ignoring '-mbranch-protection=' option because the 'aarch64' architecture does not support it [-Wbranch-protection]
+ 
+ // RA-OFF: "-msign-return-address=none"
+-- 
+2.55.0.897.gb25b4bd76c-goog
+

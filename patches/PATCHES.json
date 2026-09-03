@@ -576,6 +576,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Android][Driver] Enable PAC/BTI for Android by Default (#218066)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fb43136f2fbc04bcdc9249182ac137b6881fe1ab.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 631934
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] lldb: Linux: empty Ptrace.h pollyfill (#218038)"
         },
         "platforms": [
@@ -627,6 +641,48 @@
         "version_range": {
             "from": 614150,
             "until": 632471
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Enable _LIBCPP_HAS_TRIVIAL_MUTEX_DESTRUCTION for Bionic (#218055)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/4b71ac21e2a5934bcbfb3a4d5951ce4c94a57240.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632879
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] libcxx: fixups for __BIONIC__ (#219591)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b0829c5a09a9cc480718df21d90c454be5dddb88.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633017
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [libc++] Add _LIBCPP_NO_SANITIZE for std::__assume_aligned (#220296)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/5f3e8f36d69f7758eb3df00cc51a9f047726723e.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633045
         }
     },
     {
