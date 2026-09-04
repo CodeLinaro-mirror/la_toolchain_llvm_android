@@ -107,7 +107,7 @@ def parse_args():
     clang_group.add_argument(
         '--clang-kokoro-build-id',
         nargs='?',
-        help='Kokoro TOT Clang build ID'
+        help='Kokoro TOT Clang build ID. '
         'Clang pulled from that build will be used.')
 
     parser.add_argument(
