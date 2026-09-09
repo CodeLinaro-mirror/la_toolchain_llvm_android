@@ -1,0 +1,220 @@
+From 10d4bdf93a82fb290b8c55da6ed19ff54da67296 Mon Sep 17 00:00:00 2001
+From: George Burgess IV <george.burgess.iv@gmail.com>
+Date: Wed, 9 Sep 2026 07:19:43 -0600
+Subject: [PATCH] [libc++] Opt `std::*set` out of map key extraction
+ optimization (#220452)
+
+PR #154512 (relanded by #155565) removed `__can_extract_map_key`, which
+had a blanket opt-out for `std::*set`s. The new logic does not have that
+opt-out, leading to `std::set`s being incorrectly constructed.
+
+The new regression tests demonstrate this, but essentially the idea is:
+1. Have `std::set<T> foo;`
+2. Call `foo.emplace(some_t,
+arg_that_influences_comparisons_or_hashes);`
+3. The emplace will internally search using `some_t` as the key, *not*
+`T(some_t, arg_that_influences_comparisons_or_hashes);`
+
+This opts out `std::*set` from this optimization to match previous
+behavior.
+
+Tests and fix were produced by an LLM. I reviewed them and they seem
+reasonable to me, though I don't have a strong background in libc++
+testing conventions.
+
+(Credit to Deva S, our partner who tracked this down. Unfortunately I
+don't know his GH handle)
+
+Fixes #220451
+---
+ libcxx/include/__hash_table                      |  2 +-
+ libcxx/include/__tree                            |  9 +++++----
+ libcxx/include/__utility/try_key_extraction.h    | 16 ++++++++++------
+ .../containers/associative/set/emplace.pass.cpp  | 16 ++++++++++++++++
+ .../containers/unord/unord.set/emplace.pass.cpp  | 10 ++++++++++
+ 5 files changed, 42 insertions(+), 11 deletions(-)
+
+diff --git a/libcxx/include/__hash_table b/libcxx/include/__hash_table
+index ef487fb06dd5e..f2ae1d36f9807 100644
+--- a/libcxx/include/__hash_table
++++ b/libcxx/include/__hash_table
+@@ -774,7 +774,7 @@ public:
+ 
+   template <class... _Args>
+   _LIBCPP_HIDE_FROM_ABI pair<iterator, bool> __emplace_unique(_Args&&... __args) {
+-    return std::__try_key_extraction<key_type>(
++    return std::__try_key_extraction<key_type, value_type>(
+         [this](const key_type& __key, _Args&&... __args2) {
+           size_t __hash   = hash_function()(__key);
+           size_type __bc  = bucket_count();
+diff --git a/libcxx/include/__tree b/libcxx/include/__tree
+index bb8c4f3f8c623..05b5a55571dec 100644
+--- a/libcxx/include/__tree
++++ b/libcxx/include/__tree
+@@ -1046,7 +1046,7 @@ public:
+ 
+   template <class... _Args>
+   _LIBCPP_HIDE_FROM_ABI pair<iterator, bool> __emplace_unique(_Args&&... __args) {
+-    return std::__try_key_extraction<key_type>(
++    return std::__try_key_extraction<key_type, value_type>(
+         [this](const key_type& __key, _Args&&... __args2) {
+           auto [__parent, __child] = __find_equal(__key);
+           __node_pointer __r       = std::__static_fancy_pointer_cast<__node_pointer>(__child);
+@@ -1075,8 +1075,9 @@ public:
+   }
+ 
+   template <class... _Args>
+-  _LIBCPP_HIDE_FROM_ABI pair<iterator, bool> __emplace_hint_unique(const_iterator __p, _Args&&... __args) {
+-    return std::__try_key_extraction<key_type>(
++  _LIBCPP_HIDE_FROM_ABI pair<iterator, bool>
++  __emplace_hint_unique(const_iterator __p, _Args&&... __args) {
++    return std::__try_key_extraction<key_type, value_type>(
+         [this, __p](const key_type& __key, _Args&&... __args2) {
+           __node_base_pointer __dummy;
+           auto [__parent, __child] = __find_equal(__p, __dummy, __key);
+@@ -1153,7 +1154,7 @@ public:
+     using __reference = decltype(*__first);
+ 
+     for (; __first != __last; ++__first) {
+-      std::__try_key_extraction<key_type>(
++      std::__try_key_extraction<key_type, value_type>(
+           [this, &__max_node](const key_type& __key, __reference&& __val) {
+             if (value_comp()(__max_node->__get_value(), __key)) { // __key > __max_node
+               __node_holder __nd = __construct_node(std::forward<__reference>(__val));
+diff --git a/libcxx/include/__utility/try_key_extraction.h b/libcxx/include/__utility/try_key_extraction.h
+index 755c08214019f..10995686fd298 100644
+--- a/libcxx/include/__utility/try_key_extraction.h
++++ b/libcxx/include/__utility/try_key_extraction.h
+@@ -27,13 +27,14 @@
+ 
+ _LIBCPP_BEGIN_NAMESPACE_STD
+ 
+-template <class _KeyT, class _Ret, class _WithKey, class _WithoutKey, class... _Args>
++template <class _KeyT, bool, class _Ret, class _WithKey, class _WithoutKey, class... _Args>
+ _LIBCPP_HIDE_FROM_ABI _Ret
+ __try_key_extraction_impl(__priority_tag<0>, _WithKey, _WithoutKey __without_key, _Args&&... __args) {
+   return __without_key(std::forward<_Args>(__args)...);
+ }
+ 
+ template <class _KeyT,
++          bool,
+           class _Ret,
+           class _WithKey,
+           class _WithoutKey,
+@@ -45,11 +46,12 @@ __try_key_extraction_impl(__priority_tag<1>, _WithKey __with_key, _WithoutKey, _
+ }
+ 
+ template <class _KeyT,
++          bool __is_map,
+           class _Ret,
+           class _WithKey,
+           class _WithoutKey,
+           class _Arg,
+-          __enable_if_t<__is_pair_v<__remove_const_ref_t<_Arg> > &&
++          __enable_if_t<__is_map && __is_pair_v<__remove_const_ref_t<_Arg> > &&
+                             is_same<__remove_const_t<typename __remove_const_ref_t<_Arg>::first_type>, _KeyT>::value,
+                         int> = 0>
+ _LIBCPP_HIDE_FROM_ABI _Ret
+@@ -58,12 +60,13 @@ __try_key_extraction_impl(__priority_tag<1>, _WithKey __with_key, _WithoutKey, _
+ }
+ 
+ template <class _KeyT,
++          bool __is_map,
+           class _Ret,
+           class _WithKey,
+           class _WithoutKey,
+           class _Arg1,
+           class _Arg2,
+-          __enable_if_t<is_same<_KeyT, __remove_const_ref_t<_Arg1> >::value, int> = 0>
++          __enable_if_t<__is_map && is_same<_KeyT, __remove_const_ref_t<_Arg1> >::value, int> = 0>
+ _LIBCPP_HIDE_FROM_ABI _Ret
+ __try_key_extraction_impl(__priority_tag<1>, _WithKey __with_key, _WithoutKey, _Arg1&& __arg1, _Arg2&& __arg2) {
+   return __with_key(__arg1, std::forward<_Arg1>(__arg1), std::forward<_Arg2>(__arg2));
+@@ -71,13 +74,14 @@ __try_key_extraction_impl(__priority_tag<1>, _WithKey __with_key, _WithoutKey, _
+ 
+ #ifndef _LIBCPP_CXX03_LANG
+ template <class _KeyT,
++          bool __is_map,
+           class _Ret,
+           class _WithKey,
+           class _WithoutKey,
+           class _PiecewiseConstruct,
+           class _Tuple1,
+           class _Tuple2,
+-          __enable_if_t<is_same<__remove_const_ref_t<_PiecewiseConstruct>, piecewise_construct_t>::value &&
++          __enable_if_t<__is_map && is_same<__remove_const_ref_t<_PiecewiseConstruct>, piecewise_construct_t>::value &&
+                             __is_tuple_v<_Tuple1> && tuple_size<_Tuple1>::value == 1 &&
+                             is_same<__remove_const_ref_t<typename tuple_element<0, _Tuple1>::type>, _KeyT>::value,
+                         int> = 0>
+@@ -101,11 +105,11 @@ _LIBCPP_HIDE_FROM_ABI _Ret __try_key_extraction_impl(
+ // arguments. Otherwise it calls the `__without_key` function with all of the arguments.
+ //
+ // Both `__with_key` and `__without_key` must take all arguments by reference.
+-template <class _KeyT, class _WithKey, class _WithoutKey, class... _Args>
++template <class _KeyT, class _ValT, class _WithKey, class _WithoutKey, class... _Args>
+ _LIBCPP_HIDE_FROM_ABI decltype(std::declval<_WithoutKey>()(std::declval<_Args>()...))
+ __try_key_extraction(_WithKey __with_key, _WithoutKey __without_key, _Args&&... __args) {
+   using _Ret = decltype(__without_key(std::forward<_Args>(__args)...));
+-  return std::__try_key_extraction_impl<_KeyT, _Ret>(
++  return std::__try_key_extraction_impl<_KeyT, !is_same<_KeyT, _ValT>::value, _Ret>(
+       __priority_tag<1>(), __with_key, __without_key, std::forward<_Args>(__args)...);
+ }
+ 
+diff --git a/libcxx/test/std/containers/associative/set/emplace.pass.cpp b/libcxx/test/std/containers/associative/set/emplace.pass.cpp
+index e5a9f9590aad0..3c6839ce36255 100644
+--- a/libcxx/test/std/containers/associative/set/emplace.pass.cpp
++++ b/libcxx/test/std/containers/associative/set/emplace.pass.cpp
+@@ -91,6 +91,22 @@ int main(int, char**) {
+     assert(std::get<1>(res));
+     assert(set.begin() == std::get<0>(res));
+   }
++  { // Regression test for https://llvm.org/PR220451.
++    // Make sure emplace with multiple arguments doesn't extract the first argument as a key for sets.
++    struct S {
++      const int val;
++      TEST_CONSTEXPR explicit S(int v) : val(v) {}
++      TEST_CONSTEXPR S(const S& s, int offset) : val(s.val + offset) {}
++      TEST_CONSTEXPR bool operator<(const S& other) const { return val < other.val; }
++      TEST_CONSTEXPR bool operator==(const S& other) const { return val == other.val; }
++    };
++    std::set<S> s;
++    s.emplace(2);
++    auto res = s.emplace(S(1), 1);
++    assert(!res.second);
++    assert(s.size() == 1);
++    assert(s.begin()->val == 2);
++  }
+ 
+   return 0;
+ }
+diff --git a/libcxx/test/std/containers/unord/unord.set/emplace.pass.cpp b/libcxx/test/std/containers/unord/unord.set/emplace.pass.cpp
+index 24e85a1ab7f54..daea16be51cef 100644
+--- a/libcxx/test/std/containers/unord/unord.set/emplace.pass.cpp
++++ b/libcxx/test/std/containers/unord/unord.set/emplace.pass.cpp
+@@ -18,6 +18,7 @@
+ //     pair<iterator, bool> emplace(Args&&... args);
+ 
+ #include <cassert>
++#include <string>
+ #include <unordered_set>
+ 
+ #include "../../Emplaceable.h"
+@@ -75,6 +76,15 @@ int main(int, char**) {
+     assert(std::get<1>(res));
+     assert(set.begin() == std::get<0>(res));
+   }
++  { // Regression test for https://llvm.org/PR220451.
++    // Make sure emplace with multiple arguments doesn't extract the first argument as a key for unordered sets.
++    std::unordered_set<std::string> s;
++    s.emplace("foo");
++    auto res = s.emplace(std::string("ofoo"), 1);
++    assert(!res.second);
++    assert(s.size() == 1);
++    assert(*s.begin() == "foo");
++  }
+ 
+   return 0;
+ }
+-- 
+2.55.0.897.gb25b4bd76c-goog
+
