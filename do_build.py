@@ -24,7 +24,7 @@ import os
 import shutil
 import sys
 import textwrap
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set
 import re
 
 import context  # pylint: disable=unused-import
@@ -42,6 +42,10 @@ def logger():
 def set_default_toolchain(toolchain: toolchains.Toolchain) -> None:
     """Sets the toolchain to use for builders who don't specify a toolchain in constructor."""
     Builder.toolchain = toolchain
+
+
+def to_tag(condition: Any, tag: str) -> str:
+    return ('+' if condition else '-') + tag
 
 
 def extract_pgo_profile(pgo) -> Path:
@@ -142,6 +146,12 @@ def build_llvm_for_windows(enable_assertions: bool,
         win_builder.enable_assertions = enable_assertions
         win_builder.lto = enable_lto
         win_builder.profdata_file = profdata_file
+        win_builder.optimization_tags = [
+            to_tag(profdata_file, 'pgo'),
+            '-bolt',
+            to_tag(enable_lto, 'lto'),
+            '-mlgo',
+        ]
         win_builder.build()
 
     if build_simpleperf_readelf:
@@ -638,14 +648,20 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
                                      manifest_context)[0]
     else:
         get_scripts_sha = 'refs/heads/main'
-    with open(clang_source_info_file, 'r') as info:
-        info_read = info.read()
-    with open(clang_source_info_file, 'w') as info:
-        info_read = info_read.replace('{{scripts_sha}}', get_scripts_sha)
-        info.write(info_read)
-
     if clang_source_info_file.exists():
-        shutil.copy2(clang_source_info_file, install_dir)
+        info_read = clang_source_info_file.read_text()
+        info_read = info_read.replace('{{scripts_sha}}', get_scripts_sha)
+
+        if toolchain_builder.optimization_tags:
+            build_options_str = f"Build options: {', '.join(toolchain_builder.optimization_tags)}\n"
+            lines = info_read.splitlines(keepends=True)
+            if lines and lines[0].startswith('Base revision:'):
+                lines.insert(1, build_options_str)
+                info_read = ''.join(lines)
+            else:
+                info_read = build_options_str + '\n' + info_read
+
+        (install_dir / 'clang_source_info.md').write_text(info_read)
 
     # Add order file scripts to the toolcahin in share_orderfile_dir
     share_orderfile_dir = install_dir / "share/orderfiles"
@@ -1207,15 +1223,16 @@ def main():
             stage2.libedit = libedit_builder
 
         stage2_tags = []
-        # Annotate the version string with build options.
-        to_tag = lambda c, tag : ('+' if c else '-') + tag
-        stage2_tags.append(to_tag(profdata, 'pgo'))
-        stage2_tags.append(to_tag(clang_bolt_fdata, 'bolt'))
-        stage2_tags.append(to_tag(stage2.lto, 'lto'))
-        stage2_tags.append(to_tag(stage2.enable_mlgo, 'mlgo'))
         if args.build_llvm_next:
             stage2_tags.append('ANDROID_LLVM_NEXT')
         stage2.build_tags = stage2_tags
+
+        stage2.optimization_tags = [
+            to_tag(profdata, 'pgo'),
+            to_tag(clang_bolt_fdata, 'bolt'),
+            to_tag(stage2.lto, 'lto'),
+            to_tag(stage2.enable_mlgo, 'mlgo'),
+        ]
 
         stage2.build()
 
