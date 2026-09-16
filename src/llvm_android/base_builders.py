@@ -624,6 +624,7 @@ class LLVMBuilder(LLVMBaseBuilder):
     config_list: List[configs.Config]
     build_name: str
     build_tags: Optional[List[str]] = None
+    optimization_tags: Optional[List[str]] = None
     svn_revision: str
     enable_assertions: bool = False
     enable_mlgo: bool = False

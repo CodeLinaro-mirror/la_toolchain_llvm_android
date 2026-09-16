@@ -376,9 +376,12 @@ def fetch_kokoro_prebuilt(build_id: str, no_cache: bool = False) -> Path:
 
 
 def is_clang_built_with_mlgo(clang_dir: Path):
-    clang = clang_dir / 'bin' / 'clang'
-    output = utils.check_output([str(clang), '--version'])
-    return '+mlgo' in output
+    source_info_file = clang_dir / 'clang_source_info.md'
+    assert source_info_file.exists(), f'{source_info_file} does not exist'
+    for line in source_info_file.read_text().splitlines():
+        if line.startswith('Build options:'):
+            return '+mlgo' in line and '-mlgo' not in line
+    return False
 
 
 def main():
