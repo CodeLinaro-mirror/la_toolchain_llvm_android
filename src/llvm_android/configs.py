@@ -65,6 +65,11 @@ class Config:
         return []
 
     @property
+    def exe_ldflags(self) -> List[str]:
+        """Returns an extra list of flags for linking executables."""
+        return []
+
+    @property
     def env(self) -> Dict[str, str]:
         return {}
 
@@ -375,6 +380,12 @@ class LinuxMuslConfig(LinuxConfig):
         return super().ldflags + [
             '-rtlib=compiler-rt',
             '-Wl,-z,stack-size=2097152',
+        ]
+
+    @property
+    def exe_ldflags(self) -> List[str]:
+        return super().exe_ldflags + [
+            '-ljemalloc5',
         ]
 
     @property

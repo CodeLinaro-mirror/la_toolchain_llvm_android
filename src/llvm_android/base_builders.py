@@ -386,9 +386,11 @@ class CMakeBuilder(Builder):
             cflags.append(f'--sysroot={self._config.sysroot}')
             cxxflags.append(f'--sysroot={self._config.sysroot}')
             ldflags.append(f'--sysroot={self._config.sysroot}')
+        exe_ldflags = self._config.exe_ldflags + ldflags
         cflags_str = ' '.join(cflags)
         cxxflags_str = ' '.join(cxxflags)
         ldflags_str = ' '.join(ldflags)
+        exe_ldflags_str = ' '.join(exe_ldflags)
         defines: Dict[str, str] = {
             'CMAKE_C_COMPILER': str(self._cc),
             'CMAKE_CXX_COMPILER': str(self._cxx),
@@ -407,7 +409,7 @@ class CMakeBuilder(Builder):
             'CMAKE_C_FLAGS': cflags_str,
             'CMAKE_CXX_FLAGS': cxxflags_str,
 
-            'CMAKE_EXE_LINKER_FLAGS': ldflags_str,
+            'CMAKE_EXE_LINKER_FLAGS': exe_ldflags_str,
             'CMAKE_SHARED_LINKER_FLAGS': ldflags_str,
             'CMAKE_MODULE_LINKER_FLAGS': ldflags_str,
 
