@@ -139,6 +139,14 @@ def symlink_to_linux_resource_dir(install_dir):
     os.chdir(prebuilt_dir)
 
 
+def _get_build_options(source_info_path: str) -> str:
+    with open(source_info_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.startswith('Build options:'):
+                return line
+    return ''
+
+
 def validity_check(host, install_dir, clang_version_major):
     # Make sure the official toolchain (non llvm-next) is built with PGO
     # profiles.
@@ -148,19 +156,29 @@ def validity_check(host, install_dir, clang_version_major):
         llvm_next = strings.find('ANDROID_LLVM_NEXT') != -1
 
         if not llvm_next:
-            has_pgo = ('+pgo' in strings) and ('-pgo' not in strings)
+            source_info_path = os.path.join(install_dir, 'clang_source_info.md')
+            assert os.path.exists(source_info_path), f'{source_info_path} does not exist'
+
+            # On older builders, optimization tags were in `clang --version`.
+            # On future builders, they are in `clang_source_info.md`.
+            if '+pgo' in strings or '-pgo' in strings:
+                check_content = strings
+            else:
+                check_content = _get_build_options(source_info_path)
+
+            has_pgo = ('+pgo' in check_content) and ('-pgo' not in check_content)
             if not has_pgo:
                 logger().error('The Clang binary is not built with PGO profiles.')
                 return False
-            has_bolt = ('+bolt' in strings) and ('-bolt' not in strings)
+            has_bolt = ('+bolt' in check_content) and ('-bolt' not in check_content)
             if not has_bolt:
                 logger().error('The Clang binary is not built with BOLT profiles.')
                 return False
-            has_lto = ('+lto' in strings) and ('-lto' not in strings)
+            has_lto = ('+lto' in check_content) and ('-lto' not in check_content)
             if not has_lto:
                 logger().error('The Clang binary is not built with LTO.')
                 return False
-            has_mlgo = ('+mlgo' in strings) and ('-mlgo' not in strings)
+            has_mlgo = ('+mlgo' in check_content) and ('-mlgo' not in check_content)
             if not has_mlgo:
                 logger().error('The Clang binary is not built with MLGO support.')
                 return False
