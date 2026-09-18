@@ -1276,6 +1276,9 @@ class DeviceLibcxxBuilder(base_builders.LLVMRuntimeBuilder):
         if self._is_hwasan:
             result.append('-fsanitize=hwaddress')
 
+        result.append('-Wl,-z,separate-code')
+        result.append('-Wl,-z,separate-loadable-segments')
+
         return result
 
     @property
