@@ -660,6 +660,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [VPlan] Don't replicate extractvalues that would require extracting lanes from a struct (#219941)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2340e6238c911ffdbed6c716114f9edabce2a6a7.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 632986
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] libcxx: fixups for __BIONIC__ (#219591)"
         },
         "platforms": [
@@ -697,6 +711,20 @@
         "version_range": {
             "from": 614150,
             "until": 633445
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [VPlan] Don't widen extractvalue with single scalar operand (#221146)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/09e076eca3e12829950339b289c8de6ffd32175d.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633567
         }
     },
     {
