@@ -515,6 +515,13 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
         return defines
 
     @property
+    def ldflags(self) -> List[str]:
+        ldflags = super().ldflags
+        ldflags.append('-Wl,-z,separate-code')
+        ldflags.append('-Wl,-z,separate-loadable-segments')
+        return ldflags
+
+    @property
     def cflags(self) -> List[str]:
         cflags = super().cflags
         cflags.append('-funwind-tables')
@@ -1622,6 +1629,13 @@ class TsanBuilder(base_builders.LLVMRuntimeBuilder):
         # early.
         defines['SANITIZER_COMMON_LINK_FLAGS'] = '-Wl,-z,defs'
         return defines
+
+    @property
+    def ldflags(self) -> List[str]:
+        ldflags = super().ldflags
+        ldflags.append('-Wl,-z,separate-code')
+        ldflags.append('-Wl,-z,separate-loadable-segments')
+        return ldflags
 
     @property
     def cflags(self) -> List[str]:
