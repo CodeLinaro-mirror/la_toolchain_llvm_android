@@ -1,0 +1,143 @@
+From 3ff9abe8930acc7b4c4e2387c1357ca6f2d15c00 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Fri, 18 Sep 2026 20:30:43 -0700
+Subject: [PATCH] [LFI][AArch64] Do not flush deferred LR guards on temporary
+ labels (#224776)
+
+In function epilogues with unwinding enabled, DWARF CFI directives
+between restoring x30 and autiasp trigger
+MCObjectStreamer::emitCFILabel, which emits temporary labels. onLabel
+assumed all labels were branch targets and flushed DeferredLRGuard,
+emitting `add x30, x27, w30, uxtw` before autiasp. Because w30
+zero-extends, this stripped the PAC signature from x30 and caused PAC
+exceptions on hardware with FEAT_FPAC.
+
+Fix it by not flushing the deferred LR guard on temporary symbols in
+onLabel. Also, update AArch64InstrInfo::getLFIInstSizeInBytes to return
+8 for RET to fix the size assertion failure in +assertions builds, which
+occurs because RET did not account for the deferred LR guard that can
+precede the return instruction.
+
+Assisted-by: Gemini
+---
+ llvm/lib/Target/AArch64/AArch64InstrInfo.cpp  |  9 +++---
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     |  5 ++--
+ llvm/test/MC/AArch64/LFI/guard-elim.s         | 11 +++++++
+ llvm/test/MC/AArch64/LFI/return.s             | 29 +++++++++++++++++++
+ 4 files changed, 47 insertions(+), 7 deletions(-)
+
+diff --git a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+index 7b32461d5164..2e482b38f72f 100644
+--- a/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp
+@@ -129,11 +129,10 @@ static std::optional<unsigned> getLFIInstSizeInBytes(const MachineInstr &MI) {
+     // Indirect branches/calls expand to 2 instructions (guard + br/blr).
+     return 8;
+   case AArch64::RET:
+-    // RET through LR is not rewritten, but RET through another register
+-    // expands to 2 instructions (guard + ret).
+-    if (MI.getOperand(0).getReg() != AArch64::LR)
+-      return 8;
+-    return 4;
++    // RET through another register expands to 2 instructions (guard + ret).
++    // RET through LR may also expand to 2 instructions if a deferred LR guard
++    // is flushed before the return.
++    return 8;
+   case AArch64::RETAA:
+   case AArch64::RETAB:
+     // Authenticated returns expand to 3 instructions (authenticate + guard +
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index 86c48a5dccfd..e6f55edd4523 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -23,6 +23,7 @@
+ #include "llvm/MC/MCInstrInfo.h"
+ #include "llvm/MC/MCStreamer.h"
+ #include "llvm/MC/MCSubtargetInfo.h"
++#include "llvm/MC/MCSymbol.h"
+ #include "llvm/Support/CommandLine.h"
+ 
+ using namespace llvm;
+@@ -298,13 +299,13 @@ MCRegister AArch64MCLFIRewriter::mayModifyReserved(const MCInst &Inst) const {
+   return {};
+ }
+ 
+-void AArch64MCLFIRewriter::onLabel(const MCSymbol *, MCStreamer &Out) {
++void AArch64MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
+   if (Guard)
+     return;
+ 
+   // Flush a deferred LR guard before the label, since the label is a potential
+   // branch target and code reached through it may use LR for control flow.
+-  if (DeferredLRGuard && LastSTI) {
++  if (DeferredLRGuard && LastSTI && !Symbol->isTemporary()) {
+     emitAddMask(AArch64::LR, AArch64::LR, Out, *LastSTI);
+     DeferredLRGuard = false;
+   }
+diff --git a/llvm/test/MC/AArch64/LFI/guard-elim.s b/llvm/test/MC/AArch64/LFI/guard-elim.s
+index f4c5c5869fba..f14b5d160def 100644
+--- a/llvm/test/MC/AArch64/LFI/guard-elim.s
++++ b/llvm/test/MC/AArch64/LFI/guard-elim.s
+@@ -176,3 +176,14 @@ ldr x1, [x14, #16]
+ // CHECK-NEXT: mov x14, x15
+ // CHECK-NEXT: add x28, x27, w14, uxtw
+ // CHECK-NEXT: ldr x1, [x28, #16]
++
++temp_label_test:
++ldr x8, [x6, #8]
++.Ltmp_label1:
++ldr x9, [x6, #16]
++// CHECK-LABEL: temp_label_test:
++// CHECK-NEXT: add x28, x27, w6, uxtw
++// CHECK-NEXT: ldr x8, [x28, #8]
++// CHECK-NEXT: .Ltmp_label1:
++// CHECK-NEXT: add x28, x27, w6, uxtw
++// CHECK-NEXT: ldr x9, [x28, #16]
+diff --git a/llvm/test/MC/AArch64/LFI/return.s b/llvm/test/MC/AArch64/LFI/return.s
+index 9becff0a55e9..1d4d7b1dfaf8 100644
+--- a/llvm/test/MC/AArch64/LFI/return.s
++++ b/llvm/test/MC/AArch64/LFI/return.s
+@@ -1,4 +1,5 @@
+ // RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
++// RUN: llvm-mc -triple aarch64_lfi -filetype=obj %s | llvm-objdump -d - | FileCheck %s --check-prefix=OBJ
+ 
+ .arch_extension pauth
+ 
+@@ -63,6 +64,34 @@ b some_func
+ // CHECK-NEXT: add x30, x27, w30, uxtw
+ // CHECK-NEXT: b some_func
+ 
++// A temporary label does not flush the deferred LR guard, allowing a
++// following authentication instruction to run on the signed pointer.
++ldp x29, x30, [sp]
++.Ltmp0:
++autiasp
++ret
++// CHECK:      ldp x29, x30, [sp]
++// CHECK:      autiasp
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++
++// DWARF CFI directives (which emit internal temporary labels) also must not
++// flush the deferred LR guard before authentication.
++.cfi_startproc
++ldp x29, x30, [sp], #16
++.cfi_def_cfa_offset 0
++autiasp
++ret
++.cfi_endproc
++// CHECK:      ldp x29, x30, [sp], #16
++// CHECK:      autiasp
++// CHECK-NEXT: add x30, x27, w30, uxtw
++// CHECK-NEXT: ret
++// OBJ:        ldp x29, x30, [sp], #0x10
++// OBJ-NEXT:   autiasp
++// OBJ-NEXT:   add x30, x27, w30, uxtw
++// OBJ-NEXT:   ret
++
+ mov x30, x0
+ // CHECK:      mov x30, x0
+ // CHECK-NEXT: add x30, x27, w30, uxtw
+-- 
+2.55.0.1007.g17ff1f9808-goog
+
