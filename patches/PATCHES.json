@@ -688,6 +688,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Refactor LFI rewriter to use MCInstBuilder (#219890)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8953244331f5e19e3f040e69da4c0635fdc77a52.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633043
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Add _LIBCPP_NO_SANITIZE for std::__assume_aligned (#220296)"
         },
         "platforms": [
@@ -739,6 +753,20 @@
         "version_range": {
             "from": 614150,
             "until": 634225
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Do not flush deferred LR guards on temporary labels (#224776)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3ff9abe8930acc7b4c4e2387c1357ca6f2d15c00.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 635856
         }
     },
     {
