@@ -562,6 +562,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [llvm-profgen] Preserve zero-valued first PT_LOAD address (#212258)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/df81098826f9b45df3cbe2f29af3c44d69d5851a.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 628694
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] lldb: Linux: clean up dead and mis-ordered includes (#217435)"
         },
         "platforms": [
@@ -697,6 +711,20 @@
         "version_range": {
             "from": 614150,
             "until": 633045
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [llvm-profgen] Unify base address derivation to support arbitrary OS page sizes (#217887)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/957aee8a62e3b9b06d413322fa8fbbe36a3965e9.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633144
         }
     },
     {
