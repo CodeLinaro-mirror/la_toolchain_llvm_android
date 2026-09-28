@@ -1,0 +1,107 @@
+From df81098826f9b45df3cbe2f29af3c44d69d5851a Mon Sep 17 00:00:00 2001
+From: Sergey Shcherbinin <sscherbinin@nvidia.com>
+Date: Fri, 31 Jul 2026 12:27:55 +0400
+Subject: [PATCH] [llvm-profgen] Preserve zero-valued first PT_LOAD address
+ (#212258)
+
+FirstLoadableAddress was initialized with if (!FirstLoadableAddress), so
+a valid first PT_LOAD at vaddr 0 was treated as unset and overwritten by
+a later segment. Track whether the first loadable segment has been seen
+instead.
+
+Assisted by GPT-5
+---
+ .../X86/first-loadable-address.test           | 59 +++++++++++++++++++
+ llvm/tools/llvm-profgen/ProfiledBinary.cpp    |  5 +-
+ 2 files changed, 63 insertions(+), 1 deletion(-)
+ create mode 100644 llvm/test/tools/llvm-profgen/X86/first-loadable-address.test
+
+diff --git a/llvm/test/tools/llvm-profgen/X86/first-loadable-address.test b/llvm/test/tools/llvm-profgen/X86/first-loadable-address.test
+new file mode 100644
+index 000000000000..50f9f5dcc2f6
+--- /dev/null
++++ b/llvm/test/tools/llvm-profgen/X86/first-loadable-address.test
+@@ -0,0 +1,59 @@
++# RUN: split-file %s %t
++# RUN: yaml2obj %t/binary.yaml -o %t/first-loadable-address.exe
++# RUN: llvm-profgen --binary=%t/first-loadable-address.exe \
++# RUN:   --perfscript=%t/perfscript --skip-symbolization --format=text \
++# RUN:   --use-offset=1 --use-first-loadable-segment-as-base=1 \
++# RUN:   --output=%t/profile
++# RUN: FileCheck %s --input-file=%t/profile
++
++## The first PT_LOAD has a valid zero virtual address. Ensure it is not treated
++## as an unset value and overwritten by the following executable PT_LOAD.
++## With the default 4K page size, the text segment file offset is 0x1000, so the
++## mmap event uses that offset rather than zero.
++# CHECK:      0
++# CHECK-NEXT: 1
++# CHECK-NEXT: 11008->11000:1
++
++#--- binary.yaml
++--- !ELF
++FileHeader:
++  Class:   ELFCLASS64
++  Data:    ELFDATA2LSB
++  Type:    ET_DYN
++  Machine: EM_X86_64
++  Entry:   0x0000000000011000
++Sections:
++  - Name:         .text
++    Type:         SHT_PROGBITS
++    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
++    Address:      0x0000000000011000
++    Offset:       0x0000000000001000
++    AddressAlign: 0x1
++    ## 11000: nop*8
++    ## 11008: ret
++    Content:      9090909090909090C3
++ProgramHeaders:
++  - Type:     PT_LOAD
++    Flags:    [ PF_R ]
++    Offset:   0x0
++    VAddr:    0x0
++    FileSize: 0x1000
++    MemSize:  0x1000
++    Align:    0x1000
++  - Type:     PT_LOAD
++    Flags:    [ PF_X, PF_R ]
++    VAddr:    0x0000000000011000
++    Align:    0x1000
++    FirstSec: .text
++    LastSec:  .text
++Symbols:
++  - Name:    foo
++    Type:    STT_FUNC
++    Section: .text
++    Binding: STB_GLOBAL
++    Value:   0x0000000000011000
++    Size:    0x9
++
++#--- perfscript
++PERF_RECORD_MMAP2 1/1: [0x700000001000(0x1000) @ 0x1000 00:00 0 0]: r-xp /tmp/first-loadable-address.exe
++700000001000 0x700000001008/0x700000001000/P/-/-/0
+diff --git a/llvm/tools/llvm-profgen/ProfiledBinary.cpp b/llvm/tools/llvm-profgen/ProfiledBinary.cpp
+index 08fd6917c9f3..2d147d0af735 100644
+--- a/llvm/tools/llvm-profgen/ProfiledBinary.cpp
++++ b/llvm/tools/llvm-profgen/ProfiledBinary.cpp
+@@ -367,12 +367,15 @@ void ProfiledBinary::setPreferredTextSegmentAddresses(const ELFFile<ELFT> &Obj,
+   // 4K page now. Note that we don't use EXEC_PAGESIZE from <linux/param.h>
+   // because we may build the tools on non-linux.
+   uint64_t PageSize = 0x1000;
++  bool SeenFirstLoadableSegment = false;
+   for (const typename ELFT::Phdr &Phdr : PhdrRange) {
+     if (Phdr.p_type == ELF::PT_INTERP)
+       HasInterp = true;
+     if (Phdr.p_type == ELF::PT_LOAD) {
+-      if (!FirstLoadableAddress)
++      if (!SeenFirstLoadableSegment) {
+         FirstLoadableAddress = Phdr.p_vaddr & ~(PageSize - 1U);
++        SeenFirstLoadableSegment = true;
++      }
+       if (Phdr.p_flags & ELF::PF_X) {
+         // Segments will always be loaded at a page boundary.
+         PreferredTextSegmentAddresses.push_back(Phdr.p_vaddr &
+-- 
+2.56.0.rc1.315.gc6ed9934b7-goog
+
