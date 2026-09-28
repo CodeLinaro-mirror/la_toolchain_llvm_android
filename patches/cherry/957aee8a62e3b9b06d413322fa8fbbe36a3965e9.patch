@@ -1,0 +1,253 @@
+From 957aee8a62e3b9b06d413322fa8fbbe36a3965e9 Mon Sep 17 00:00:00 2001
+From: Jinjie Huang <huangjinjie@bytedance.com>
+Date: Wed, 2 Sep 2026 14:02:38 +0800
+Subject: [PATCH] [llvm-profgen] Unify base address derivation to support
+ arbitrary OS page sizes (#217887)
+
+`setPreferredTextSegmentAddresses()` uses a 4 KiB alignment when
+calculating text segment offsets. On systems with larger runtime pages
+(e.g., 64 KiB on AArch64), the kernel rounds down the mmap file offset
+to the page boundary. Consequently, perf may report an executable mmap
+starting before the recorded text segment offset. This caused
+llvm-profgen to fail with "File offset not found".
+
+This patch simplifies and unifies the logic by deriving the exact base
+addresses:
+- Static Preferred Base: Derived via `Phdr.p_vaddr - Phdr.p_offset `for
+the first executable segment, removing the fragile 4KiB assumption.
+- Runtime Base: Derived using `Event.Address - Event.Offset`. Since the
+OS dynamically reflects the page-aligned down offset in the perf mmap
+event, subtracting it from the aligned virtual address automatically
+recovers the absolute true image base.
+---
+ .../AArch64/load-segment-64k-align.test       | 70 +++++++++++++++++++
+ llvm/tools/llvm-profgen/PerfReader.cpp        | 42 +++++++----
+ llvm/tools/llvm-profgen/ProfiledBinary.cpp    | 15 ++--
+ llvm/tools/llvm-profgen/ProfiledBinary.h      | 14 ++--
+ 4 files changed, 112 insertions(+), 29 deletions(-)
+ create mode 100644 llvm/test/tools/llvm-profgen/AArch64/load-segment-64k-align.test
+
+diff --git a/llvm/test/tools/llvm-profgen/AArch64/load-segment-64k-align.test b/llvm/test/tools/llvm-profgen/AArch64/load-segment-64k-align.test
+new file mode 100644
+index 000000000000..f126ca0ce19b
+--- /dev/null
++++ b/llvm/test/tools/llvm-profgen/AArch64/load-segment-64k-align.test
+@@ -0,0 +1,70 @@
++# REQUIRES: aarch64-registered-target
++
++# RUN: split-file %s %t
++# RUN: yaml2obj %t/binary.yaml -o %t/load-segment-64k-align.exe
++# RUN: llvm-profgen --binary=%t/load-segment-64k-align.exe \
++# RUN:   --perfscript=%t/perfscript --skip-symbolization --format=text \
++# RUN:   --use-offset=0 --output=%t/profile
++# RUN: FileCheck %s --input-file=%t/profile
++# RUN: llvm-profgen --binary=%t/load-segment-64k-align.exe \
++# RUN:   --perfscript=%t/perfscript --skip-symbolization --format=text \
++# RUN:   --use-offset=1 --output=%t/offset-profile
++# RUN: FileCheck %s --check-prefix=OFFSET --input-file=%t/offset-profile
++
++## Test a 0x10000-aligned runtime mmap containing a PT_LOAD that begins at file
++## offset 0x13de0. Verify that llvm-profgen derives the runtime base address from
++## the mmap address and offset without assuming a fixed page size.
++# CHECK:      0
++# CHECK-NEXT: 1
++# CHECK-NEXT: 143de4->143de0:1
++# OFFSET:      0
++# OFFSET-NEXT: 1
++# OFFSET-NEXT: 13de4->13de0:1
++
++#--- binary.yaml
++--- !ELF
++FileHeader:
++  Class:   ELFCLASS64
++  Data:    ELFDATA2LSB
++  Type:    ET_DYN
++  Machine: EM_AARCH64
++  Entry:   0x0000000000143de0
++Sections:
++  - Name:         .text
++    Type:         SHT_PROGBITS
++    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
++    Address:      0x0000000000143de0
++    Offset:       0x0000000000013de0
++    AddressAlign: 0x4
++    ## 143de0: nop
++    ## 143de4: ret
++    Content:      1F2003D5C0035FD6
++ProgramHeaders:
++  - Type:     PT_LOAD
++    Flags:    [ PF_R ]
++    Offset:   0x0
++    VAddr:    0x0
++    FileSize: 0x13dd8
++    MemSize:  0x13dd8
++    Align:    0x10000
++  - Type:     PT_LOAD
++    Flags:    [ PF_X, PF_R ]
++    Offset:   0x13de0
++    VAddr:    0x143de0
++    FileSize: 0x8
++    MemSize:  0x8
++    Align:    0x10000
++    FirstSec: .text
++    LastSec:  .text
++Symbols:
++  - Name:    foo
++    Type:    STT_FUNC
++    Section: .text
++    Binding: STB_GLOBAL
++    Value:   0x143de0
++    Size:    0x8
++
++#--- perfscript
++PERF_RECORD_MMAP2 1/1: [0x700000000000(0x10000) @ 0x10000 00:00 0 0]: r-xp /tmp/load-segment-64k-align.exe
++700000003de0 0x700000003de4/0x700000003de0/P/-/-/0
++
+diff --git a/llvm/tools/llvm-profgen/PerfReader.cpp b/llvm/tools/llvm-profgen/PerfReader.cpp
+index c4fc4fb25166..5852e2a9eba0 100644
+--- a/llvm/tools/llvm-profgen/PerfReader.cpp
++++ b/llvm/tools/llvm-profgen/PerfReader.cpp
+@@ -594,30 +594,46 @@ void PerfScriptReader::updateBinaryAddress(const MMapEvent &Event) {
+   if (PIDFilter && Event.PID != *PIDFilter)
+     return;
+ 
+-  // Drop the event if its image is loaded at the same address
+-  if (Event.Address == Binary->getBaseAddress()) {
+-    Binary->setIsLoadedByMMap(true);
+-    return;
+-  }
++  // Check if the FileOffset falls within the [Event.Offset, Event.Offset +
++  // Event.Size) range.
++  auto MMapContainsFileOffset = [&](uint64_t FileOffset) {
++    return Event.Offset <= FileOffset &&
++           (FileOffset - Event.Offset) < Event.Size;
++  };
+ 
+-  if (IsKernel || Event.Offset == Binary->getTextSegmentOffset()) {
++  if (IsKernel || MMapContainsFileOffset(Binary->getTextSegmentOffset())) {
++    // For ELF, subtract the file offset to get the runtime address
++    // corresponding to file offset zero. Kernel mmap events report the text
++    // address as Event.Offset, so use the text segment offset from the ELF
++    // instead.
++    const uint64_t RuntimeBaseAddress =
++        Binary->isCOFF()
++            ? Event.Address
++            : Event.Address -
++                  (IsKernel ? Binary->getTextSegmentOffset() : Event.Offset);
+     // A binary image could be unloaded and then reloaded at different
+     // place, so update binary load address.
+     // Only update for the first executable segment and assume all other
+     // segments are loaded at consecutive memory addresses, which is the case on
+     // X64.
+-    Binary->setBaseAddress(Event.Address);
++    Binary->setBaseAddress(RuntimeBaseAddress);
+     Binary->setIsLoadedByMMap(true);
+   } else {
+     // Verify segments are loaded consecutively.
+     const auto &Offsets = Binary->getTextSegmentOffsets();
++    auto IsContiguousMMapForSegment = [&](auto SegmentIt, uint64_t FileOffset,
++                                          uint64_t RuntimeAddress) {
++      auto I = std::distance(Offsets.begin(), SegmentIt);
++      const auto &PreferredAddrs = Binary->getPreferredTextSegmentAddresses();
++      return PreferredAddrs[I] + (FileOffset - *SegmentIt) ==
++             Binary->canonicalizeVirtualAddress(RuntimeAddress);
++    };
++
+     auto It = llvm::lower_bound(Offsets, Event.Offset);
+-    if (It != Offsets.end() && *It == Event.Offset) {
++    if (It != Offsets.end() && MMapContainsFileOffset(*It)) {
+       // The event is for loading a separate executable segment.
+-      auto I = std::distance(Offsets.begin(), It);
+-      const auto &PreferredAddrs = Binary->getPreferredTextSegmentAddresses();
+-      if (PreferredAddrs[I] - Binary->getPreferredBaseAddress() !=
+-          Event.Address - Binary->getBaseAddress())
++      uint64_t RuntimeSegmentAddress = Event.Address + (*It - Event.Offset);
++      if (!IsContiguousMMapForSegment(It, *It, RuntimeSegmentAddress))
+         exitWithError("Executable segments not loaded consecutively");
+     } else {
+       if (It == Offsets.begin())
+@@ -627,7 +643,7 @@ void PerfScriptReader::updateBinaryAddress(const MMapEvent &Event) {
+         // via multiple mmap calls with consecutive memory addresses.
+         --It;
+         assert(*It < Event.Offset);
+-        if (Event.Offset - *It != Event.Address - Binary->getBaseAddress())
++        if (!IsContiguousMMapForSegment(It, Event.Offset, Event.Address))
+           exitWithError("Segment not loaded by consecutive mmaps");
+       }
+     }
+diff --git a/llvm/tools/llvm-profgen/ProfiledBinary.cpp b/llvm/tools/llvm-profgen/ProfiledBinary.cpp
+index 2d147d0af735..a541e842f80c 100644
+--- a/llvm/tools/llvm-profgen/ProfiledBinary.cpp
++++ b/llvm/tools/llvm-profgen/ProfiledBinary.cpp
+@@ -362,25 +362,20 @@ template <class ELFT>
+ void ProfiledBinary::setPreferredTextSegmentAddresses(const ELFFile<ELFT> &Obj,
+                                                       StringRef FileName) {
+   const auto &PhdrRange = unwrapOrError(Obj.program_headers(), FileName);
+-  // FIXME: This should be the page size of the system running profiling.
+-  // However such info isn't available at post-processing time, assuming
+-  // 4K page now. Note that we don't use EXEC_PAGESIZE from <linux/param.h>
+-  // because we may build the tools on non-linux.
+-  uint64_t PageSize = 0x1000;
+   bool SeenFirstLoadableSegment = false;
+   for (const typename ELFT::Phdr &Phdr : PhdrRange) {
+     if (Phdr.p_type == ELF::PT_INTERP)
+       HasInterp = true;
+     if (Phdr.p_type == ELF::PT_LOAD) {
+       if (!SeenFirstLoadableSegment) {
+-        FirstLoadableAddress = Phdr.p_vaddr & ~(PageSize - 1U);
++        // Derive the preferred address corresponding to file offset zero
++        // without assuming a page size.
++        FirstLoadableAddress = Phdr.p_vaddr - Phdr.p_offset;
+         SeenFirstLoadableSegment = true;
+       }
+       if (Phdr.p_flags & ELF::PF_X) {
+-        // Segments will always be loaded at a page boundary.
+-        PreferredTextSegmentAddresses.push_back(Phdr.p_vaddr &
+-                                                ~(PageSize - 1U));
+-        TextSegmentOffsets.push_back(Phdr.p_offset & ~(PageSize - 1U));
++        PreferredTextSegmentAddresses.push_back(Phdr.p_vaddr);
++        TextSegmentOffsets.push_back(Phdr.p_offset);
+       } else {
+         PhdrInfo Info;
+         Info.FileOffset = Phdr.p_offset;
+diff --git a/llvm/tools/llvm-profgen/ProfiledBinary.h b/llvm/tools/llvm-profgen/ProfiledBinary.h
+index d1dea857f304..0fc7202cd06f 100644
+--- a/llvm/tools/llvm-profgen/ProfiledBinary.h
++++ b/llvm/tools/llvm-profgen/ProfiledBinary.h
+@@ -216,9 +216,9 @@ class ProfiledBinary {
+   StringRef SymbolizerPath;
+   // Options used to configure the symbolizer
+   symbolize::LLVMSymbolizer::Options SymbolizerOpts;
+-  // The runtime base address that the first executable segment is loaded at.
++  // The runtime base address used to canonicalize sampled addresses.
+   uint64_t BaseAddress = 0;
+-  // The runtime base address that the first loadabe segment is loaded at.
++  // The preferred base address derived from the first loadable segment.
+   uint64_t FirstLoadableAddress = 0;
+   // The preferred load address of each executable segment.
+   std::vector<uint64_t> PreferredTextSegmentAddresses;
+@@ -453,15 +453,17 @@ public:
+   // Return the build ID used for filtering perfscript addresses.
+   StringRef getFilterBuildID() const { return FilterBuildID; }
+ 
+-  // Canonicalize to use preferred load address as base address.
++  // Translate a runtime address to its preferred virtual address.
+   uint64_t canonicalizeVirtualAddress(uint64_t Address) {
+     return Address - BaseAddress + getPreferredBaseAddress();
+   }
+-  // Return the preferred load address for the first executable segment.
++  // Return the preferred base used to canonicalize sampled addresses.
+   uint64_t getPreferredBaseAddress() const {
+-    return PreferredTextSegmentAddresses[0];
++    if (IsCOFF)
++      return PreferredTextSegmentAddresses[0];
++    return PreferredTextSegmentAddresses[0] - TextSegmentOffsets[0];
+   }
+-  // Return the preferred load address for the first loadable segment.
++  // Return the preferred base address derived from the first loadable segment.
+   uint64_t getFirstLoadableAddress() const { return FirstLoadableAddress; }
+   // Return the file offset for the first executable segment.
+   uint64_t getTextSegmentOffset() const { return TextSegmentOffsets[0]; }
+-- 
+2.56.0.rc1.315.gc6ed9934b7-goog
+
