@@ -814,6 +814,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [CodeGen] Use SmallSetVector for getRegAllocationHints (#224472)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/9428f1b09f54d85f248b00d4e8aadb6cf0ad8098.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 638202
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [libc++] Fix size_t overflow in make_shared<T[]> and allocate_shared<T[]> (#223735)"
         },
         "platforms": [
