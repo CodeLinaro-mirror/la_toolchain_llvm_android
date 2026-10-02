@@ -90,12 +90,16 @@ class Stage1Builder(base_builders.LLVMBuilder):
             ldflags.append('-static-libstdc++')
             # Use static-libgcc to fix relocation errors for runtime CPU detection in Lexer.cpp.
             ldflags.append('-static-libgcc')
+        if self._config.target_os.is_linux:
+            # This can't go in LinuxConfig or it will also be used for building libunwind itself.
+            ldflags.append('-unwindlib=libunwind')
 
         return ldflags
 
     def ldflags_for_runtime(self, _config: configs.Config) -> List[str]:
-        # Stage1 doesn't cross-compile runtimes, so just use the same ldflags for LLVM and runtimes.
-        return self.ldflags
+        # Stage1 doesn't cross-compile runtimes, so just use the same ldflags for LLVM and runtimes,
+        # except for the unwindlib flag that can't be used when compiling libunwind.
+        return [f for f in self.ldflags if f != '-unwindlib=libunwind']
 
     @property
     def cmake_defines(self) -> Dict[str, str]:
@@ -189,6 +193,8 @@ class Stage2Builder(base_builders.LLVMBuilder):
             ldflags.append(f'-Wl,-rpath,\\$ORIGIN:\\$ORIGIN/../lib/{self._config.llvm_triple}')
             # Use static-libgcc to fix relocation errors for runtime CPU detection in Lexer.cpp.
             ldflags.append('-static-libgcc')
+            # This can't go in LinuxConfig or it will also be used for building libunwind itself.
+            ldflags.append('-unwindlib=libunwind')
         # '$ORIGIN/../lib' is added by llvm's CMake rules.
         if self.bolt_optimize or self.bolt_instrument:
             ldflags.append('-Wl,-q')

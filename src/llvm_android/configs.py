@@ -293,16 +293,16 @@ class _GccConfig(_BaseConfig):  # pylint: disable=abstract-method
         return [self.gcc_lib_dir, self.gcc_builtin_dir]
 
 
-class LinuxConfig(_GccConfig):
+class LinuxConfig(_BaseConfig):
     """Configuration for Linux targets."""
 
     target_os: hosts.Host = hosts.Host.Linux
     sysroot: Optional[Path] = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
-    gcc_root: Path = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8'
-    gcc_triple: str = 'x86_64-linux'
-    gcc_ver: str = '4.8.3'
     is_cross_compiling: bool = False
     is_musl: bool = False
+
+    def __init__(self, is_32_bit: bool = False):
+        self.is_32_bit = is_32_bit
 
     @property
     def llvm_triple(self) -> str:
@@ -317,12 +317,35 @@ class LinuxConfig(_GccConfig):
             cflags.append('-march=x86-64-v2')
         return cflags
 
+    @property
+    def cxxflags(self) -> List[str]:
+        cxxflags = super().cxxflags + [
+            # -stdlib=libc++ prevents the "Check for working CXX compiler"
+            # step from failing when it can't find libstdc++.
+            # -Wno-unused-command-line-argument is necessary for commands that
+            # use -Werror -nostdinc++.
+            '-stdlib=libc++',
+            '-Wno-unused-command-line-argument',
+        ]
+
+        return cxxflags
 
     @property
     def ldflags(self) -> List[str]:
         return super().ldflags + [
+            '-rtlib=compiler-rt',
             '-Wl,--hash-style=both',
         ]
+
+    @property
+    def cmake_defines(self) -> Dict[str, str]:
+        defines = super().cmake_defines
+        defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
+        defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
+        defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
+        defines['COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'TRUE'
+
+        return defines
 
 
 class LinuxMuslConfig(LinuxConfig):
@@ -363,22 +386,8 @@ class LinuxMuslConfig(LinuxConfig):
         return cflags
 
     @property
-    def cxxflags(self) -> List[str]:
-        cxxflags = super().cxxflags + [
-            # -stdlib=libc++ prevents the "Check for working CXX compiler"
-            # step from failing when it can't find libstdc++.
-            # -Wno-unused-command-line-argument is necessary for commands that
-            # use -Werror -nostdinc++.
-            '-stdlib=libc++',
-            '-Wno-unused-command-line-argument',
-        ]
-
-        return cxxflags
-
-    @property
     def ldflags(self) -> List[str]:
         return super().ldflags + [
-            '-rtlib=compiler-rt',
             '-Wl,-z,stack-size=2097152',
         ]
 
@@ -398,25 +407,9 @@ class LinuxMuslConfig(LinuxConfig):
         return f'-{self.llvm_triple}'
 
     @property
-    def lib_dirs(self) -> List[Path]:
-        """Override gcc libdirs."""
-        return []
-
-    @property
-    def bin_dirs(self) -> List[Path]:
-        """Override gcc bindirs."""
-        return []
-
-    @property
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
-        defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
         defines['LIBCXX_HAS_MUSL_LIBC'] = 'TRUE'
-        defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
-        defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
-        # clang generates call to builtin functions when building
-        # compiler-rt for musl.  Allow use of the builtins library.
-        defines['COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'TRUE'
 
         # The musl sysroots contain empty libdl.a, libpthread.a and librt.a to
         # satisfy the parts of the LLVM build that hardcode -lpthread, etc.,
