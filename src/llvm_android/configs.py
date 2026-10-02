@@ -311,6 +311,8 @@ class LinuxConfig(_BaseConfig):
 
     @property
     def sysroot(self) -> Path:
+        if self.target_arch == hosts.Arch.ARM or self.target_arch == hosts.Arch.AARCH64:
+            return paths.BUILD_TOOLS_DIR / 'sysroots' / self.llvm_triple
         return paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
 
     @property
@@ -326,6 +328,8 @@ class LinuxConfig(_BaseConfig):
             cflags.append('-march=i686')
         elif self.target_arch == hosts.Arch.X86_64:
             cflags.append('-march=x86-64-v2')
+        elif self.target_arch == hosts.Arch.ARM:
+            cflags.append('-march=armv7-a')
         return cflags
 
     @property
@@ -381,8 +385,6 @@ class LinuxMuslConfig(LinuxConfig):
                 # libedit fails with error: wchar_t must store ISO 10646 characters
                 '-include stdc-predef.h',
         ]
-        if self.target_arch is hosts.Arch.ARM:
-            cflags.append('-march=armv7-a')
 
         return cflags
 
