@@ -786,6 +786,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [ld64.lld, llvm-otool] Minimal arm64e.x1 support (#222721)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/b8007a8e4020b8bca2b12e941660e10bf5bf6716.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 634544
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [LFI][AArch64] Do not flush deferred LR guards on temporary labels (#224776)"
         },
         "platforms": [
