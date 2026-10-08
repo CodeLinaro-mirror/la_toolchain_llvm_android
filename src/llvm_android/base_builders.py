@@ -876,6 +876,7 @@ class LLVMBuilder(LLVMBaseBuilder):
                     'LIBCXXABI_USE_LLVM_UNWINDER',
                     'LIBCXXABI_ENABLE_STATIC_UNWINDER',
                     'LIBCXX_ASSERTION_HANDLER_FILE',
+                    'COMPILER_RT_USE_BUILTINS_LIBRARY',
             ]
 
             for _config in runtime_configs:
