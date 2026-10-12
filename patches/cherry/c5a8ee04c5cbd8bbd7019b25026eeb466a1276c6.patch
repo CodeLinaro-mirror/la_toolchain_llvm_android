@@ -1,0 +1,32 @@
+From c5a8ee04c5cbd8bbd7019b25026eeb466a1276c6 Mon Sep 17 00:00:00 2001
+From: Sharjeel Khan <sharjeelkhan@google.com>
+Date: Mon, 12 Oct 2026 18:53:53 -0400
+Subject: [PATCH] [compiler-rt][ARM] Mark optimized FP add/sub asm as
+ superseding aeabi_[df]rsub.c (#230739)
+
+#179921 (`arm/adddf3.S`) and #179929 (`arm/addsf3.S` and
+`arm/thumb1/addsf3fast.S`) introduced optimized assembly implementations
+for floating-point addition, subtraction, and reversed subtraction
+(`__aeabi_drsub` and `__aeabi_frsub`), but omitted `arm/aeabi_drsub.c`
+and `arm/aeabi_frsub.c` from `SUPERSEDES` (and `PROVIDES`), causing
+duplicate symbol errors during lld linking in Android.
+
+Assisted-by: Gemini
+---
+ compiler-rt/lib/builtins/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/compiler-rt/lib/builtins/CMakeLists.txt b/compiler-rt/lib/builtins/CMakeLists.txt
+index 503a9aa3ff4e..c83488bd3ed5 100644
+--- a/compiler-rt/lib/builtins/CMakeLists.txt
++++ b/compiler-rt/lib/builtins/CMakeLists.txt
+@@ -516,7 +516,7 @@ set(thumb1_base_SOURCES
+   arm/addsf3.S
+   ${GENERIC_SOURCES}
+ )
+-set_special_properties(arm/adddf3.S SUPERSEDES subdf3.c PROVIDES subdf3)
++set_special_properties(arm/adddf3.S SUPERSEDES subdf3.c arm/aeabi_drsub.c PROVIDES subdf3 aeabi_drsub)
+ 
+ if(COMPILER_RT_ARM_OPTIMIZED_FP)
+   set(thumb1_base_SOURCES
+-- 
