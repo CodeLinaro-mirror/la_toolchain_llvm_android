@@ -828,6 +828,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [compiler-rt][ARM] Mark optimized FP add/sub asm as superseding aeabi_[df]rsub.c (#230739)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c5a8ee04c5cbd8bbd7019b25026eeb466a1276c6.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 640057
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
