@@ -19,6 +19,8 @@ for f in CleanSpec.mk buildspec.mk.default core envsetup.sh target tools; do
 done
 
 mkdir dist
+# TODO(b/572944989): Disable CIPD auth check in Kokoro CI until network/auth is supported.
+export SOONG_CIPD_AUTH_CONFIG=disable
 DIST_DIR=dist \
 OUT_DIR=out \
 prebuilts/python/linux-x86/bin/python3 \
