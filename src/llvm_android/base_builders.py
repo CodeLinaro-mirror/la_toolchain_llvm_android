@@ -857,7 +857,7 @@ class LLVMBuilder(LLVMBaseBuilder):
                 if not self._config.is_musl:
                     runtime_configs += [
                         self._config,
-                        configs.LinuxConfig(is_32_bit=True),
+                        configs.LinuxConfig(hosts.Arch.I386),
                     ]
             else:
                 runtime_configs = [self._config]

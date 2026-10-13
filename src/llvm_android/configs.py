@@ -297,21 +297,32 @@ class LinuxConfig(_BaseConfig):
     """Configuration for Linux targets."""
 
     target_os: hosts.Host = hosts.Host.Linux
-    sysroot: Optional[Path] = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
-    is_cross_compiling: bool = False
+    target_arch: hosts.Arch
+    is_cross_compiling: bool
     is_musl: bool = False
 
-    def __init__(self, is_32_bit: bool = False):
-        self.is_32_bit = is_32_bit
+    def __init__(self, arch: hosts.Arch = hosts.Arch.X86_64, is_cross_compiling: bool = False):
+        self.target_arch = arch
+        self.is_cross_compiling = is_cross_compiling
+
+    @property
+    def is_32_bit(self):
+        return self.target_arch in [hosts.Arch.ARM, hosts.Arch.I386]
+
+    @property
+    def sysroot(self) -> Path:
+        return paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
 
     @property
     def llvm_triple(self) -> str:
-        return 'i386-unknown-linux-gnu' if self.is_32_bit else 'x86_64-unknown-linux-gnu'
+        suffix = 'eabihf' if self.target_arch is hosts.Arch.ARM else ''
+        llvm_arch = 'i386' if self.target_arch is hosts.Arch.I386 else self.target_arch.llvm_arch
+        return llvm_arch + '-unknown-linux-gnu' + suffix
 
     @property
     def cflags(self) -> List[str]:
         cflags = super().cflags
-        if self.is_32_bit and not self.is_musl:
+        if self.target_arch == hosts.Arch.I386:
             cflags.append('-march=i686')
         elif self.target_arch == hosts.Arch.X86_64:
             cflags.append('-march=x86-64-v2')
@@ -355,20 +366,10 @@ class LinuxMuslConfig(LinuxConfig):
     is_cross_compiling: bool
     is_musl: bool = True
 
-    def __init__(self, arch: hosts.Arch = hosts.Arch.X86_64, is_cross_compiling: bool = True):
-        self.triple = arch.llvm_arch + '-unknown-linux-musl'
-        if arch is hosts.Arch.ARM:
-            self.triple += 'eabihf'
-        self.target_arch = arch
-        self.is_cross_compiling = is_cross_compiling
-
-    @property
-    def is_32_bit(self):
-        return self.target_arch in [hosts.Arch.ARM, hosts.Arch.I386]
-
     @property
     def llvm_triple(self) -> str:
-        return self.triple
+        suffix = 'eabihf' if self.target_arch is hosts.Arch.ARM else ''
+        return self.target_arch.llvm_arch + '-unknown-linux-musl' + suffix
 
     @property
     def cflags(self) -> List[str]:
@@ -399,7 +400,7 @@ class LinuxMuslConfig(LinuxConfig):
 
     @property
     def sysroot(self) -> Path:
-        return paths.BUILD_TOOLS_DIR / 'sysroots' / self.triple
+        return paths.BUILD_TOOLS_DIR / 'sysroots' / self.llvm_triple
 
     @property
     def output_suffix(self) -> str:
@@ -739,7 +740,7 @@ def host_32bit_config(musl: bool=False) -> Config:
     if hosts.build_host().is_windows:
         return MinGWConfig(is_32_bit=True)
     else:
-        return LinuxConfig(is_32_bit=True)
+        return LinuxConfig(hosts.Arch.I386)
 
 
 def android_configs(platform: bool=True,
