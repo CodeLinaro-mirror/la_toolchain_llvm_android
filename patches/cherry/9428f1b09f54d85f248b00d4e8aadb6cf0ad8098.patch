@@ -59,6 +59,8 @@ index 46787736073771..b18aaa7b05a6bf 100644
                          const VirtRegMap *VRM = nullptr,
                          const LiveRegMatrix *Matrix = nullptr) const;
 diff --git a/llvm/lib/CodeGen/AllocationOrder.cpp b/llvm/lib/CodeGen/AllocationOrder.cpp
+--- a/llvm/lib/CodeGen/AllocationOrder.cpp
++++ b/llvm/lib/CodeGen/AllocationOrder.cpp
 @@ -32,7 +32,7 @@
    const MachineFunction &MF = VRM.getMachineFunction();
    const TargetRegisterInfo *TRI = &VRM.getTargetRegInfo();
@@ -125,6 +127,8 @@ index 79b01d27d91a5b..fb86ca377e89e6 100644
    return false;
  }
 diff --git a/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp b/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
+--- a/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
++++ b/llvm/lib/Target/AArch64/AArch64RegisterInfo.cpp
 @@ -1137,7 +1137,7 @@
  //   begins with $z24 (i.e. $z24_z25_z26_z27).
  bool AArch64RegisterInfo::getRegAllocationHints(
@@ -552,6 +556,8 @@ index 399c6ab8637055..5818675cc68294 100644
                               const LiveRegMatrix *Matrix) const override;
  
 diff --git a/llvm/unittests/Target/AArch64/AArch64RegisterInfoTest.cpp b/llvm/unittests/Target/AArch64/AArch64RegisterInfoTest.cpp
+--- a/llvm/unittests/Target/AArch64/AArch64RegisterInfoTest.cpp
++++ b/llvm/unittests/Target/AArch64/AArch64RegisterInfoTest.cpp
 @@ -2,6 +2,11 @@
  #include "AArch64InstrInfo.h"
  #include "AArch64Subtarget.h"
