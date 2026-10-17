@@ -1539,6 +1539,10 @@ class WindowsToolchainBuilder(base_builders.LLVMBuilder):
             defines['LLDB_PYTHON_RELATIVE_PATH'] = f'lib/python{paths._PYTHON_VER}/site-packages'
             defines['LLDB_PYTHON_EXE_RELATIVE_PATH'] = 'python3'
             defines['LLDB_PYTHON_EXT_SUFFIX'] = '.exe'
+            # On Windows, LLDB_ENABLE_PYTHON_LIMITED_API skips linking
+            # Python3_LIBRARIES and relies on MSVC #pragma comment(lib, "python3.lib"),
+            # which does not work with MinGW or python313.lib.
+            defines['LLDB_ENABLE_PYTHON_LIMITED_API'] = 'OFF'
         if self.lto:
             defines['LLVM_ENABLE_LTO'] = 'Thin'
         if self.profdata_file:
