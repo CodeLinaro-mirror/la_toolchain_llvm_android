@@ -1,0 +1,155 @@
+From fa65146842687ef1808fb6fcb1aae66f8bf49216 Mon Sep 17 00:00:00 2001
+From: Kazu Hirata <kazu@google.com>
+Date: Fri, 4 Sep 2026 00:24:11 -0700
+Subject: [PATCH] [Transforms][Utils] Strip unnamed_addr on indirect call
+ promotion (#221121)
+
+This patch strips unnamed_addr from the target symbol and vtable when
+call promotion introduces an equality comparison.
+
+When promoting an indirect call site, ICP introduces an equality check
+comparing the called value against the target:
+
+  if (fp == &callee)
+    callee();
+  else
+    fp();
+
+This address comparison makes the callee's address significant.  If the
+callee symbol has unnamed_addr, AsmPrinter skips emitting it into the
+.llvm_addrsig table.  Consequently, the linker (under -icf=safe)
+considers the symbol safe to merge with another identical function.
+
+This can happen in practice with AutoFDO if an indirect call site is
+profiled against an unrelated function whose machine code was folded by
+ICF in the profiled binary.  ICP then promotes the indirect call against
+that wrong symbol.  If the linker folds the symbols again, the equality
+check evaluates to true at runtime, directing execution into the wrong
+branch.
+
+By stripping unnamed_addr from the callee and vtable address points
+during promotion, the symbols are recorded in the .llvm_addrsig table
+and
+kept unique by the linker, preventing safe ICF from merging them.
+
+Thanks to Arthur Eubanks for the idea of stripping unnamed_addr.
+
+Assisted-by: Antigravity
+---
+ .../Transforms/Utils/CallPromotionUtils.cpp   | 15 +++++++-
+ .../PGOProfile/icp_callee_unnamed_addr.ll     | 23 +++++++++++
+ .../PGOProfile/icp_vtable_cmp_unnamed_addr.ll | 38 +++++++++++++++++++
+ 3 files changed, 75 insertions(+), 1 deletion(-)
+ create mode 100644 llvm/test/Transforms/PGOProfile/icp_callee_unnamed_addr.ll
+ create mode 100644 llvm/test/Transforms/PGOProfile/icp_vtable_cmp_unnamed_addr.ll
+
+diff --git a/llvm/lib/Transforms/Utils/CallPromotionUtils.cpp b/llvm/lib/Transforms/Utils/CallPromotionUtils.cpp
+index 6912338ce5ff..a49f0c73ad3e 100644
+--- a/llvm/lib/Transforms/Utils/CallPromotionUtils.cpp
++++ b/llvm/lib/Transforms/Utils/CallPromotionUtils.cpp
+@@ -391,6 +391,12 @@ CallBase &llvm::versionCallSite(CallBase &CB, Value *Callee,
+     Callee = Builder.CreateBitCast(Callee, CB.getCalledOperand()->getType());
+   auto *Cond = Builder.CreateICmpEQ(CB.getCalledOperand(), Callee);
+ 
++  // The address comparison has made the callee's address significant.
++  // Strip unnamed_addr so the symbol is recorded as address-significant
++  // and kept unique by the linker.
++  if (auto *GV = dyn_cast<GlobalValue>(Callee->stripPointerCasts()))
++    GV->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
++
+   return versionCallSiteWithCond(CB, Cond, BranchWeights);
+ }
+ 
+@@ -667,8 +673,15 @@ CallBase &llvm::promoteCallWithVTableCmp(CallBase &CB, Instruction *VPtr,
+   assert(!AddressPoints.empty() && "Caller should guarantee");
+   IRBuilder<> Builder(&CB);
+   SmallVector<Value *, 2> ICmps;
+-  for (auto &AddressPoint : AddressPoints)
++  for (auto &AddressPoint : AddressPoints) {
+     ICmps.push_back(Builder.CreateICmpEQ(VPtr, AddressPoint));
++    // The address comparison has made the vtable address significant.
++    // Strip unnamed_addr so the vtable is recorded as address-significant
++    // and kept unique by the linker.
++    if (auto *GV =
++            dyn_cast<GlobalValue>(AddressPoint->stripInBoundsConstantOffsets()))
++      GV->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
++  }
+ 
+   // TODO: Perform tree height reduction if the number of ICmps is high.
+   Value *Cond = Builder.CreateOr(ICmps);
+diff --git a/llvm/test/Transforms/PGOProfile/icp_callee_unnamed_addr.ll b/llvm/test/Transforms/PGOProfile/icp_callee_unnamed_addr.ll
+new file mode 100644
+index 000000000000..54f02f079c4f
+--- /dev/null
++++ b/llvm/test/Transforms/PGOProfile/icp_callee_unnamed_addr.ll
+@@ -0,0 +1,23 @@
++; RUN: opt < %s -passes=pgo-icall-prom -icp-samplepgo -icp-allow-decls -S | FileCheck %s
++
++; Test that when indirect call promotion introduces an address comparison
++; against a symbol (e.g. WrongSymbol, attributed by AutoFDO due to ICF folding),
++; unnamed_addr is stripped from the callee symbol so that it is address-significant.
++
++; CHECK: declare void @WrongSymbol(){{$}}
++declare void @WrongSymbol() unnamed_addr
++
++; CHECK: declare void @RightSymbol() unnamed_addr
++declare void @RightSymbol() unnamed_addr
++
++; CHECK-LABEL: define void @caller(
++; CHECK:         %[[CMP:.*]] = icmp eq ptr %fp, @WrongSymbol
++; CHECK-NEXT:    br i1 %[[CMP]], label %[[THEN:.*]], label %[[ELSE:.*]]
++; CHECK:       [[THEN]]:
++; CHECK-NEXT:    call void @WrongSymbol()
++define void @caller(ptr %fp) {
++  call void %fp(), !prof !0
++  ret void
++}
++
++!0 = !{!"VP", i32 0, i64 1000, i64 6010974106627529467, i64 1000}
+diff --git a/llvm/test/Transforms/PGOProfile/icp_vtable_cmp_unnamed_addr.ll b/llvm/test/Transforms/PGOProfile/icp_vtable_cmp_unnamed_addr.ll
+new file mode 100644
+index 000000000000..fbf5ac6392d9
+--- /dev/null
++++ b/llvm/test/Transforms/PGOProfile/icp_vtable_cmp_unnamed_addr.ll
+@@ -0,0 +1,38 @@
++; RUN: opt < %s -passes=pgo-icall-prom -enable-vtable-profile-use -icp-samplepgo -S | FileCheck %s
++
++; Test that when vtable-based indirect call promotion introduces an address
++; comparison against a vtable address point, unnamed_addr is stripped from the
++; vtable so that it is address-significant.
++
++; CHECK: @Derived1 = constant [3 x ptr]
++@Derived1 = unnamed_addr constant [3 x ptr] [ptr null, ptr null, ptr @Derived1_bar], !type !1
++
++; CHECK: @Unrelated = unnamed_addr constant ptr null
++@Unrelated = unnamed_addr constant ptr null
++
++; CHECK-LABEL: define void @test(
++; CHECK:         %[[CMP:.*]] = icmp eq ptr %vtable, getelementptr inbounds (i8, ptr @Derived1, i32 8)
++; CHECK-NEXT:    br i1 %[[CMP]], label %[[THEN:.*]], label %[[ELSE:.*]]
++; CHECK:       [[THEN]]:
++; CHECK-NEXT:    call void @Derived1_bar()
++define void @test(ptr %d) {
++entry:
++  %vtable = load ptr, ptr %d, !prof !2
++  %0 = call i1 @llvm.type.test(ptr %vtable, metadata !"Base1")
++  call void @llvm.assume(i1 %0)
++  %vfn = getelementptr inbounds ptr, ptr %vtable, i64 1
++  %1 = load ptr, ptr %vfn
++  call void %1(), !prof !3
++  ret void
++}
++
++define void @Derived1_bar() {
++  ret void
++}
++
++declare i1 @llvm.type.test(ptr, metadata)
++declare void @llvm.assume(i1)
++
++!1 = !{i64 8, !"Base1"}
++!2 = !{!"VP", i32 2, i64 1600, i64 -4123858694673519054, i64 1600}
++!3 = !{!"VP", i32 0, i64 1600, i64 3827408714133779784, i64 1600}
+-- 
+2.56.0.385.gd3acb90ef8-goog
+
