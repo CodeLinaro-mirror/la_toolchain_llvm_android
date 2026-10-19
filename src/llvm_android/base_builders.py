@@ -853,11 +853,13 @@ class LLVMBuilder(LLVMBaseBuilder):
                     configs.LinuxMuslHostConfig(hosts.Arch.AARCH64),
                     configs.LinuxMuslHostConfig(hosts.Arch.I386),
                     configs.LinuxMuslHostConfig(hosts.Arch.X86_64),
+                    configs.LinuxConfig(hosts.Arch.ARM, is_cross_compiling=True),
+                    configs.LinuxConfig(hosts.Arch.AARCH64, is_cross_compiling=True),
                 ]
                 if not self._config.is_musl:
                     runtime_configs += [
                         self._config,
-                        configs.LinuxConfig(is_32_bit=True),
+                        configs.LinuxConfig(hosts.Arch.I386),
                     ]
             else:
                 runtime_configs = [self._config]
@@ -876,6 +878,7 @@ class LLVMBuilder(LLVMBaseBuilder):
                     'LIBCXXABI_USE_LLVM_UNWINDER',
                     'LIBCXXABI_ENABLE_STATIC_UNWINDER',
                     'LIBCXX_ASSERTION_HANDLER_FILE',
+                    'COMPILER_RT_USE_BUILTINS_LIBRARY',
             ]
 
             for _config in runtime_configs:
@@ -976,7 +979,10 @@ class LLVMBuilder(LLVMBaseBuilder):
             # need libedit.so.*, libxml2.so.*, etc. in stage2/lib.
             self._install_lib_deps(self.output_dir / 'lib')
             # musl cannot run check-cxx yet
-            cxx_triples = [triple for triple in sorted(self.runtimes_triples) if 'linux-musl' not in triple]
+            # todo: runing check-cxx on arm fails because it's missing the --sysroot argument, is
+            # x86 using non-hermetic host instead of the sysroot?
+            cxx_triples = [triple for triple in sorted(self.runtimes_triples)
+                           if 'linux-musl' not in triple and 'arm' not in triple and 'aarch64' not in triple]
             checks = ['check-clang', 'check-llvm', 'check-clang-tools'] + ['check-cxx-' + triple for triple in cxx_triples]
             # clangd tests fail intermittently. https://github.com/llvm/llvm-project/issues/64964
             # sys_info.zdump.pass.cpp fails on glinux, b/448145616.

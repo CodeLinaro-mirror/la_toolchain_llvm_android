@@ -27,7 +27,7 @@ import subprocess
 import sys
 from typing import Dict, List
 
-from llvm_android import constants, paths
+from llvm_android import constants, hosts, paths
 
 ORIG_ENV = dict(os.environ)
 
@@ -64,24 +64,38 @@ def check_output(cmd, *args, **kwargs):
     return subprocess_run(cmd, *args, **kwargs, check=True, stdout=subprocess.PIPE).stdout
 
 
+def _get_env_with_build_tools() -> Dict[str, str]:
+    """Returns a copy of os.environ with hermetic build-tools prepended to PATH."""
+    env = os.environ.copy()
+    build_tools_path = paths.PREBUILTS_DIR / 'build-tools' / 'path' / hosts.build_tag()
+    if build_tools_path.exists():
+        env['PATH'] = str(build_tools_path) + os.pathsep + env.get('PATH', '')
+    return env
+
+
+def _get_tar_env() -> Dict[str, str]:
+    """Returns an environment with hermetic build-tools and multithreaded xz for tar."""
+    env = _get_env_with_build_tools()
+    env["XZ_OPT"] = "-T0"
+    return env
+
+
 def create_tarball(source_dir, input, output):
-    xz_env = os.environ.copy()
-    xz_env["XZ_OPT"] = "-T0"
+    tar_env = _get_tar_env()
     check_call([
         'tar', '-cJC', str(source_dir),
         '-f', str(output),
         *map(str, input)
-    ], env=xz_env)
+    ], env=tar_env)
     # print sha of tarball for debugging
-    check_call(['shasum', str(output)])
+    check_call(['shasum', str(output)], env=tar_env)
 
 
 def extract_tarball(output_dir, input, args=[]):
-    xz_env = os.environ.copy()
-    xz_env["XZ_OPT"] = "-T0"
+    tar_env = _get_tar_env()
     # print sha of tarball for debugging
-    check_call(['shasum', str(input)])
-    check_call(['tar', '-xC', str(output_dir), '-f', str(input)] + args, env=xz_env)
+    check_call(['shasum', str(input)], env=tar_env)
+    check_call(['tar', '-xC', str(output_dir), '-f', str(input)] + args, env=tar_env)
 
 
 def is_available_mac_ver(ver: str) -> bool:

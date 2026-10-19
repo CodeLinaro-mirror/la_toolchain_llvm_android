@@ -293,49 +293,15 @@ class _GccConfig(_BaseConfig):  # pylint: disable=abstract-method
         return [self.gcc_lib_dir, self.gcc_builtin_dir]
 
 
-class LinuxConfig(_GccConfig):
+class LinuxConfig(_BaseConfig):
     """Configuration for Linux targets."""
 
     target_os: hosts.Host = hosts.Host.Linux
-    sysroot: Optional[Path] = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
-    gcc_root: Path = paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8'
-    gcc_triple: str = 'x86_64-linux'
-    gcc_ver: str = '4.8.3'
-    is_cross_compiling: bool = False
-    is_musl: bool = False
-
-    @property
-    def llvm_triple(self) -> str:
-        return 'i386-unknown-linux-gnu' if self.is_32_bit else 'x86_64-unknown-linux-gnu'
-
-    @property
-    def cflags(self) -> List[str]:
-        cflags = super().cflags
-        if self.is_32_bit and not self.is_musl:
-            cflags.append('-march=i686')
-        elif self.target_arch == hosts.Arch.X86_64:
-            cflags.append('-march=x86-64-v2')
-        return cflags
-
-
-    @property
-    def ldflags(self) -> List[str]:
-        return super().ldflags + [
-            '-Wl,--hash-style=both',
-        ]
-
-
-class LinuxMuslConfig(LinuxConfig):
-    """Config for Musl sysroot bootstrapping"""
-    target_os: hosts.Host = hosts.Host.Linux
     target_arch: hosts.Arch
     is_cross_compiling: bool
-    is_musl: bool = True
+    is_musl: bool = False
 
-    def __init__(self, arch: hosts.Arch = hosts.Arch.X86_64, is_cross_compiling: bool = True):
-        self.triple = arch.llvm_arch + '-unknown-linux-musl'
-        if arch is hosts.Arch.ARM:
-            self.triple += 'eabihf'
+    def __init__(self, arch: hosts.Arch = hosts.Arch.X86_64, is_cross_compiling: bool = False):
         self.target_arch = arch
         self.is_cross_compiling = is_cross_compiling
 
@@ -344,22 +310,26 @@ class LinuxMuslConfig(LinuxConfig):
         return self.target_arch in [hosts.Arch.ARM, hosts.Arch.I386]
 
     @property
+    def sysroot(self) -> Path:
+        if self.target_arch == hosts.Arch.ARM or self.target_arch == hosts.Arch.AARCH64:
+            return paths.BUILD_TOOLS_DIR / 'sysroots' / self.llvm_triple
+        return paths.GCC_ROOT / 'host' / 'x86_64-linux-glibc2.17-4.8' / 'sysroot'
+
+    @property
     def llvm_triple(self) -> str:
-        return self.triple
+        suffix = 'eabihf' if self.target_arch is hosts.Arch.ARM else ''
+        llvm_arch = 'i386' if self.target_arch is hosts.Arch.I386 else self.target_arch.llvm_arch
+        return llvm_arch + '-unknown-linux-gnu' + suffix
 
     @property
     def cflags(self) -> List[str]:
-        cflags = super().cflags + [
-                f'--target={self.llvm_triple}',
-                '-D_LARGEFILE64_SOURCE=1',
-                # gcc does this automatically and glibc includes it in features.h
-                # Neither clang nor musl include it, so add it here.  Otherwise
-                # libedit fails with error: wchar_t must store ISO 10646 characters
-                '-include stdc-predef.h',
-        ]
-        if self.target_arch is hosts.Arch.ARM:
+        cflags = super().cflags
+        if self.target_arch == hosts.Arch.I386:
+            cflags.append('-march=i686')
+        elif self.target_arch == hosts.Arch.X86_64:
+            cflags.append('-march=x86-64-v2')
+        elif self.target_arch == hosts.Arch.ARM:
             cflags.append('-march=armv7-a')
-
         return cflags
 
     @property
@@ -379,6 +349,48 @@ class LinuxMuslConfig(LinuxConfig):
     def ldflags(self) -> List[str]:
         return super().ldflags + [
             '-rtlib=compiler-rt',
+            '-Wl,--hash-style=both',
+        ]
+
+    @property
+    def cmake_defines(self) -> Dict[str, str]:
+        defines = super().cmake_defines
+        defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
+        defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
+        defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
+        defines['COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'TRUE'
+
+        return defines
+
+
+class LinuxMuslConfig(LinuxConfig):
+    """Config for Musl sysroot bootstrapping"""
+    target_os: hosts.Host = hosts.Host.Linux
+    target_arch: hosts.Arch
+    is_cross_compiling: bool
+    is_musl: bool = True
+
+    @property
+    def llvm_triple(self) -> str:
+        suffix = 'eabihf' if self.target_arch is hosts.Arch.ARM else ''
+        return self.target_arch.llvm_arch + '-unknown-linux-musl' + suffix
+
+    @property
+    def cflags(self) -> List[str]:
+        cflags = super().cflags + [
+                f'--target={self.llvm_triple}',
+                '-D_LARGEFILE64_SOURCE=1',
+                # gcc does this automatically and glibc includes it in features.h
+                # Neither clang nor musl include it, so add it here.  Otherwise
+                # libedit fails with error: wchar_t must store ISO 10646 characters
+                '-include stdc-predef.h',
+        ]
+
+        return cflags
+
+    @property
+    def ldflags(self) -> List[str]:
+        return super().ldflags + [
             '-Wl,-z,stack-size=2097152',
         ]
 
@@ -390,7 +402,7 @@ class LinuxMuslConfig(LinuxConfig):
 
     @property
     def sysroot(self) -> Path:
-        return paths.BUILD_TOOLS_DIR / 'sysroots' / self.triple
+        return paths.BUILD_TOOLS_DIR / 'sysroots' / self.llvm_triple
 
     @property
     def output_suffix(self) -> str:
@@ -398,25 +410,9 @@ class LinuxMuslConfig(LinuxConfig):
         return f'-{self.llvm_triple}'
 
     @property
-    def lib_dirs(self) -> List[Path]:
-        """Override gcc libdirs."""
-        return []
-
-    @property
-    def bin_dirs(self) -> List[Path]:
-        """Override gcc bindirs."""
-        return []
-
-    @property
     def cmake_defines(self) -> Dict[str, str]:
         defines = super().cmake_defines
-        defines['LIBCXX_USE_COMPILER_RT'] = 'TRUE'
         defines['LIBCXX_HAS_MUSL_LIBC'] = 'TRUE'
-        defines['LIBCXXABI_USE_COMPILER_RT'] = 'TRUE'
-        defines['LIBUNWIND_USE_COMPILER_RT'] = 'TRUE'
-        # clang generates call to builtin functions when building
-        # compiler-rt for musl.  Allow use of the builtins library.
-        defines['COMPILER_RT_USE_BUILTINS_LIBRARY'] = 'TRUE'
 
         # The musl sysroots contain empty libdl.a, libpthread.a and librt.a to
         # satisfy the parts of the LLVM build that hardcode -lpthread, etc.,
@@ -746,7 +742,7 @@ def host_32bit_config(musl: bool=False) -> Config:
     if hosts.build_host().is_windows:
         return MinGWConfig(is_32_bit=True)
     else:
-        return LinuxConfig(is_32_bit=True)
+        return LinuxConfig(hosts.Arch.I386)
 
 
 def android_configs(platform: bool=True,

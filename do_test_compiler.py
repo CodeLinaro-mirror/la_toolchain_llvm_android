@@ -267,6 +267,11 @@ def build_target(android_base: Path, clang_version: version.Version,
         env['CLANG_ANALYZER_CHECKS'] = '1'
         modules = ['libart', 'libc']
 
+        # FIXME(b/571265347): Temporary solution while build team thinks of a better solution.
+        # Disable action sandboxing during profile collection since instrumented
+        # binaries write profile files (e.g. BOLT fdata) out of band.
+        env['SOONG_ACTION_SANDBOXING'] = 'off'
+
         # Set the environment variable specifying where the profile file gets
         # written.
         for key, val in profiler.getProfileFileEnvVars():
