@@ -758,6 +758,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Transforms][Utils] Strip unnamed_addr on indirect call promotion (#221121)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/fa65146842687ef1808fb6fcb1aae66f8bf49216.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 633550
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [VPlan] Don't widen extractvalue with single scalar operand (#221146)"
         },
         "platforms": [
