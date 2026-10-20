@@ -1,1 +1,18 @@
-[]
+[
+    {
+        "metadata": {
+            "info": [
+                "TODO(b/575571399): Temporary downstream revert for linux-tot musl build failure. Drop once upstream fix lands."
+            ],
+            "title": "Revert \"[asan] Adopt sanitizer_common operator-new framework (#196388)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-dc53f17c1413a76268b413bcf146887fb23b3de0.patch",
+        "version_range": {
+            "from": 640712,
+            "until": null
+        }
+    }
+]
