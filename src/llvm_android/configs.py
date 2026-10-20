@@ -475,10 +475,11 @@ class MinGWConfig(_GccConfig):
         cflags.append('-D_WIN32_WINNT=0x0A00')
         cflags.append('-DWINVER=0x0A00')
         cflags.append('-D__MSVCRT_VERSION__=0x1400')
-        # TODO(b/534513693): Remove these once MinGW is updated and has these constants.
+        # TODO(b/435461051): Remove these once MinGW is updated and has these constants.
         cflags.append('-DWINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3=0x00002000')
         cflags.append('-DWINHTTP_OPTION_ENABLE_HTTP_PROTOCOL=133')
         cflags.append('-DWINHTTP_PROTOCOL_FLAG_HTTP2=0x1')
+        cflags.append('-DCERT_SHA256_HASH_PROP_ID=107')
         if self.target_arch == hosts.Arch.I386:
             cflags.append('-fsjlj-exceptions')
         return cflags

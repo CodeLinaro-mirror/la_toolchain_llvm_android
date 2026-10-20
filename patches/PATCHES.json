@@ -864,6 +864,20 @@
         "rel_patch_path": "cherry/c5a8ee04c5cbd8bbd7019b25026eeb466a1276c6.patch",
         "version_range": {
             "from": 614150,
+            "until": 639965
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [compiler-rt][ARM] Mark optimized FP add/sub asm as superseding aeabi_[df]rsub.c (#230739)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/c5a8ee04c5cbd8bbd7019b25026eeb466a1276c6-v2.patch",
+        "version_range": {
+            "from": 639965,
             "until": 640057
         }
     },
@@ -892,6 +906,20 @@
         "rel_patch_path": "move-cxa-demangle-into-libcxxdemangle.patch",
         "version_range": {
             "from": 475365,
+            "until": 639965
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[libc++abi] Optionally move __cxa_demangle into libc++demangle.a"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "move-cxa-demangle-into-libcxxdemangle-v2.patch",
+        "version_range": {
+            "from": 639965,
             "until": null
         }
     },
@@ -990,7 +1018,7 @@
         "rel_patch_path": "Add-temporary-triage-handler-for-libcxx-hardening.patch",
         "version_range": {
             "from": 596125,
-            "until": null
+            "until": 639965
         }
     }
 ]

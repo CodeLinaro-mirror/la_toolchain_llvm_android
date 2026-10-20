@@ -1,0 +1,95 @@
+From 46db27a9db4c9654f4dc4da5e936b89758095f22 Mon Sep 17 00:00:00 2001
+From: Ryan Prichard <rprichard@google.com>
+Date: Mon, 25 Jul 2022 18:05:30 -0700
+Subject: [PATCH] [libc++abi] Optionally move __cxa_demangle into
+ libc++demangle.a
+
+The motivation is to reduce the size of libc++.so on Android. The flag
+is always used with LIBCXXABI_NON_DEMANGLING_TERMINATE.
+
+Differential Revision: https://reviews.llvm.org/D139493
+---
+ libcxxabi/CMakeLists.txt     |  9 +++++++++
+ libcxxabi/src/CMakeLists.txt | 25 ++++++++++++++++++++++++-
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/libcxxabi/CMakeLists.txt b/libcxxabi/CMakeLists.txt
+index 6ea3cea30bdb..cd5d61896648 100644
+--- a/libcxxabi/CMakeLists.txt
++++ b/libcxxabi/CMakeLists.txt
+@@ -112,6 +112,7 @@ else()
+ endif()
+ set(LIBCXXABI_SHARED_OUTPUT_NAME "c++abi" CACHE STRING "Output name for the shared libc++abi runtime library.")
+ set(LIBCXXABI_STATIC_OUTPUT_NAME "c++abi" CACHE STRING "Output name for the static libc++abi runtime library.")
++set(LIBCXXABI_DEMANGLE_STATIC_OUTPUT_NAME "c++demangle" CACHE STRING "Output name for the optional libc++demangle runtime library.")
+ 
+ set(LIBCXXABI_INSTALL_INCLUDE_DIR "${CMAKE_INSTALL_INCLUDEDIR}/c++/v1" CACHE STRING "Path to install the libc++abi headers at.")
+ 
+@@ -156,6 +157,14 @@ option(LIBCXXABI_SILENT_TERMINATE "Set this to make the terminate handler defaul
+ option(LIBCXXABI_NON_DEMANGLING_TERMINATE "Set this to make the terminate handler
+ avoid demangling" OFF)
+ 
++# Omit __cxa_demangle to reduce the size of libc++[abi].so. Package it into a
++# separate static library for when it is actually needed.
++option(LIBCXXABI_STATIC_DEMANGLE_LIBRARY "Put __cxa_demangle into a separate static library" OFF)
++
++if (LIBCXXABI_STATIC_DEMANGLE_LIBRARY AND NOT LIBCXXABI_NON_DEMANGLING_TERMINATE)
++  message(FATAL_ERROR "libc++demangle is only supported when libc++abi doesn't use demangling")
++endif()
++
+ if (NOT LIBCXXABI_ENABLE_SHARED AND NOT LIBCXXABI_ENABLE_STATIC)
+   message(FATAL_ERROR "libc++abi must be built as either a shared or static library.")
+ endif()
+diff --git a/libcxxabi/src/CMakeLists.txt b/libcxxabi/src/CMakeLists.txt
+index 8f779d913e0a..64704312ef6d 100644
+--- a/libcxxabi/src/CMakeLists.txt
++++ b/libcxxabi/src/CMakeLists.txt
+@@ -3,7 +3,6 @@ set(LIBCXXABI_SOURCES
+   # C++ABI files
+   cxa_aux_runtime.cpp
+   cxa_default_handlers.cpp
+-  cxa_demangle.cpp
+   cxa_exception_storage.cpp
+   cxa_guard.cpp
+   cxa_handlers.cpp
+@@ -20,6 +19,12 @@ set(LIBCXXABI_SOURCES
+   private_typeinfo.cpp
+ )
+ 
++if (NOT LIBCXXABI_STATIC_DEMANGLE_LIBRARY)
++  list(APPEND LIBCXXABI_SOURCES
++    cxa_demangle.cpp
++  )
++endif()
++
+ if (LIBCXXABI_ENABLE_NEW_DELETE_DEFINITIONS)
+   list(APPEND LIBCXXABI_SOURCES
+     stdlib_new_delete.cpp
+@@ -154,6 +159,24 @@ endif()
+ 
+ include(WarningFlags)
+ 
++if (LIBCXXABI_STATIC_DEMANGLE_LIBRARY)
++  add_library(cxxabi_demangle_static STATIC abort_message.cpp cxa_demangle.cpp ${LIBCXXABI_HEADERS})
++  target_link_libraries(cxxabi_demangle_static PRIVATE cxx-headers cxxabi-headers)
++  set_target_properties(cxxabi_demangle_static
++    PROPERTIES
++      CXX_EXTENSIONS OFF
++      CXX_STANDARD 20
++      CXX_STANDARD_REQUIRED OFF
++      COMPILE_FLAGS "${LIBCXXABI_COMPILE_FLAGS}"
++      LINK_FLAGS "${LIBCXXABI_LINK_FLAGS}"
++      OUTPUT_NAME "${LIBCXXABI_DEMANGLE_STATIC_OUTPUT_NAME}"
++    )
++  list(APPEND LIBCXXABI_BUILD_TARGETS "cxxabi_demangle_static")
++  if (LIBCXXABI_INSTALL_STATIC_LIBRARY)
++    list(APPEND LIBCXXABI_INSTALL_TARGETS "cxxabi_demangle_static")
++  endif()
++endif()
++
+ # Build the shared library.
+ if (LIBCXXABI_SUPPORTS_SHARED_LIBRARY)
+   add_library(cxxabi_shared_objects OBJECT EXCLUDE_FROM_ALL ${LIBCXXABI_SOURCES} ${LIBCXXABI_HEADERS})
+-- 
+2.56.0.212.g129ede20d9-goog
+
