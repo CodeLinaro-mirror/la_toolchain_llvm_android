@@ -48,6 +48,8 @@ PYTHON = sys.executable
 # --no-pgo
 # --generate-bolt-profile
 # --generate-clang-profile
+# --musl
+# --no-mlgo
 # --module dist
 # --module droid
 # --module platform_tests
@@ -241,6 +243,17 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--generate-clang-profile",
             "./",
         ],
+        "Clang-PGO_arm64": [
+            PYTHON,
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_arm64-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--generate-clang-profile",
+            "--musl",
+            "--no-mlgo",
+            "./",
+        ],
         "Clang-BOLT": [
             PYTHON,
             "toolchain/llvm_android/test_compiler.py",
@@ -250,10 +263,28 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "--generate-bolt-profile",
             "./",
         ],
+        "Clang-BOLT_arm64": [
+            PYTHON,
+            "toolchain/llvm_android/test_compiler.py",
+            "--build-only",
+            "--target", "aosp_arm64-trunk_staging-userdebug",
+            "--no-clean-built-target",
+            "--generate-bolt-profile",
+            "--musl",
+            "--no-mlgo",
+            "./",
+        ],
         "linux_bootstrap": [
             PYTHON,
             "toolchain/llvm_android/build.py",
             "--mlgo",
+            "--bootstrap-build-only",
+            "--no-incremental",
+        ],
+        "linux_bootstrap_arm64": [
+            PYTHON,
+            "toolchain/llvm_android/build.py",
+            "--musl",
             "--bootstrap-build-only",
             "--no-incremental",
         ],
@@ -262,6 +293,16 @@ TARGET_DEFS: dict[str, dict[str, list[str]]] = {
             "toolchain/llvm_android/build.py",
             "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
             "--mlgo",
+            "--package-stage2-install",
+            "--create-tar",
+            "--no-build=windows",
+            "--no-incremental",
+        ],
+        "linux_fastbuild_arm64": [
+            PYTHON,
+            "toolchain/llvm_android/build.py",
+            "--bootstrap-use=out/prebuilt_cached/artifacts/linux_bootstrap/stage1-install.tar.xz",
+            "--musl",
             "--package-stage2-install",
             "--create-tar",
             "--no-build=windows",
