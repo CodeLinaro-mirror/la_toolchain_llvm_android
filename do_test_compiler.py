@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import List, Optional
 
 import context  # pylint: disable=unused-import
@@ -380,6 +381,7 @@ def fetch_kokoro_prebuilt(build_id: str, no_cache: bool = False) -> Path:
     extract_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
+        sys.executable,
         paths.SCRIPTS_DIR / "fetch_kokoro_prebuilts.py",
         "--build_id", build_id,
     ]
@@ -415,7 +417,7 @@ def main():
     elif args.clang_kokoro_build_id is not None:
         clang_path = fetch_kokoro_prebuilt(args.clang_kokoro_build_id, args.no_cache)
     else:
-        cmd = [paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
+        cmd = [sys.executable, paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
         if args.musl:
             cmd.append('--musl')
         if not args.no_mlgo:
