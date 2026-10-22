@@ -1034,5 +1034,37 @@
             "from": 596125,
             "until": 639965
         }
+    },
+    {
+        "metadata": {
+            "info": [
+                "Unmerged upstream PR: https://github.com/llvm/llvm-project/pull/232504"
+            ],
+            "title": "Avoid accidentally quadratic memory usage in AssignmentTrackingAnalysis (#232504)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Avoid-accidentally-quadratic-memory-usage-in-AssignmentTrackingAnalysis.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614151
+        }
+    },
+    {
+        "metadata": {
+            "info": [
+                "Unmerged upstream PR: https://github.com/llvm/llvm-project/pull/231314"
+            ],
+            "title": "Work around glibc pthread_cond_signal bug (#231314)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Work-around-glibc-pthread_cond_signal-bug.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 614151
+        }
     }
 ]
