@@ -562,6 +562,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libunwind][arm64e] Mach-O Support unwinding PAuth_LR frames (#202772)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/8e34b2cbb06a14fd9b38625eccf7fdb482ea5ea3.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 627864
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [llvm-profgen] Preserve zero-valued first PT_LOAD address (#212258)"
         },
         "platforms": [
