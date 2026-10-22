@@ -327,8 +327,7 @@ class BuiltinsBuilder(base_builders.LLVMRuntimeBuilder):
         riscv64.platform = True
         result.append(riscv64)
         # LFI only uses platform config
-        if self.build_lfi:
-            result.extend(configs.android_lfi_configs())
+        result.extend(configs.android_lfi_configs())
         result.append(configs.BaremetalAArch64Config())
         result.append(configs.BaremetalArmv6MConfig())
         result.append(configs.BaremetalArmv8MBaseConfig())
@@ -452,8 +451,7 @@ class CompilerRTBuilder(base_builders.LLVMRuntimeBuilder):
             configs.android_configs(platform=True) +
             configs.android_configs(platform=False)
         )
-        if self.build_lfi:
-            result.extend(configs.android_lfi_configs())
+        result.extend(configs.android_lfi_configs())
         return result
 
     @property
@@ -662,8 +660,7 @@ class LibUnwindBuilder(base_builders.LLVMRuntimeBuilder):
             result.append(arch)
 
         # LFI only needs the platform
-        if self.build_lfi:
-            result.extend(configs.android_lfi_configs())
+        result.extend(configs.android_lfi_configs())
 
         # riscv64 needs a copy with hidden symbols for use while building
         # the runtimes, but doesn't have an NDK sysroot.  Make a copy

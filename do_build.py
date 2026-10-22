@@ -196,16 +196,14 @@ def add_lib_links(stage: str, host_config: configs.Config):
 def build_runtimes(build_lldb_server: bool,
                    stage: str,
                    host_config: configs.Config,
-                   host_32bit_config: configs.Config,
-                   build_lfi: bool):
+                   host_32bit_config: configs.Config):
     builders.DeviceSysrootsBuilder().build()
-    if build_lfi:
-        builders.LFIDeviceSysrootsBuilder().build()
-    builders.BuiltinsBuilder(build_lfi=build_lfi).build()
-    builders.LibUnwindBuilder(build_lfi=build_lfi).build()
+    builders.LFIDeviceSysrootsBuilder().build()
+    builders.BuiltinsBuilder().build()
+    builders.LibUnwindBuilder().build()
     # We don't need LFI-ed libc++ yet
     builders.DeviceLibcxxBuilder().build()
-    builders.CompilerRTBuilder(build_lfi=build_lfi).build()
+    builders.CompilerRTBuilder().build()
     builders.DeviceLibcxxBuilder(builders.DeviceLibcxxBuilder.hwasan_config_list).build()
     builders.TsanBuilder().build()
     # Build musl runtimes and 32-bit glibc for Linux
@@ -952,12 +950,6 @@ def parse_args():
         default=False,
         help='Build with MLGO support.')
 
-    parser.add_argument(
-        '--lfi',
-        action='store_true',
-        default=False,
-        help='Build also LFI targets, runtimes, and builtins.')
-
     # skip_runtimes is set to skip recompilation of libraries
     parser.add_argument(
         '--skip-runtimes',
@@ -1247,8 +1239,7 @@ def main():
             build_runtimes(build_lldb_server=build_lldb,
                            stage='stage2',
                            host_config=configs.host_config(musl),
-                           host_32bit_config=configs.host_32bit_config(musl),
-                           build_lfi=args.lfi)
+                           host_32bit_config=configs.host_32bit_config(musl))
 
     if need_windows or need_windows_libcxx:
         # Host sysroots are currently setup only for Windows
