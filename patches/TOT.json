@@ -14,5 +14,21 @@
             "from": 640712,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [
+                "TODO(b/435461051, b/575891956): Temporary downstream fix for MinGW _strtof_l build break from PR #229456 (upstream PR #234640). Drop once b/435461051 (MinGW upgrade) is resolved."
+            ],
+            "title": "[libc++] Fix MinGW build break from _strtof_l in __str_to_float_c_locale (#234640)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Fix-MinGW-build-break-from-_strtof_l-in-__str_to_float_c_locale.patch",
+        "version_range": {
+            "from": 640712,
+            "until": null
+        }
     }
 ]
