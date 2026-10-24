@@ -157,7 +157,6 @@ class Builder:  # pylint: disable=too-few-public-methods
     """Base builder type."""
     name: str = ""
     config_list: List[configs.Config]
-    build_lfi: bool = False
 
     """Use prebuilt toolchain by default. This value will be updated if a new toolchain is built."""
     toolchain: toolchains.Toolchain = toolchains.get_prebuilt_toolchain()
@@ -167,14 +166,12 @@ class Builder:  # pylint: disable=too-few-public-methods
 
     def __init__(self,
                  config_list: Optional[Sequence[configs.Config]] = None,
-                 toolchain: Optional[toolchains.Toolchain] = None,
-                 build_lfi: bool = False) -> None:
+                 toolchain: Optional[toolchains.Toolchain] = None) -> None:
         if toolchain:
             self.toolchain = toolchain
         if config_list:
             self.config_list = list(config_list)
         self._config: configs.Config = self.config_list[0]
-        self.build_lfi = build_lfi
 
     @BuilderRegistry.register_and_build
     def build(self) -> None:

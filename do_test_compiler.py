@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 from typing import List, Optional
 
 import context  # pylint: disable=unused-import
@@ -134,6 +135,11 @@ def parse_args():
         default=False,
         help='Build without mlgo.')
     parser.add_argument(
+        '--musl',
+        action='store_true',
+        default=False,
+        help='Build against musl libc.')
+    parser.add_argument(
         '--skip-tests',
         action='store_true',
         default=False,
@@ -198,14 +204,21 @@ def parse_args():
 
 
 def copy_clang(android_base: Path, clang_path: Path) -> None:
-    android_clang_path = (android_base / 'prebuilts' / 'clang' / 'host' /
-                          hosts.build_tag() / 'clang-dev')
-    if android_clang_path.is_symlink() or android_clang_path.is_file():
-        android_clang_path.unlink()
-    elif android_clang_path.is_dir():
-        shutil.rmtree(android_clang_path)
-    # TODO(b/260809113): We can use symlink when this bug is fixed.
-    shutil.copytree(clang_path, android_clang_path, symlinks=True)
+    host_tags = {hosts.build_tag()}
+    if hosts.build_host().is_linux:
+        # Soong's prebuilts/clang/host/linux-x86/Android.bp LoadHooks always
+        # look up LLVM_PREBUILTS_VERSION (clang-dev) under linux-x86 for target
+        # and host runtime libraries and builtin headers.
+        host_tags.add('linux-x86')
+    for tag in sorted(host_tags):
+        android_clang_path = (android_base / 'prebuilts' / 'clang' / 'host' /
+                              tag / 'clang-dev')
+        if android_clang_path.is_symlink() or android_clang_path.is_file():
+            android_clang_path.unlink()
+        elif android_clang_path.is_dir():
+            shutil.rmtree(android_clang_path)
+        # TODO(b/260809113): We can use symlink when this bug is fixed.
+        shutil.copytree(clang_path, android_clang_path, symlinks=True)
 
 
 def get_connected_device_list() -> List[List[str]]:
@@ -368,6 +381,7 @@ def fetch_kokoro_prebuilt(build_id: str, no_cache: bool = False) -> Path:
     extract_dir.mkdir(parents=True, exist_ok=True)
 
     cmd = [
+        sys.executable,
         paths.SCRIPTS_DIR / "fetch_kokoro_prebuilts.py",
         "--build_id", build_id,
     ]
@@ -403,7 +417,9 @@ def main():
     elif args.clang_kokoro_build_id is not None:
         clang_path = fetch_kokoro_prebuilt(args.clang_kokoro_build_id, args.no_cache)
     else:
-        cmd = [paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
+        cmd = [sys.executable, paths.SCRIPTS_DIR / 'build.py', '--no-build=windows,lldb']
+        if args.musl:
+            cmd.append('--musl')
         if not args.no_mlgo:
             cmd.append('--mlgo')
         if args.clang_bootstrap_path:
