@@ -9,9 +9,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "Revert-dc53f17c1413a76268b413bcf146887fb23b3de0.patch",
+        "rel_patch_path": "Revert-dc53f17c1413a76268b413bcf146887fb23b3de0-v2.patch",
         "version_range": {
-            "from": 640712,
+            "from": 642467,
             "until": null
         }
     },

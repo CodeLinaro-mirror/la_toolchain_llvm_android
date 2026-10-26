@@ -1,4 +1,4 @@
-From 06c19581f1aa221580f8a94b56d818b6fbd3517a Mon Sep 17 00:00:00 2001
+From 40e7a62b7863c4dfa8f699d2ee24190ef09b6dd1 Mon Sep 17 00:00:00 2001
 From: Group Agent Android-llvm <groupagent-android-llvm@google.com>
 Date: Mon, 19 Oct 2026 23:04:01 +0000
 Subject: [PATCH] Revert "[asan] Adopt sanitizer_common operator-new framework
@@ -16,16 +16,16 @@ This reverts commit dc53f17c1413a76268b413bcf146887fb23b3de0.
  .../TestCases/nothrow_new_returns_null.cpp    | 26 ---------
  .../nothrow_new_single_returns_null.cpp       | 25 --------
  .../Linux/allocator_returns_null_std.cpp      |  6 +-
- .../TestCases/allocator_returns_null.cpp      | 32 +++--------
+ .../TestCases/allocator_returns_null.cpp      | 30 ++--------
  .../TestCases/max_allocation_size.cpp         | 35 +++---------
- .../TestCases/new_handler_invocation.cpp      | 49 ----------------
+ .../TestCases/new_handler_invocation.cpp      | 52 -----------------
  ...nothrow_new_aligned_array_returns_null.cpp | 32 -----------
  ...othrow_new_aligned_single_returns_null.cpp | 31 ----------
- .../TestCases/throw_bad_alloc_aligned.cpp     | 48 ----------------
- .../throw_bad_alloc_aligned_single.cpp        | 42 --------------
- .../TestCases/throw_bad_alloc_oversize.cpp    | 41 -------------
+ .../TestCases/throw_bad_alloc_aligned.cpp     | 51 -----------------
+ .../throw_bad_alloc_aligned_single.cpp        | 45 ---------------
+ .../TestCases/throw_bad_alloc_oversize.cpp    | 44 --------------
  llvm/docs/ReleaseNotes.md                     |  7 ---
- 17 files changed, 76 insertions(+), 431 deletions(-)
+ 17 files changed, 75 insertions(+), 442 deletions(-)
  delete mode 100644 compiler-rt/test/asan/TestCases/nothrow_new_default_aborts.cpp
  delete mode 100644 compiler-rt/test/asan/TestCases/nothrow_new_returns_null.cpp
  delete mode 100644 compiler-rt/test/asan/TestCases/nothrow_new_single_returns_null.cpp
@@ -317,7 +317,7 @@ index 8bdc244443a5..812cf049f2a9 100644
 -// CHECK: {{SUMMARY: .*Sanitizer: (allocation-size-too-big|out-of-memory).*allocator_returns_null_std.cpp.*}} in main
 +// CHECK: {{SUMMARY: .*Sanitizer: allocation-size-too-big.*allocator_returns_null_std.cpp.*}} in main
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/allocator_returns_null.cpp b/compiler-rt/test/sanitizer_common/TestCases/allocator_returns_null.cpp
-index f4d53c81954d..6343d87bc5c5 100644
+index 87ca47cabfe8..c95f1a46d075 100644
 --- a/compiler-rt/test/sanitizer_common/TestCases/allocator_returns_null.cpp
 +++ b/compiler-rt/test/sanitizer_common/TestCases/allocator_returns_null.cpp
 @@ -28,21 +28,14 @@
@@ -344,7 +344,7 @@ index f4d53c81954d..6343d87bc5c5 100644
  // UNSUPPORTED: ubsan, target={{.*windows-msvc.*}}
  
  // UNSUPPORTED: rtsan
-@@ -88,14 +81,7 @@ int main(int argc, char **argv) {
+@@ -91,14 +84,7 @@ int main(int argc, char **argv) {
      assert(*t == 42);
      free(t);
    } else if (!strcmp(action, "new")) {
@@ -360,7 +360,7 @@ index f4d53c81954d..6343d87bc5c5 100644
    } else if (!strcmp(action, "new-nothrow")) {
      x = operator new(kMaxAllowedMallocSizePlusOne, std::nothrow);
    } else {
-@@ -126,17 +112,13 @@ int main(int argc, char **argv) {
+@@ -129,17 +115,13 @@ int main(int argc, char **argv) {
  // CHECK-mrCRASH: {{SUMMARY: .*Sanitizer: allocation-size-too-big.*allocator_returns_null.cpp.*}} in main
  // CHECK-nCRASH: new:
  // CHECK-nCRASH: #{{[0-9]+.*}}allocator_returns_null.cpp
@@ -371,8 +371,7 @@ index f4d53c81954d..6343d87bc5c5 100644
 -// CHECK-nCRASH: {{SUMMARY: .*Sanitizer: (allocation-size-too-big|out-of-memory).*allocator_returns_null.cpp.*}} in main
 +// CHECK-nCRASH: {{SUMMARY: .*Sanitizer: allocation-size-too-big.*allocator_returns_null.cpp.*}} in main
  // CHECK-nCRASH-OOM: new:
--// CHECK-nCRASH-OOM: #{{[0-9]+.*}}allocator_returns_null.cpp
-+// CHECK-nCRASH-OOM: #{{[0-9]+.*}}allocator_returns_null.cpp
+ // CHECK-nCRASH-OOM: #{{[0-9]+.*}}allocator_returns_null.cpp
  // CHECK-nCRASH-OOM: {{SUMMARY: .*Sanitizer: out-of-memory.*allocator_returns_null.cpp.*}} in main
  // CHECK-nnCRASH: new-nothrow:
  // CHECK-nnCRASH: #{{[0-9]+.*}}allocator_returns_null.cpp
@@ -383,7 +382,7 @@ index f4d53c81954d..6343d87bc5c5 100644
 +// CHECK-NULL: {{malloc|calloc|calloc-overflow|realloc|realloc-after-malloc|new-nothrow}}
  // CHECK-NULL: errno: 12, x: 0
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/max_allocation_size.cpp b/compiler-rt/test/sanitizer_common/TestCases/max_allocation_size.cpp
-index 5572fd926496..864d05f87e4c 100644
+index c04c6db9f46f..817e24d8e208 100644
 --- a/compiler-rt/test/sanitizer_common/TestCases/max_allocation_size.cpp
 +++ b/compiler-rt/test/sanitizer_common/TestCases/max_allocation_size.cpp
 @@ -28,13 +28,8 @@
@@ -411,7 +410,7 @@ index 5572fd926496..864d05f87e4c 100644
  // UNSUPPORTED: ubsan, target={{.*windows-msvc.*}}
  
  // Symbolizer needs to allocated memory when reporting.
-@@ -79,18 +72,8 @@ static void *allocate(const char *Action, size_t Size) {
+@@ -82,18 +75,8 @@ static void *allocate(const char *Action, size_t Size) {
      free(P);
      return nullptr;
    }
@@ -432,7 +431,7 @@ index 5572fd926496..864d05f87e4c 100644
    if (!strcmp(Action, "new-nothrow"))
      return ::operator new(Size, std::nothrow);
    if (!strcmp(Action, "strndup")) {
-@@ -155,22 +138,18 @@ int main(int Argc, char **Argv) {
+@@ -158,22 +141,18 @@ int main(int Argc, char **Argv) {
  // CHECK-mrCRASH: {{SUMMARY: .*Sanitizer: allocation-size-too-big.* in allocate}}
  // CHECK-nCRASH: new:
  // CHECK-nCRASH: #{{[0-9]+.*}}max_allocation_size.cpp
@@ -460,10 +459,10 @@ index 5572fd926496..864d05f87e4c 100644
  // CHECK-NOTNULL-NOT: P: 0
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/new_handler_invocation.cpp b/compiler-rt/test/sanitizer_common/TestCases/new_handler_invocation.cpp
 deleted file mode 100644
-index 18fa2e45aa15..000000000000
+index ff7d0c0d6cec..000000000000
 --- a/compiler-rt/test/sanitizer_common/TestCases/new_handler_invocation.cpp
 +++ /dev/null
-@@ -1,49 +0,0 @@
+@@ -1,52 +0,0 @@
 -// Throwing operator new must invoke std::new_handler before throwing
 -// std::bad_alloc, per [new.delete.single]/3 (and /4 for the nothrow form).
 -
@@ -479,6 +478,9 @@ index 18fa2e45aa15..000000000000
 -// fails depends on the system allocator (it succeeds with overcommit).
 -// UNSUPPORTED: ubsan
 -// REQUIRES: stable-runtime
+-
+-// FIXME: Fails after #196388 because libclang_rt.asan links static libc++abi.a.
+-// XFAIL: android
 -
 -#include <cstdio>
 -#include <new>
@@ -590,10 +592,10 @@ index e2b84b2dee20..000000000000
 -}
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned.cpp b/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned.cpp
 deleted file mode 100644
-index c7b3fa0287b2..000000000000
+index eedacf96a14a..000000000000
 --- a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned.cpp
 +++ /dev/null
-@@ -1,48 +0,0 @@
+@@ -1,51 +0,0 @@
 -// Throwing aligned operator new must throw std::bad_alloc on allocation
 -// failure, just like the unaligned form. Opt-in via allocator_may_return_null=1.
 -
@@ -610,6 +612,9 @@ index c7b3fa0287b2..000000000000
 -// fails depends on the system allocator (it succeeds with overcommit).
 -// UNSUPPORTED: ubsan
 -// REQUIRES: stable-runtime
+-
+-// FIXME: Fails after #196388 because libclang_rt.asan links static libc++abi.a.
+-// XFAIL: android
 -
 -#include <cstdio>
 -#include <new>
@@ -644,10 +649,10 @@ index c7b3fa0287b2..000000000000
 -}
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned_single.cpp b/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned_single.cpp
 deleted file mode 100644
-index 46f47f57936a..000000000000
+index e312c24e0649..000000000000
 --- a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_aligned_single.cpp
 +++ /dev/null
-@@ -1,42 +0,0 @@
+@@ -1,45 +0,0 @@
 -// Aligned single-object throwing operator new must throw std::bad_alloc on
 -// allocation failure (OPERATOR_NEW_BODY_ALIGN). Opt-in via
 -// allocator_may_return_null=1.
@@ -665,6 +670,9 @@ index 46f47f57936a..000000000000
 -// fails depends on the system allocator (it succeeds with overcommit).
 -// UNSUPPORTED: ubsan
 -// REQUIRES: stable-runtime
+-
+-// FIXME: Fails after #196388 because libclang_rt.asan links static libc++abi.a.
+-// XFAIL: android
 -
 -#include <cstdio>
 -#include <new>
@@ -692,10 +700,10 @@ index 46f47f57936a..000000000000
 -}
 diff --git a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_oversize.cpp b/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_oversize.cpp
 deleted file mode 100644
-index 269f7f756333..000000000000
+index a6e565d6b29a..000000000000
 --- a/compiler-rt/test/sanitizer_common/TestCases/throw_bad_alloc_oversize.cpp
 +++ /dev/null
-@@ -1,41 +0,0 @@
+@@ -1,44 +0,0 @@
 -// Throwing operator new must throw std::bad_alloc on allocation failure
 -// (here triggered by an oversize request) rather than aborting. Opt-in via
 -// allocator_may_return_null=1.
@@ -713,6 +721,9 @@ index 269f7f756333..000000000000
 -// fails depends on the system allocator (it succeeds with overcommit).
 -// UNSUPPORTED: ubsan
 -// REQUIRES: stable-runtime
+-
+-// FIXME: Fails after #196388 because libclang_rt.asan links static libc++abi.a.
+-// XFAIL: android
 -
 -#include <cstdio>
 -#include <new>
@@ -738,10 +749,10 @@ index 269f7f756333..000000000000
 -  return 0;
 -}
 diff --git a/llvm/docs/ReleaseNotes.md b/llvm/docs/ReleaseNotes.md
-index 302aa5739610..2340ca016e41 100644
+index 9f68615fdf3a..f068df8e572a 100644
 --- a/llvm/docs/ReleaseNotes.md
 +++ b/llvm/docs/ReleaseNotes.md
-@@ -459,13 +459,6 @@ Makes programs 10x faster by doing Special New Thing.
+@@ -506,13 +506,6 @@ Makes programs 10x faster by doing Special New Thing.
  
  ### Changes to Sanitizers
  
@@ -756,5 +767,5 @@ index 302aa5739610..2340ca016e41 100644
  
  * `cas::ObjectStore::getMemoryBuffer()` was documented as returning a buffer
 -- 
-2.56.0.385.gd3acb90ef8-goog
+2.56.0.212.g129ede20d9-goog
 
