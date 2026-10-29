@@ -1,0 +1,154 @@
+From 70872df23121a3f41c5d89515ab6bf4d5449cff4 Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Mon, 26 Oct 2026 13:19:47 -0700
+Subject: [PATCH] [Clang][Parse] Rescope __extension__ suppression in
+ ParseCondition (#235105)
+
+Support for C2y 'if' declarations unified condition parsing in
+Parser::ParseCondition, but ExtensionGuard was scoped such that it was
+destroyed immediately after consuming leading `__extension__` tokens,
+causing false-positive extension warnings (e.g. -Wgnu-pointer-arith when
+glibc macros expand to `__extension__ ({ ... })` inside `if (...)`).
+
+Link: #198244
+Assisted-by: Gemini
+---
+ clang/lib/Parse/ParseExprCXX.cpp    | 18 +++++++++++++-----
+ clang/test/C/C2y/n3267.c            | 22 ++++++++++++++++++++++
+ clang/test/Parser/cxx-condition.cpp | 15 +++++++++++++++
+ 3 files changed, 50 insertions(+), 5 deletions(-)
+
+diff --git a/clang/lib/Parse/ParseExprCXX.cpp b/clang/lib/Parse/ParseExprCXX.cpp
+index ea71efc..e76657c 100644
+--- a/clang/lib/Parse/ParseExprCXX.cpp
++++ b/clang/lib/Parse/ParseExprCXX.cpp
+@@ -28,6 +28,7 @@
+ #include "llvm/Support/Compiler.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include <numeric>
++#include <optional>
+ 
+ using namespace clang;
+ 
+@@ -1904,16 +1905,16 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+     return Sema::ConditionError();
+   }
+ 
++  std::optional<ExtensionRAIIObject> ExtensionGuard;
++  SourceLocation ExtLoc;
+   if (Tok.is(tok::kw___extension__)) {
+     // The first clause of a condition may be a declaration used as an
+     // init-statement (C2y), and that declaration may be prefixed by one or more
+     // __extension__ markers. Consume them up front -- mirroring block-statement
+     // parsing -- so the disambiguation below sees the real start of the
+-    // declaration. The markers also silence extension diagnostics for the rest
+-    // of the condition, including the diagnostic for the init-statement
+-    // extension itself.
+-    std::optional<ExtensionRAIIObject> ExtensionGuard;
++    // declaration.
+     ExtensionGuard.emplace(Diags);
++    ExtLoc = ConsumeToken();
+     while (TryConsumeToken(tok::kw___extension__))
+       ;
+   }
+@@ -1953,6 +1954,7 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+           Diag(DeclStart, diag::err_expected_expression);
+       } else
+         *InitStmt = DeclStmt;
++      ExtensionGuard.reset();
+       return ParseCondition(nullptr, Loc, CK, MissingOK);
+     }
+ 
+@@ -1966,6 +1968,7 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+       } else
+         Diag(Null.get()->getBeginLoc(),
+              diag::err_c2y_first_condition_clause_is_not_declaration);
++      ExtensionGuard.reset();
+       return ParseCondition(nullptr, Loc, CK, MissingOK);
+     }
+   }
+@@ -1987,6 +1990,7 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+       }
+       ConsumeToken();
+       *InitStmt = Actions.ActOnNullStmt(SemiLoc);
++      ExtensionGuard.reset();
+       return ParseCondition(nullptr, Loc, CK, MissingOK);
+     }
+ 
+@@ -1996,7 +2000,10 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+         /*ExprContext=*/Sema::ExpressionEvaluationContextRecord::EK_Other,
+         /*ShouldEnter=*/CK == Sema::ConditionKind::ConstexprIf);
+ 
+-    ExprResult Expr = ParseExpression();
++    ExtensionGuard.reset();
++    ExprResult Expr = ExtLoc.isValid()
++                          ? ParseExpressionWithLeadingExtension(ExtLoc)
++                          : ParseExpression();
+ 
+     if (Expr.isInvalid())
+       return Sema::ConditionError();
+@@ -2025,6 +2032,7 @@ Sema::ConditionResult Parser::ParseCondition(StmtResult *InitStmt,
+                                   attrs, DeclSpecAttrs, /*RequireSemi=*/true);
+     }
+     *InitStmt = Actions.ActOnDeclStmt(DG, DeclStart, DeclEnd);
++    ExtensionGuard.reset();
+     return ParseCondition(nullptr, Loc, CK, MissingOK);
+   }
+ 
+diff --git a/clang/test/C/C2y/n3267.c b/clang/test/C/C2y/n3267.c
+index b517c5d..3f59a9c 100644
+--- a/clang/test/C/C2y/n3267.c
++++ b/clang/test/C/C2y/n3267.c
+@@ -211,3 +211,25 @@ int negative_test_switch() {
+   switch (int x, y) {default:} /* expected-error {{multiple declarations are not allowed}}
+                                   expected-error {{variable declaration in condition must have an initializer}} */
+ }
++
++#pragma clang diagnostic push
++#pragma clang diagnostic warning "-Wgnu-pointer-arith"
++#pragma clang diagnostic warning "-Wgnu-statement-expression"
++
++void extension_in_if(void *p, void *q) {
++  (void)__extension__(p + 1);
++  if (__extension__(p + 1)) {}
++  if (__extension__(p + 1) ==
++      (q + 1)) {} // expected-warning {{arithmetic on a pointer to void is a GNU extension}}
++  if (__extension__({ 0; })) {}
++  if (__extension__ void *r = p + 1) {}
++  if (__extension__ void *r = p + 1;
++      r == (q + 1)) {} // expected-warning {{arithmetic on a pointer to void is a GNU extension}}
++  switch (__extension__({ 0; })) {
++  default:
++    break;
++  }
++  while (__extension__(p + 1)) {}
++}
++
++#pragma clang diagnostic pop
+diff --git a/clang/test/Parser/cxx-condition.cpp b/clang/test/Parser/cxx-condition.cpp
+index 5672eea..c8d25b0 100644
+--- a/clang/test/Parser/cxx-condition.cpp
++++ b/clang/test/Parser/cxx-condition.cpp
+@@ -13,3 +13,18 @@ void f() {
+ 
+   if (S a(42)) {} // expected-error {{variable declaration in condition cannot have a parenthesized initializer}}
+ }
++
++#pragma clang diagnostic push
++#pragma clang diagnostic warning "-Wgnu-statement-expression"
++#pragma clang diagnostic warning "-Wgnu-conditional-omitted-operand"
++
++void extension_in_condition(int x, int y) {
++  if (__extension__({ 0; })) {}
++  if (__extension__(x ?: y) ==
++      (x ?: y)) {} // expected-warning {{use of GNU ?: conditional expression extension, omitting middle operand}}
++  if (__extension__ int z = (x ?: y);
++      z == (x ?: y)) {} // expected-warning {{use of GNU ?: conditional expression extension, omitting middle operand}}
++  for (; __extension__(x ?: y);) {}
++}
++
++#pragma clang diagnostic pop
+
+-- 
+2.56.0.212.g129ede20d9-goog
+
