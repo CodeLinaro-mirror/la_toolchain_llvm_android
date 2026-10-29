@@ -912,6 +912,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[BACKPORT] [Clang][Parse] Rescope __extension__ suppression in ParseCondition (#235105)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/70872df23121a3f41c5d89515ab6bf4d5449cff4.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 642685
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
