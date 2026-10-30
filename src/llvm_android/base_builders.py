@@ -528,6 +528,7 @@ class LLVMBaseBuilder(CMakeBuilder):  # pylint: disable=abstract-method
         defines['CLANG_REPOSITORY_STRING'] = (
             'https://android.googlesource.com/toolchain/llvm-project')
         defines['BUG_REPORT_URL'] = 'https://github.com/android-ndk/ndk/issues'
+        defines['CLANG_ENABLE_CIR'] = 'OFF'
 
         # To prevent cmake from checking libstdcxx version.
         defines['LLVM_ENABLE_LIBCXX'] = 'ON'
