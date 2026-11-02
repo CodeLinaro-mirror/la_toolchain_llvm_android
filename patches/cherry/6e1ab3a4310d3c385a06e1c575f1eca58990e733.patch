@@ -1,0 +1,668 @@
+From 6e1ab3a4310d3c385a06e1c575f1eca58990e733 Mon Sep 17 00:00:00 2001
+From: Chuanqi Xu <yedeng.yd@linux.alibaba.com>
+Date: Wed, 4 Mar 2026 10:06:58 +0800
+Subject: [PATCH] [Serialization] Stop demote var definition as declaration
+ (#172430) (#177117) (#184287)
+
+Close https://github.com/llvm/llvm-project/issues/172241 Close
+https://github.com/llvm/llvm-project/issues/64034 Close
+https://github.com/llvm/llvm-project/issues/149404 Close
+https://github.com/llvm/llvm-project/issues/174858
+
+After this patch, we (the clang dev) no longer assumes there are at most
+one definition in a redeclaration chain.
+
+See
+
+
+https://discourse.llvm.org/t/rfc-clang-not-assuming-there-is-at-most-one-definition-in-a-redeclaration-chain/89360
+for details.
+
+---
+
+Update since last commit:
+
+Previously I remove the code to update visibility accidently. This is
+the root cause of the failure.
+
+---
+
+Update since last commit:
+
+Still demote var definition as declaration if it is in headers. This is
+meant to avoid https://github.com/llvm/llvm-project/issues/181076
+
+See the comments in ASTDeclReader::attachPreviousDeclImpl .
+
+Close https://github.com/llvm/llvm-project/issues/181076
+---
+ clang/lib/Sema/SemaType.cpp                   |  84 +++++++++----
+ clang/lib/Serialization/ASTReaderDecl.cpp     |  12 +-
+ clang/test/Modules/demote-var-def.cpp         |  94 +++++++++++++++
+ .../module-init-forcelly-loaded-module.cpp    |  83 +++++++++++++
+ clang/test/Modules/pr149404-02.cppm           | 104 +++++++++++++++++
+ clang/test/Modules/pr172241.cppm              |  47 ++++++++
+ clang/test/Modules/var-inst-def.cppm          | 110 ++++++++++++++++++
+ 7 files changed, 508 insertions(+), 26 deletions(-)
+ create mode 100644 clang/test/Modules/demote-var-def.cpp
+ create mode 100644 clang/test/Modules/module-init-forcelly-loaded-module.cpp
+ create mode 100644 clang/test/Modules/pr149404-02.cppm
+ create mode 100644 clang/test/Modules/pr172241.cppm
+ create mode 100644 clang/test/Modules/var-inst-def.cppm
+
+diff --git a/clang/lib/Sema/SemaType.cpp b/clang/lib/Sema/SemaType.cpp
+index c082dd85f345..6406ee06e757 100644
+--- a/clang/lib/Sema/SemaType.cpp
++++ b/clang/lib/Sema/SemaType.cpp
+@@ -9457,11 +9457,67 @@ bool Sema::hasAcceptableDefinition(NamedDecl *D, NamedDecl **Suggested,
+ 
+   // If this definition was instantiated from a template, map back to the
+   // pattern from which it was instantiated.
+-  if (isa<TagDecl>(D) && cast<TagDecl>(D)->isBeingDefined()) {
++  if (isa<TagDecl>(D) && cast<TagDecl>(D)->isBeingDefined())
+     // We're in the middle of defining it; this definition should be treated
+     // as visible.
+     return true;
+-  } else if (auto *RD = dyn_cast<CXXRecordDecl>(D)) {
++
++  auto DefinitionIsAcceptable = [&](NamedDecl *D) {
++    // The (primary) definition might be in a visible module.
++    if (isAcceptable(D, Kind))
++      return true;
++
++    // A visible module might have a merged definition instead.
++    if (D->isModulePrivate() ? hasMergedDefinitionInCurrentModule(D)
++                             : hasVisibleMergedDefinition(D)) {
++      if (CodeSynthesisContexts.empty() &&
++          !getLangOpts().ModulesLocalVisibility) {
++        // Cache the fact that this definition is implicitly visible because
++        // there is a visible merged definition.
++        D->setVisibleDespiteOwningModule();
++      }
++      return true;
++    }
++
++    return false;
++  };
++  auto IsDefinition = [](NamedDecl *D) {
++    if (auto *RD = dyn_cast<CXXRecordDecl>(D))
++      return RD->isThisDeclarationADefinition();
++    if (auto *ED = dyn_cast<EnumDecl>(D))
++      return ED->isThisDeclarationADefinition();
++    if (auto *FD = dyn_cast<FunctionDecl>(D))
++      return FD->isThisDeclarationADefinition();
++    if (auto *VD = dyn_cast<VarDecl>(D))
++      return VD->isThisDeclarationADefinition() == VarDecl::Definition;
++    llvm_unreachable("unexpected decl type");
++  };
++  auto FoundAcceptableDefinition = [&](NamedDecl *D) {
++    if (!isa<CXXRecordDecl, FunctionDecl, EnumDecl, VarDecl>(D))
++      return DefinitionIsAcceptable(D);
++
++    // See ASTDeclReader::attachPreviousDeclImpl. Now we still
++    // may demote definition to declaration for decls in haeder modules,
++    // so avoid looking at its redeclaration to save time.
++    // NOTE: If we don't demote definition to declarations for decls
++    // in header modules, remove the condition.
++    if (D->getOwningModule() && D->getOwningModule()->isHeaderLikeModule())
++      return DefinitionIsAcceptable(D);
++
++    for (auto *RD : D->redecls()) {
++      auto *ND = cast<NamedDecl>(RD);
++      if (!IsDefinition(ND))
++        continue;
++      if (DefinitionIsAcceptable(ND)) {
++        *Suggested = ND;
++        return true;
++      }
++    }
++
++    return false;
++  };
++
++  if (auto *RD = dyn_cast<CXXRecordDecl>(D)) {
+     if (auto *Pattern = RD->getTemplateInstantiationPattern())
+       RD = Pattern;
+     D = RD->getDefinition();
+@@ -9500,34 +9556,14 @@ bool Sema::hasAcceptableDefinition(NamedDecl *D, NamedDecl **Suggested,
+ 
+   *Suggested = D;
+ 
+-  auto DefinitionIsAcceptable = [&] {
+-    // The (primary) definition might be in a visible module.
+-    if (isAcceptable(D, Kind))
+-      return true;
+-
+-    // A visible module might have a merged definition instead.
+-    if (D->isModulePrivate() ? hasMergedDefinitionInCurrentModule(D)
+-                             : hasVisibleMergedDefinition(D)) {
+-      if (CodeSynthesisContexts.empty() &&
+-          !getLangOpts().ModulesLocalVisibility) {
+-        // Cache the fact that this definition is implicitly visible because
+-        // there is a visible merged definition.
+-        D->setVisibleDespiteOwningModule();
+-      }
+-      return true;
+-    }
+-
+-    return false;
+-  };
+-
+-  if (DefinitionIsAcceptable())
++  if (FoundAcceptableDefinition(D))
+     return true;
+ 
+   // The external source may have additional definitions of this entity that are
+   // visible, so complete the redeclaration chain now and ask again.
+   if (auto *Source = Context.getExternalSource()) {
+     Source->CompleteRedeclChain(D);
+-    return DefinitionIsAcceptable();
++    return FoundAcceptableDefinition(D);
+   }
+ 
+   return false;
+diff --git a/clang/lib/Serialization/ASTReaderDecl.cpp b/clang/lib/Serialization/ASTReaderDecl.cpp
+index f33915a7ee1d..b49bd5ea8bca 100644
+--- a/clang/lib/Serialization/ASTReaderDecl.cpp
++++ b/clang/lib/Serialization/ASTReaderDecl.cpp
+@@ -3642,7 +3642,6 @@ template<>
+ void ASTDeclReader::attachPreviousDeclImpl(ASTReader &Reader,
+                                            Redeclarable<VarDecl> *D,
+                                            Decl *Previous, Decl *Canon) {
+-  auto *VD = static_cast<VarDecl *>(D);
+   auto *PrevVD = cast<VarDecl>(Previous);
+   D->RedeclLink.setPrevious(PrevVD);
+   D->First = PrevVD->First;
+@@ -3650,11 +3649,20 @@ void ASTDeclReader::attachPreviousDeclImpl(ASTReader &Reader,
+   // We should keep at most one definition on the chain.
+   // FIXME: Cache the definition once we've found it. Building a chain with
+   // N definitions currently takes O(N^2) time here.
++  auto *VD = static_cast<VarDecl *>(D);
+   if (VD->isThisDeclarationADefinition() == VarDecl::Definition) {
+     for (VarDecl *CurD = PrevVD; CurD; CurD = CurD->getPreviousDecl()) {
+       if (CurD->isThisDeclarationADefinition() == VarDecl::Definition) {
++        // FIXME: For header modules, there are some problems if we don't
++        // demote definition to declaration.
++        // See clang/test/Modules/module-init-forcelly-loaded-module.cpp
++        // for example. Maybe we are able to handle the CodeGen part
++        // to avoid it emitting duplicated definitions. But just workaround
++        // now temporarily.
++        if (VD->getOwningModule() &&
++            VD->getOwningModule()->isHeaderLikeModule())
++          VD->demoteThisDefinitionToDeclaration();
+         Reader.mergeDefinitionVisibility(CurD, VD);
+-        VD->demoteThisDefinitionToDeclaration();
+         break;
+       }
+     }
+diff --git a/clang/test/Modules/demote-var-def.cpp b/clang/test/Modules/demote-var-def.cpp
+new file mode 100644
+index 000000000000..811440dd736f
+--- /dev/null
++++ b/clang/test/Modules/demote-var-def.cpp
+@@ -0,0 +1,94 @@
++// RUN: rm -rf %t
++// RUN: mkdir -p %t
++// RUN: split-file %s %t
++// RUN: cd %t
++//
++// DEFINE: %{common-flags}= -I %t -isystem %t -xc++ -std=c++20 -fmodules
++//
++// RUN: mkdir -p %t/b2
++// RUN: mkdir -p %t/b1
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_d \
++// RUN:     d.cppmap -o d.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_a \
++// RUN:     -fmodule-file=d.pcm  a.cppmap -o a.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_b2 \
++// RUN:     -fmodule-file=a.pcm b2/b.cppmap -o b2/b.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_b1 \
++// RUN:     -fmodule-file=b2/b.pcm b1/b.cppmap -o b1/b.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_f \
++// RUN:     -fmodule-file=b1/b.pcm f.cppmap -o f.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module -fmodule-name=module_c \
++// RUN:     -fmodule-file=f.pcm c.cppmap -o c.pcm
++// RUN: %clang_cc1 %{common-flags} -emit-module \
++// RUN:     -fmodule-name=module_e e.cppmap -o e.pcm
++//
++// RUN: %clang_cc1 %{common-flags} \
++// RUN:     -fmodule-file=c.pcm -fmodule-file=e.pcm \
++// RUN:     src.cpp -o src.pic.o
++
++//--- invoke.h
++#ifndef _LIBCPP___TYPE_TRAITS_IS_SAME_H
++#define _LIBCPP___TYPE_TRAITS_IS_SAME_H
++namespace std { inline namespace _LIBCPP_ABI_NAMESPACE {
++template <class _Tp, class _Up>
++constexpr bool is_same_v = __is_same(_Tp, _Up);
++} }
++#endif
++
++//--- memory
++#include <invoke.h>
++namespace std { inline namespace _LIBCPP_ABI_NAMESPACE {
++template <class _Tp>
++using __decay_t = __decay(_Tp);
++template <class _Tp>
++using decay_t = __decay_t<_Tp>;
++} }
++
++//--- other.h
++#include <invoke.h>
++
++//--- a.cppmap
++module "module_a" {
++}
++
++//--- b1/b.cppmap
++module "module_b1" {
++}
++
++//--- b2/b.cppmap
++module "module_b2" {
++}
++
++//--- c.cppmap
++module "module_c" {
++}
++
++//--- d.cppmap
++module "module_d" {
++    header "d.h"
++}
++
++//--- d.h
++#include <other.h>
++
++//--- e.cppmap
++module "module_e" {
++    header "e.h"
++}
++
++//--- e.h
++#include <memory>
++
++//--- f.cppmap
++module "module_f" {
++}
++
++//--- src.cpp
++#include <d.h>
++#include <memory>
++template <typename T>
++concept coroutine_result =
++    std::is_same_v<std::decay_t<T>, T>;
++template <coroutine_result R>
++class Co;
++using T = Co<void>;
+diff --git a/clang/test/Modules/module-init-forcelly-loaded-module.cpp b/clang/test/Modules/module-init-forcelly-loaded-module.cpp
+new file mode 100644
+index 000000000000..8e62134916a2
+--- /dev/null
++++ b/clang/test/Modules/module-init-forcelly-loaded-module.cpp
+@@ -0,0 +1,83 @@
++// RUN: rm -rf %t
++// RUN: mkdir -p %t
++// RUN: split-file %s %t
++// RUN: cd %t
++//
++// RUN: %clang_cc1 -fmodule-name=test -fno-cxx-modules -fmodule-map-file-home-is-cwd -xc++ -emit-module \
++// RUN:     -triple %itanium_abi_triple \
++// RUN:     -iquote . -fmodules -fno-implicit-modules %t/test.cppmap -o %t/test.pcm
++// RUN: %clang_cc1 -fmodule-name=test2 -fno-cxx-modules -fmodule-map-file-home-is-cwd -xc++ -emit-module \
++// RUN:     -iquote . -fmodules -fno-implicit-modules %t/test2.cppmap -o %t/test2.pcm \
++// RUN:     -triple %itanium_abi_triple
++// RUN: %clang_cc1 -fno-cxx-modules -fmodule-map-file-home-is-cwd -fmodules -fno-implicit-modules \
++// RUN:     -fmodule-file=%t/test.pcm -fmodule-file=%t/test2.pcm %t/test.cc \
++// RUN:     -triple %itanium_abi_triple \
++// RUN:     -emit-llvm -o - | FileCheck %t/test.cc
++
++//--- common.h
++#ifndef COMMON_H
++#define COMMON_H
++extern "C" void exit(int);
++namespace namespace_foo {
++class FooBar {};
++namespace namespace_bar {
++class RegisterOnce;
++template <const FooBar&>
++struct FooBarRegisterer {
++  static const RegisterOnce kRegisterOnce;
++};
++class RegisterOnce {};
++void RegisterFooBarImpl();
++template <const FooBar& t>
++const RegisterOnce FooBarRegisterer<t>::kRegisterOnce =
++    (RegisterFooBarImpl(), RegisterOnce());
++template <FooBar& tag,
++          const RegisterOnce& =
++              FooBarRegisterer<tag>::kRegisterOnce>
++FooBar CreateFooBarInternal ;
++}  
++template <FooBar& tag>
++FooBar CreateFooBar(
++    int , int ,
++    int ) {
++  return namespace_bar::CreateFooBarInternal<tag>;
++}
++FooBar kNullArgumentFooBar =
++    CreateFooBar<kNullArgumentFooBar>(1, 0, 0);
++namespace namespace_bar {
++void RegisterFooBarImpl() {
++  static bool donealready = false;
++  if (donealready) 
++    exit(1);
++  donealready = true;
++}
++}
++}
++#endif
++
++//--- test.cc
++int main() {}
++
++// Check that we won't have multiple initializer by not calling RegisterFooBarImpl twice
++// CHECK: call {{.*}}@_ZN13namespace_foo13namespace_bar18RegisterFooBarImplEv
++// CHECK-NOT: call {{.*}}@_ZN13namespace_foo13namespace_bar18RegisterFooBarImplEv
++
++//--- test.cppmap
++module "test" {
++    header "test.h"
++}
++
++//--- test.h
++#ifndef test
++#include "common.h"
++#endif  
++
++//--- test2.cppmap
++module "test2" {
++    header "test2.h"
++}
++
++//--- test2.h
++#ifndef test2
++#include "common.h"
++#endif
+diff --git a/clang/test/Modules/pr149404-02.cppm b/clang/test/Modules/pr149404-02.cppm
+new file mode 100644
+index 000000000000..291619ea05b8
+--- /dev/null
++++ b/clang/test/Modules/pr149404-02.cppm
+@@ -0,0 +1,104 @@
++// RUN: rm -rf %t
++// RUN: mkdir -p %t
++// RUN: split-file %s %t
++
++// RUN: %clang_cc1 -std=c++20 -emit-module-interface -o %t/format.pcm %t/format.cppm
++// RUN: %clang_cc1 -std=c++20  -emit-module-interface -o %t/includes_in_gmf.pcm %t/includes_in_gmf.cppm
++// RUN: %clang_cc1 -std=c++20 -fprebuilt-module-path=%t %t/test.cpp -verify -fsyntax-only
++
++// RUN: %clang_cc1 -std=c++20 -emit-reduced-module-interface -o %t/format.pcm %t/format.cppm
++// RUN: %clang_cc1 -std=c++20  -emit-reduced-module-interface -o %t/includes_in_gmf.pcm %t/includes_in_gmf.cppm
++// RUN: %clang_cc1 -std=c++20 -fprebuilt-module-path=%t %t/test.cpp -verify -fsyntax-only
++
++//--- format.h
++#pragma once
++
++namespace test {
++
++template <class _Tp>
++struct type_identity {
++    typedef _Tp type;
++};
++
++template <class _Tp>
++using type_identity_t = typename type_identity<_Tp>::type;
++
++
++template <class _Tp, class _CharT>
++struct formatter
++{
++    formatter() = delete;
++};
++
++template <>
++struct formatter<char, char>
++{};
++
++template <class _CharT, class... _Args>
++struct basic_format_string {
++    static inline const int __handles_{ [] {
++        formatter<char, _CharT> f;
++        (void)f;
++        return 0;
++        }() };
++    
++    consteval basic_format_string(const _CharT*) {
++        (void)__handles_;
++    }
++};
++
++template <class... _Args>
++using wformat_string = basic_format_string<wchar_t, type_identity_t<_Args>...>;
++
++template <class... _Args>
++using format_string = basic_format_string<char, type_identity_t<_Args>...>;
++
++template <class... _Args>
++void format(format_string<_Args...> __fmt, _Args&&... __args) {}
++
++template <class... _Args>
++void format(wformat_string<_Args...> __fmt, _Args&&... __args) {}
++
++}
++
++//--- format.cppm
++module;
++#include "format.h"
++export module format;
++
++export namespace test {
++	using test::format;
++	using test::formatter;
++	using test::format_string;
++}
++
++auto something() -> void
++{
++	auto a = 'a';
++	test::format("{}", a);
++}
++
++//--- includes_in_gmf.cppm
++module;
++#include "format.h"
++export module includes_in_gmf;
++
++namespace test {
++	using test::format;
++	using test::formatter;
++	using test::format_string;
++}
++
++//--- test.cpp
++// expected-no-diagnostics
++import format;
++import includes_in_gmf;
++
++auto what() -> void
++{
++    auto a = 'a';
++    test::format("{}", a);
++
++    constexpr auto fs = "{}"; // test::format_string<char>{ "{}" }; // <- same result even passing exact param type
++    test::format(fs, 'r');
++}
+diff --git a/clang/test/Modules/pr172241.cppm b/clang/test/Modules/pr172241.cppm
+new file mode 100644
+index 000000000000..3eb885e8b2d9
+--- /dev/null
++++ b/clang/test/Modules/pr172241.cppm
+@@ -0,0 +1,47 @@
++// RUN: rm -rf %t
++// RUN: mkdir -p %t
++// RUN: split-file %s %t
++//
++// RUN: %clang_cc1 -std=c++20 -triple %itanium_abi_triple %t/m.cppm -emit-module-interface -o %t/m.pcm
++// RUN: %clang_cc1 -std=c++20 -triple %itanium_abi_triple %t/use.cpp -fmodule-file=m=%t/m.pcm -emit-llvm -o - | FileCheck %t/use.cpp
++//
++// RUN: %clang_cc1 -std=c++20 -triple %itanium_abi_triple %t/m.cppm -emit-reduced-module-interface -o %t/m.pcm
++// RUN: %clang_cc1 -std=c++20 -triple %itanium_abi_triple %t/use.cpp -fmodule-file=m=%t/m.pcm -emit-llvm -o - | FileCheck %t/use.cpp
++
++//--- header.h
++#pragma once
++
++template <unsigned T>
++class Templ {
++public:
++    void lock() { __set_locked_bit(); }
++
++private:
++    static constexpr auto __set_locked_bit = [](){};
++};
++
++class JT {
++public:
++    ~JT() {
++        Templ<4> state;
++        state.lock();
++    }
++};
++
++//--- m.cppm
++module;
++#include "header.h"
++export module m;
++export struct M {
++    JT jt;
++};
++//--- use.cpp
++#include "header.h"
++import m;
++
++int main() {
++    M m;
++    return 0;
++}
++
++// CHECK: @_ZN5TemplILj4EE16__set_locked_bitE = {{.*}}linkonce_odr
+diff --git a/clang/test/Modules/var-inst-def.cppm b/clang/test/Modules/var-inst-def.cppm
+new file mode 100644
+index 000000000000..3bb442ef0d2c
+--- /dev/null
++++ b/clang/test/Modules/var-inst-def.cppm
+@@ -0,0 +1,110 @@
++// RUN: rm -rf %t
++// RUN: mkdir -p %t
++// RUN: split-file %s %t
++// RUN: cd %t
++//
++// RUN: %clang_cc1 -fmodule-name=A -xc++ -emit-module -fmodules \
++// RUN:   -fno-cxx-modules -fno-implicit-modules \
++// RUN:   -fmodule-map-file-home-is-cwd -std=c++20 -I. a.modulemap -o a.pcm
++//
++// RUN: %clang_cc1 -fmodule-name=B -xc++ -emit-module -fmodules \
++// RUN:   -fno-cxx-modules -fno-implicit-modules \
++// RUN:   -fmodule-map-file-home-is-cwd -std=c++20 -I. b.modulemap -o b.pcm
++//
++// RUN: %clang_cc1 -fmodule-name=C -xc++ -emit-module -fmodules \
++// RUN:   -fno-cxx-modules -fno-implicit-modules \
++// RUN:   -fmodule-map-file-home-is-cwd -std=c++20 -I. c.modulemap -o c.pcm
++//
++// RUN: %clang_cc1 -fno-cxx-modules -fmodules -fno-implicit-modules \
++// RUN:   -fmodule-map-file-home-is-cwd \
++// RUN:   -fmodule-file=a.pcm -fmodule-file=b.pcm -fmodule-file=c.pcm \
++// RUN:   -std=c++20 -I. main.cpp -o /dev/null
++
++//--- a.modulemap
++module "A" { header "a.h" }
++//--- b.modulemap
++module "B" { header "b.h" }
++//--- c.modulemap
++module "C" { header "c.h" }
++
++//--- common.h
++#pragma once
++#include "stl.h"
++
++//--- a.h
++#pragma once
++#include "common.h"
++#include "repro.h"
++
++//--- b.h
++#pragma once
++#include "common.h"
++#include "repro.h"
++
++//--- c.h
++#pragma once
++#include "common.h"
++#include "repro.h"
++
++//--- repro.h
++#pragma once
++#include "stl.h"
++
++namespace k {
++template <template <typename> class , typename >
++struct is_instantiation : std::integral_constant<bool, false> {};
++template <template <typename> class C, typename T>
++constexpr bool is_instantiation_v = is_instantiation<C, T>::value;
++}  
++
++struct ThreadState;
++
++namespace cc::subtle {
++template <typename T>
++class U;
++}  
++namespace cc {
++template <typename T> class Co;
++namespace internal {
++template <typename T>
++class Promise {
++  static_assert(!k::is_instantiation_v<subtle::U, T>);
++};
++}  
++}
++
++//--- stl.h
++#pragma once
++namespace std {
++inline namespace abi {
++template <class _Tp, _Tp __v>
++struct integral_constant {
++  static const _Tp value = __v;
++};
++template <class _Tp, class _Up>
++constexpr bool is_same_v = __is_same(_Tp, _Up);
++template <class _Tp>
++using decay_t = __decay(_Tp);
++
++template <class>
++struct __invoke_result_impl ;
++template <class... _Args>
++using invoke_result_t = __invoke_result_impl<_Args...>;
++}
++}
++
++//--- main.cpp
++#include "a.h"
++#include "stl.h"
++
++namespace cc {
++template <typename F>
++  requires k::is_instantiation_v<Co, std::invoke_result_t<F>>
++using result_type =
++    std::invoke_result_t<F>;
++}  
++namespace cc::internal {
++class final {
++ Promise<ThreadState> outgoing_work_;
++};
++}
+-- 
+2.56.0.313.g2479322e68-goog
+

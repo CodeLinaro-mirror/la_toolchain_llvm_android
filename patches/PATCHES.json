@@ -1320,6 +1320,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [Serialization] Stop demote var definition as declaration (#172430) (#177117) (#184287)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/6e1ab3a4310d3c385a06e1c575f1eca58990e733.patch",
+        "version_range": {
+            "from": 574158,
+            "until": 609256
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [InstSimplify] Fix Compilation Hang in simplifyExtractValueInst (#190279)"
         },
         "platforms": [
