@@ -677,13 +677,6 @@ class LLVMBuilder(LLVMBaseBuilder):
         else:
             defines['LLDB_ENABLE_PYTHON'] = 'OFF'
 
-        if self.liblzma:
-            defines['LLDB_ENABLE_LZMA'] = 'ON'
-            defines['LIBLZMA_INCLUDE_DIR'] = str(self.liblzma.include_dir)
-            defines['LIBLZMA_LIBRARY'] = str(self.liblzma.link_libraries[0])
-        else:
-            defines['LLDB_ENABLE_LZMA'] = 'OFF'
-
         if self.libedit:
             defines['LLDB_ENABLE_LIBEDIT'] = 'ON'
             defines['LibEdit_INCLUDE_DIRS'] = str(self.libedit.include_dir)
@@ -811,6 +804,13 @@ class LLVMBuilder(LLVMBaseBuilder):
             defines['zstd_INCLUDE_DIR'] = self.libzstd.include_dir
         else:
             defines['LLVM_ENABLE_ZSTD'] = 'OFF'
+
+        if self.liblzma:
+            defines['LLVM_ENABLE_LZMA'] = 'FORCE_ON'
+            defines['LIBLZMA_INCLUDE_DIR'] = str(self.liblzma.include_dir)
+            defines['LIBLZMA_LIBRARY'] = str(self.liblzma.link_libraries[0])
+        else:
+            defines['LLVM_ENABLE_LZMA'] = 'OFF'
 
         if self.build_lldb:
             self._set_lldb_flags(self._config.target_os, defines)
