@@ -1709,24 +1709,30 @@ class LibSimpleperfReadElfBuilder(base_builders.LLVMRuntimeBuilder):
     def install_config(self) -> None:
         self.build_readelf_lib(self.output_dir / 'lib', self.install_dir)
 
-    def build_readelf_lib(self, llvm_lib_dir: Path, out_dir: Path, is_darwin_lib: bool = False):
+    def build_readelf_lib(self,
+                          llvm_lib_dir: Path,
+                          out_dir: Path,
+                          is_darwin_lib: bool = False,
+                          extra_libs: Optional[List[Path]] = None):
         llvm_lib_dir = llvm_lib_dir.absolute()
         out_dir = out_dir.absolute()
         out_dir.mkdir(parents=True, exist_ok=True)
         out_file = out_dir / self.target_libname
         out_file.unlink(missing_ok=True)
+        extra_lib_paths = [lib.absolute() for lib in (extra_libs or [])]
         if is_darwin_lib:
+            libs = self.llvm_libs + [str(lib) for lib in extra_lib_paths]
             utils.check_call([str(self.toolchain.path / 'bin' / 'llvm-libtool-darwin'),
-                              '--static', '-o', str(out_file)] + self.llvm_libs, cwd=llvm_lib_dir)
+                              '--static', '-o', str(out_file)] + libs, cwd=llvm_lib_dir)
         else:
             with tempfile.TemporaryDirectory(dir=paths.OUT_DIR) as tmp_dirname:
                 tmp_dir = Path(tmp_dirname).absolute()
-                for name in self.llvm_libs:
-                    lib_path = llvm_lib_dir / name
+                lib_paths = [llvm_lib_dir / name for name in self.llvm_libs] + extra_lib_paths
+                for i, lib_path in enumerate(lib_paths):
                     assert lib_path.is_file(), f'{lib_path} not found'
                     # The libraries can have object files with the same name. To avoid conflict,
                     # extract each library into a distinct directory.
-                    extract_dir = tmp_dir / name[:-2]
+                    extract_dir = tmp_dir / f'{i}_{lib_path.stem}'
                     extract_dir.mkdir()
                     utils.check_call([str(self.toolchain.ar), '-x', str(lib_path)], cwd=extract_dir)
                 utils.check_call(f'{self.toolchain.ar} -cqs {out_file} */*', cwd=tmp_dir,

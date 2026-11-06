@@ -158,8 +158,11 @@ def build_llvm_for_windows(enable_assertions: bool,
         libsimpleperf_readelf_builder = builders.LibSimpleperfReadElfBuilder(config_list)
         if full_build:
             # The libs have been built in win_builder.
+            extra_libs = win_builder.liblzma.link_libraries if win_builder.liblzma else None
             libsimpleperf_readelf_builder.build_readelf_lib(
-                win_builder.output_dir / 'lib', libsimpleperf_readelf_builder.install_dir)
+                win_builder.output_dir / 'lib',
+                libsimpleperf_readelf_builder.install_dir,
+                extra_libs=extra_libs)
         else:
             libsimpleperf_readelf_builder.enable_assertions = enable_assertions
             libsimpleperf_readelf_builder.build()
@@ -556,12 +559,11 @@ def package_toolchain(toolchain_builder: LLVMBuilder,
             install_winpthreads(bin_dir, lib_dir)
 
         # Archive libsimpleperf_readelf.a for linux and darwin hosts from stage2 build.
-        if host.is_linux:
-            builders.LibSimpleperfReadElfBuilder().build_readelf_lib(lib_dir,
-                                                                     lib_dir / host_config.llvm_triple)
-        elif host.is_darwin:
-            builders.LibSimpleperfReadElfBuilder().build_readelf_lib(lib_dir, lib_dir,
-                                                                     is_darwin_lib=True)
+        if host.is_linux or host.is_darwin:
+            readelf_out_dir = lib_dir / host_config.llvm_triple if host.is_linux else lib_dir
+            extra_libs = toolchain_builder.liblzma.link_libraries if toolchain_builder.liblzma else None
+            builders.LibSimpleperfReadElfBuilder().build_readelf_lib(
+                lib_dir, readelf_out_dir, is_darwin_lib=host.is_darwin, extra_libs=extra_libs)
 
     # Remove unnecessary static libraries.
     if not builders_package:
