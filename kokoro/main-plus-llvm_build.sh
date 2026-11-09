@@ -27,5 +27,6 @@ prebuilts/python/linux-x86/bin/python3 \
   toolchain/llvm_android/test_compiler.py --build-only \
   --target ${AOSP_BUILD_TARGET}-next-userdebug \
   --module sync \
+  --module host-unit-tests \
   --clang-package-path ${KOKORO_GFILE_DIR} .
 
