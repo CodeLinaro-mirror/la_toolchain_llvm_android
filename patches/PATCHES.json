@@ -926,6 +926,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[BACKPORT] [VPlan] Match induction before querying truncate lane usage (#233651)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/3adc3bc8d91fc9e76ac204e32569f362d248b532.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 641501
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[BACKPORT] [Clang][Parse] Rescope __extension__ suppression in ParseCondition (#235105)"
         },
         "platforms": [
@@ -1121,6 +1135,20 @@
         "version_range": {
             "from": 614150,
             "until": 614151
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert \"[ConstraintElim] Bound IVs by compares of the phi in header/latch. (#226297)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-3b5fbbd0b5f867347258deed7d0f3c3e90fb1c9e.patch",
+        "version_range": {
+            "from": 639965,
+            "until": null
         }
     }
 ]
