@@ -884,6 +884,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[BACKPORT] [BPF] Expand atomicrmw sub into atomicrmw add of negated value (#236193)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/283045b7b4106a16231757ac2d8d70cc98197c69.patch",
+        "version_range": {
+            "from": 614150,
+            "until": 639965
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[UPSTREAM] [compiler-rt][ARM] Mark optimized FP add/sub asm as superseding aeabi_[df]rsub.c (#230739)"
         },
         "platforms": [
@@ -931,9 +945,9 @@
         "platforms": [
             "android"
         ],
-        "rel_patch_path": "cherry/283045b7b4106a16231757ac2d8d70cc98197c69.patch",
+        "rel_patch_path": "cherry/283045b7b4106a16231757ac2d8d70cc98197c69-v2.patch",
         "version_range": {
-            "from": 614150,
+            "from": 639965,
             "until": 644335
         }
     },
