@@ -1206,5 +1206,19 @@
             "from": 639965,
             "until": null
         }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "Revert \"[BOLT] Instrument static PIEs through entry point (#204475)\""
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "Revert-5f3e70ca97a835605ee54f01e00d883a3be0d220.patch",
+        "version_range": {
+            "from": 639965,
+            "until": null
+        }
     }
 ]
