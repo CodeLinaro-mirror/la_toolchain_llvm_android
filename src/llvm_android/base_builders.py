@@ -667,6 +667,15 @@ class LLVMBuilder(LLVMBaseBuilder):
         if target.is_darwin:
             # Avoids the build of debug server. It is only used in testing.
             defines['LLDB_USE_SYSTEM_DEBUGSERVER'] = 'ON'
+            # Link the Python script interpreter plugin and bundled libpython
+            # directly into liblldb.dylib (matching Linux/Windows) instead of
+            # building a dynamic plugin. Dynamic plugins fail universal
+            # (arm64;x86_64) linking due to arch-specific va_list mangling in
+            # -exported_symbols_list
+            # (https://github.com/llvm/llvm-project/issues/240535), and
+            # PythonRuntimeLoaderDarwin only searches for Python.framework
+            # rather than our bundled python3/lib/libpython3.dylib.
+            defines['LLDB_ENABLE_DYNAMIC_SCRIPTINTERPRETERS'] = 'OFF'
 
         defines['LLDB_ENABLE_LUA'] = 'OFF'
 
