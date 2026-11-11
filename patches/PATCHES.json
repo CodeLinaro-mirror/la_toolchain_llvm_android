@@ -1024,6 +1024,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [BPF] Wrap both cross-BB icmp conditions in BPFAdjustOpt (#231257)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/e79ba212575a7b27f3d55a4abdcd141dcb21d135.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 645681
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
@@ -1191,20 +1205,6 @@
         "version_range": {
             "from": 614150,
             "until": 614151
-        }
-    },
-    {
-        "metadata": {
-            "info": [],
-            "title": "Revert \"[ConstraintElim] Bound IVs by compares of the phi in header/latch. (#226297)\""
-        },
-        "platforms": [
-            "android"
-        ],
-        "rel_patch_path": "Revert-3b5fbbd0b5f867347258deed7d0f3c3e90fb1c9e.patch",
-        "version_range": {
-            "from": 639965,
-            "until": 639966
         }
     },
     {
