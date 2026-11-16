@@ -64,7 +64,7 @@ Reviewers must evaluate changes across several critical operational, security, a
   * Toolchain builds (`linux.cfg`, `linux-tot.cfg`): Target `git/dist/*` to preserve deployable compiler packages.
   * Integration builds (`aosp_cf_*.cfg`): Must restrict artifact harvesting strictly to `git/out/error.log`. Archiving full distribution or output directories in Android integration builds causes severe rsync overhead, stalls the worker, and exhausts storage.
 * **GCS Destination Root**: All artifacts must upload to the designated storage bucket `android-llvm-kokoro-ci-artifacts`.
-* **Execution Timeouts**: Platform builds must enforce `timeout_mins: 240`. Normal builds finish well within 180 minutes; excessive timeouts prevent timely cancellation of hung build jobs.
+* **Execution Timeouts**: Platform `main-plus-llvm` builds must enforce a timeout slightly longer than the typical runtime so hung build jobs are still cancelled in a timely manner.
 
 ---
 
@@ -169,7 +169,7 @@ Before submitting changes to `toolchain/llvm_android/kokoro`, authors must compl
 * Validate that all modified `.cfg` files follow the Kokoro build configuration protobuf schema:
   * Verify all string literals are enclosed in quotes.
   * Check that `build_file` references valid relative repository paths (e.g., `git/toolchain/llvm_android/kokoro/...`).
-  * Ensure `timeout_mins` does not exceed 240 minutes.
+  * Ensure `timeout_mins` for platform `main-plus-llvm` builds is set slightly longer than the typical runtime.
 
 ---
 
