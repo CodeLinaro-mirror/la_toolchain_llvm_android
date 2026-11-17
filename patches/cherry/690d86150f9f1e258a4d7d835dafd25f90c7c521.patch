@@ -1,0 +1,80 @@
+From 690d86150f9f1e258a4d7d835dafd25f90c7c521 Mon Sep 17 00:00:00 2001
+From: Cheng Lingfei <chenglingfei@foxmail.com>
+Date: Sun, 18 Oct 2026 11:29:46 +0800
+Subject: [PATCH] [LFI][MC] Mark .note.LFI.ABI section with SHF_GNU_RETAIN
+ (#233164)
+
+Sections in a COMDAT group are subject to garbage collection during
+linking when `--gc-sections` is enabled (even SHT_NOTE sections).
+Because nothing references `.note.LFI.ABI.<arch>`, the deduplicated note
+was previously removed by the linker with `-Wl,--gc-sections`.
+
+Add `SHF_GNU_RETAIN` to `.note.LFI.ABI.<arch>` so that linkers recognize
+it as a GC root while still deduplicating it via COMDAT.
+
+Fixes #233086.
+---
+ llvm/lib/MC/MCLFI.cpp               | 7 ++++---
+ llvm/test/MC/AArch64/LFI/abi-note.s | 4 ++--
+ llvm/test/MC/X86/LFI/abi-note.s     | 4 ++--
+ 3 files changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/llvm/lib/MC/MCLFI.cpp b/llvm/lib/MC/MCLFI.cpp
+index 24d8c4351c43b..d5f9ee96ead11 100644
+--- a/llvm/lib/MC/MCLFI.cpp
++++ b/llvm/lib/MC/MCLFI.cpp
+@@ -76,9 +76,10 @@ void llvm::emitLFINoteSection(MCStreamer &Streamer, MCContext &Ctx) {
+ 
+   // Emit an ELF Note section in its own COMDAT group which identifies LFI
+   // object files.
+-  MCSectionELF *Note = Ctx.getELFSection(NoteName, ELF::SHT_NOTE,
+-                                         ELF::SHF_ALLOC | ELF::SHF_GROUP, 0,
+-                                         NoteName, /*IsComdat=*/true);
++  MCSectionELF *Note = Ctx.getELFSection(
++      NoteName, ELF::SHT_NOTE,
++      ELF::SHF_ALLOC | ELF::SHF_GROUP | ELF::SHF_GNU_RETAIN, 0, NoteName,
++      /*IsComdat=*/true);
+ 
+   Streamer.switchSection(Note);
+   Streamer.emitIntValue(strlen(NoteNamespace) + 1, 4);
+diff --git a/llvm/test/MC/AArch64/LFI/abi-note.s b/llvm/test/MC/AArch64/LFI/abi-note.s
+index 83bbab607d297..991da8d0d9eb0 100644
+--- a/llvm/test/MC/AArch64/LFI/abi-note.s
++++ b/llvm/test/MC/AArch64/LFI/abi-note.s
+@@ -1,7 +1,7 @@
+ // RUN: llvm-mc -triple aarch64_lfi %s | FileCheck %s
+ // RUN: llvm-mc -filetype=obj -triple aarch64_lfi %s | llvm-readelf -S - | FileCheck %s --check-prefix=ELF
+ 
+-// CHECK:      .section .note.LFI.ABI.aarch64,"aG",@note,.note.LFI.ABI.aarch64,comdat
++// CHECK:      .section .note.LFI.ABI.aarch64,"aGR",@note,.note.LFI.ABI.aarch64,comdat
+ // CHECK-NEXT: .word 4
+ // CHECK-NEXT: .word 8
+ // CHECK-NEXT: .word 1
+@@ -12,4 +12,4 @@
+ // CHECK-NEXT: .byte 0
+ // CHECK-NEXT: .p2align 2, 0x0
+ 
+-// ELF: .note.LFI.ABI.aarch64 NOTE {{.*}} AG
++// ELF: .note.LFI.ABI.aarch64 NOTE {{.*}} AGR
+diff --git a/llvm/test/MC/X86/LFI/abi-note.s b/llvm/test/MC/X86/LFI/abi-note.s
+index 92fb457873a63..c12e522f32063 100644
+--- a/llvm/test/MC/X86/LFI/abi-note.s
++++ b/llvm/test/MC/X86/LFI/abi-note.s
+@@ -1,7 +1,7 @@
+ // RUN: llvm-mc -triple x86_64_lfi %s | FileCheck %s
+ // RUN: llvm-mc -filetype=obj -triple x86_64_lfi %s | llvm-readelf -S - | FileCheck %s --check-prefix=ELF
+ 
+-// CHECK:      .section .note.LFI.ABI.x86_64,"aG",@note,.note.LFI.ABI.x86_64,comdat
++// CHECK:      .section .note.LFI.ABI.x86_64,"aGR",@note,.note.LFI.ABI.x86_64,comdat
+ // CHECK-NEXT: .long 4
+ // CHECK-NEXT: .long 7
+ // CHECK-NEXT: .long 1
+@@ -12,4 +12,4 @@
+ // CHECK-NEXT: .byte 0
+ // CHECK-NEXT: .p2align 2, 0x0
+ 
+-// ELF: .note.LFI.ABI.x86_64 NOTE {{.*}} AG
++// ELF: .note.LFI.ABI.x86_64 NOTE {{.*}} AGR
+-- 
+2.56.0.611.g1030f0b940-goog
+

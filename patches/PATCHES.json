@@ -954,6 +954,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [LFI][MC] Mark .note.LFI.ABI section with SHF_GNU_RETAIN (#233164)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/690d86150f9f1e258a4d7d835dafd25f90c7c521.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 641067
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "[BACKPORT] [VPlan] Match induction before querying truncate lane usage (#233651)"
         },
         "platforms": [
@@ -963,6 +977,20 @@
         "version_range": {
             "from": 639965,
             "until": 641501
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][libunwind] Enable x86_64_lfi for compiler-rt and skip reserved registers in libunwind (#232552)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/987ee202905055120a44348af86ca878c4f55722.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 641859
         }
     },
     {
@@ -1019,6 +1047,20 @@
         "version_range": {
             "from": 639965,
             "until": 644335
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][X86] Add memory access rewrites (#227511)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/345bc91179a06040e3eae6cf0f10c2104d58a9f1.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 645409
         }
     },
     {
@@ -1089,6 +1131,34 @@
         "version_range": {
             "from": 639965,
             "until": 646451
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[UPSTREAM] [LFI][AArch64] Do not save or restore LFI reserved registers (#241545)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/21693ba38cf4ba03a44cb6dcc7f5509ada342efc.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 646612
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
+            "title": "[BACKPORT] [LFI] Use context register for runtime call offsets (#241549)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/eb5b522d5bef7235d925d8c17a5b43d4f3acbb27.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 646952
         }
     },
     {

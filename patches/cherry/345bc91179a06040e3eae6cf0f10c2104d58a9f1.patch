@@ -1,0 +1,1969 @@
+From 345bc91179a06040e3eae6cf0f10c2104d58a9f1 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Mon, 9 Nov 2026 17:39:39 -0800
+Subject: [PATCH] [LFI][X86] Add memory access rewrites (#227511)
+
+This adds memory access rewriting for the x86-64 LFI target using `%gs`
+as the base register for rewrites. By using 32-bit register combined
+with the sandbox base in `%gs`, memory accesses can be rewritten to be
+confined to an LFI sandbox with little overhead. See the documentation
+in `LFI.md` for details on exact rewrite sequences.
+---
+ llvm/docs/LFI.md                              | 198 +++++-
+ .../X86/MCTargetDesc/X86MCLFIRewriter.cpp     | 600 +++++++++++++++++-
+ .../X86/MCTargetDesc/X86MCLFIRewriter.h       |  44 +-
+ llvm/lib/Target/X86/X86ISelLowering.cpp       |   5 +
+ llvm/test/CodeGen/X86/lfi-atomic-bit-test.ll  |  42 ++
+ llvm/test/CodeGen/X86/lfi-rep-string.ll       |  25 +
+ llvm/test/MC/X86/LFI/control-flow.s           |  19 +-
+ llvm/test/MC/X86/LFI/memory-errors.s          | 176 +++++
+ llvm/test/MC/X86/LFI/memory.s                 | 162 +++++
+ llvm/test/MC/X86/LFI/stack.s                  | 115 ++++
+ llvm/test/MC/X86/LFI/string.s                 |  74 +++
+ llvm/test/MC/X86/LFI/thread-pointer.s         |  38 +-
+ 12 files changed, 1443 insertions(+), 55 deletions(-)
+ create mode 100644 llvm/test/CodeGen/X86/lfi-atomic-bit-test.ll
+ create mode 100644 llvm/test/CodeGen/X86/lfi-rep-string.ll
+ create mode 100644 llvm/test/MC/X86/LFI/memory-errors.s
+ create mode 100644 llvm/test/MC/X86/LFI/memory.s
+ create mode 100644 llvm/test/MC/X86/LFI/stack.s
+ create mode 100644 llvm/test/MC/X86/LFI/string.s
+
+diff --git a/llvm/docs/LFI.md b/llvm/docs/LFI.md
+index 7b5eb453357db..c456c93b0af8e 100644
+--- a/llvm/docs/LFI.md
++++ b/llvm/docs/LFI.md
+@@ -644,8 +644,14 @@ guarding the target register instead.
+ In the following assembly rewrites, some shorthand is used.
+ 
+ - `%rN` or `%eN`: refers to any general-purpose non-reserved register.
++- `%vN`: refers to any vector register.
+ - `{a,b,c}`: matches any of `a`, `b`, or `c`.
+ - `N(...)`: refers to any memory addressing mode.
++- `N`: refers to any displacement, including none.
++- `S`: refers to any scale.
++- `Op`: refers to any instruction with a memory operand.
++- `MOD`: refers to any instruction that writes the stack pointer.
++- `x?`: matches an optional `x`.
+ 
+ #### Control flow
+ 
+@@ -655,7 +661,8 @@ in the top 32 bits with the sandbox base, producing an address that is both
+ inside the sandbox and bundle-aligned.
+ 
+ Indirect branches through memory first load the branch target into the scratch
+-register (`%r11`), and then dispatch through it.
++register (`%r11`), and then dispatch through it. That load is itself sandboxed
++by the memory access rewrite below.
+ 
+ Returns are rewritten to pop the return address into the scratch register,
+ followed by a sandboxed indirect jump.
+@@ -677,10 +684,10 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
+     jmpq *%rX
+     ```
+ * - ```gas
+-    jmpq *N(...)
++    jmpq *N(%rX)
+     ```
+   - ```gas
+-    movq N(...), %r11
++    movq %gs:N(%eX), %r11
+     andl $-32, %r11d
+     addq %r14, %r11
+     jmpq *%r11
+@@ -694,10 +701,10 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
+     callq *%rX
+     ```
+ * - ```gas
+-    callq *N(...)
++    callq *N(%rX)
+     ```
+   - ```gas
+-    movq N(...), %r11
++    movq %gs:N(%eX), %r11
+     andl $-32, %r11d
+     addq %r14, %r11
+     callq *%r11
+@@ -715,15 +722,174 @@ are resolved at link time. Direct calls are placed at the end of a bundle.
+ 
+ #### Memory accesses
+ 
+-**Note**: these rewrites have not been implemented.
++Memory accesses are confined to the sandbox by rewriting the addressing mode.
++The address is computed from 32-bit registers, so that it wraps within the
++4GiB sandbox rather than escaping it, and a `%gs` segment override supplies the
++sandbox base.
++
++An access based on a register that always holds an address inside the sandbox
++is already safe, and is left alone. Those registers are `%rsp`, `%rip`, and
++`%r14`.
++
++Every addressing mode is rewritten, except those that encode an address without
++dereferencing it, such as `lea` and multi-byte nops.
++
++Only the addressing mode changes, so the rewrites are listed as addressing
++modes rather than whole instructions.
++
++:::{list-table}
++:header-rows: 1
++
++* - Original
++  - Rewritten
++* - ```gas
++    N(%rX)
++    ```
++  - ```gas
++    %gs:N(%eX)
++    ```
++* - ```gas
++    N(%rX, %rY, S)
++    ```
++  - ```gas
++    %gs:N(%eX, %eY, S)
++    ```
++* - ```gas
++    N(, %rY, S)
++    ```
++  - ```gas
++    %gs:N(, %eY, S)
++    ```
++* - ```gas
++    N
++    ```
++  - ```gas
++    N(%r14)
++    ```
++* - ```gas
++    N({%rsp,%rip,%r14})
++    ```
++  - ```gas
++    N({%rsp,%rip,%r14})
++    ```
++* - ```gas
++    leaq N(...), %rX
++    ```
++  - ```gas
++    leaq N(...), %rX
++    ```
++:::
++
++String instructions also address memory implicitly, but they can be rewritten
++and are covered below.
++
++Gather and scatter index memory with a vector register, which holds a separate
++offset for every element rather than part of one address. The index therefore
++keeps its width and only the base is truncated, since the 32-bit address size
++makes each element's address wrap within the sandbox just as a scalar one does.
++A vector index cannot give the access a 32-bit address size on its own, so an
++access with no base register gets `%r14d`, whose value is zero because the
++sandbox base is 4GiB-aligned.
++
++:::{list-table}
++:header-rows: 1
++
++* - Original
++  - Rewritten
++* - ```gas
++    N(%rX, %vY, S)
++    ```
++  - ```gas
++    %gs:N(%eX, %vY, S)
++    ```
++* - ```gas
++    N(, %vY, S)
++    ```
++  - ```gas
++    %gs:N(%r14d, %vY, S)
++    ```
++:::
+ 
+ #### String instructions
+ 
+-**Note**: these rewrites have not been implemented.
++String instructions address memory through `%rdi` and `%rsi`, which cannot be
++replaced by an addressing mode, so the registers themselves are guarded before
++the access. The guard truncates the pointer to a sandbox offset and adds the
++sandbox base back with a `lea`, which does not disturb the flags.
++
++The guards and the access must be in the same bundle, so that control cannot
++enter between them.
++
++`movs` and `cmps` access memory through both registers, `stos` and `scas`
++through `%rdi` alone, and `lods` through `%rsi` alone.
++
++:::{list-table}
++:header-rows: 1
++
++* - Original
++  - Rewritten
++* - ```gas
++    rep? {stos,scas}
++    ```
++  - ```gas
++    .bundle_lock
++    movl %edi, %edi
++    leaq (%r14, %rdi), %rdi
++    rep? {stos,scas}
++    .bundle_unlock
++    ```
++* - ```gas
++    rep? lods
++    ```
++  - ```gas
++    .bundle_lock
++    movl %esi, %esi
++    leaq (%r14, %rsi), %rsi
++    rep? lods
++    .bundle_unlock
++    ```
++* - ```gas
++    rep? {movs,cmps}
++    ```
++  - ```gas
++    .bundle_lock
++    movl %edi, %edi
++    leaq (%r14, %rdi), %rdi
++    movl %esi, %esi
++    leaq (%r14, %rsi), %rsi
++    rep? {movs,cmps}
++    .bundle_unlock
++    ```
++:::
+ 
+ #### Stack modification
+ 
+-**Note**: these rewrites have not been implemented.
++The stack pointer must always hold an address inside the sandbox, so an
++instruction that writes it is demoted to its 32-bit form, which clears the top
++32 bits, and the sandbox base is then added back. As above, the `lea` form of
++the addition is used so that the flags are left alone. Both halves must be in
++the same bundle, so that control cannot enter with an unsandboxed `%rsp`.
++
++The rewrite recognizes `mov`, `lea`, `add`, `sub`, `and`, `or`, and `xor`, and
++reports an error for any other instruction that writes the stack pointer.
++`push` and `pop` move the stack pointer by a fixed amount and perform an
++access, which traps if it exits the sandbox, so they are not rewritten.
++
++:::{list-table}
++:header-rows: 1
++
++* - Original
++  - Rewritten
++* - ```gas
++    MOD ..., %rsp
++    ```
++  - ```gas
++    .bundle_lock
++    MOD ..., %esp
++    leaq (%rsp, %r14), %rsp
++    .bundle_unlock
++    ```
++:::
+ 
+ #### System instructions
+ 
+@@ -753,8 +919,12 @@ block below).
+ Thread pointer accesses via the `%fs` segment (used for TLS) are rewritten to
+ use the virtual thread pointer from the context register (`r15`) at offset 16
+ (see [Context Register](#context-register)). The rewrite handles any load or
+-store instruction with an `%fs`-segment memory operand. `Op` represents any
+-such instruction.
++store instruction with an `%fs`-segment memory operand.
++
++The thread pointer is an address inside the sandbox like any other, so the
++resulting access is sandboxed by the memory access rewrite above. A bare
++`%fs:0` is the exception: it becomes an access to the context register itself,
++which the runtime maintains outside the sandbox, and so is left unsandboxed.
+ 
+ :::{list-table}
+ :header-rows: 1
+@@ -772,14 +942,14 @@ such instruction.
+     ```
+   - ```gas
+     movq 16(%r15), %rD
+-    Op (%rD, %rX), %rD
++    Op %gs:(%eD, %eX), %rD
+     ```
+ * - ```gas
+     Op %rS, %fs:(%rX)
+     ```
+   - ```gas
+     movq 16(%r15), %r11
+-    Op %rS, (%r11, %rX)
++    Op %rS, %gs:(%r11d, %eX)
+     ```
+ * - ```gas
+     Op %fs:N(%rX, %rY, S), %rD
+@@ -787,7 +957,7 @@ such instruction.
+   - ```gas
+     movq 16(%r15), %r11
+     leaq (%r11, %rX), %r11
+-    Op N(%r11, %rY, S), %rD
++    Op %gs:N(%r11d, %eY, S), %rD
+     ```
+ * - ```gas
+     Op %rS, %fs:N(%rX, %rY, S)
+@@ -795,7 +965,7 @@ such instruction.
+   - ```gas
+     movq 16(%r15), %r11
+     leaq (%r11, %rX), %r11
+-    Op %rS, N(%r11, %rY, S)
++    Op %rS, %gs:N(%r11d, %eY, S)
+     ```
+ :::
+ 
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
+index b915394e7d76f..b052e2e22b808 100644
+--- a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
++++ b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
+@@ -20,6 +20,8 @@
+ #include "llvm/MC/MCInstBuilder.h"
+ #include "llvm/MC/MCStreamer.h"
+ #include "llvm/MC/MCSubtargetInfo.h"
++#include <algorithm>
++#include <optional>
+ 
+ using namespace llvm;
+ 
+@@ -28,10 +30,30 @@ static constexpr MCRegister LFIBaseReg = X86::R14;
+ static constexpr MCRegister LFIScratchReg = X86::R11;
+ static constexpr MCRegister LFITPReg = X86::R15;
+ 
++// Segment register whose base always holds the sandbox base address.
++static constexpr MCRegister LFIBaseSeg = X86::GS;
++
+ // Byte offset into the context register file (pointed to by R15) where the
+ // thread pointer is stored.
+ static constexpr int TPOffset = 16;
+ 
++static bool isPrefix(const MCInst &Inst, const MCInstrInfo &InstInfo) {
++  return X86II::isPrefix(InstInfo.get(Inst.getOpcode()).TSFlags);
++}
++
++// Return true if Inst is a supported stand-alone prefix.
++static bool isSupportedPrefix(const MCInst &Inst) {
++  switch (Inst.getOpcode()) {
++  case X86::FS_PREFIX:
++  case X86::GS_PREFIX:
++  case X86::ADDR16_PREFIX:
++  case X86::ADDR32_PREFIX:
++    return false;
++  default:
++    return true;
++  }
++}
++
+ static bool isSyscall(const MCInst &Inst) {
+   return Inst.getOpcode() == X86::SYSCALL;
+ }
+@@ -56,6 +78,18 @@ static bool isSupportedIndirectBranch(const MCInst &Inst) {
+   }
+ }
+ 
++static bool isWriteSegmentBase(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::WRFSBASE:
++  case X86::WRFSBASE64:
++  case X86::WRGSBASE:
++  case X86::WRGSBASE64:
++    return true;
++  default:
++    return false;
++  }
++}
++
+ static bool hasNoTrackPrefix(const MCInst &Inst, const MCInstrInfo &InstInfo) {
+   return (InstInfo.get(Inst.getOpcode()).TSFlags & X86II::NOTRACK) ||
+          (Inst.getFlags() & X86::IP_HAS_NOTRACK);
+@@ -93,6 +127,27 @@ static bool isGR64OrNone(MCRegister Reg) {
+          getX86MCRegisterClass(X86::GR64RegClassID).contains(Reg);
+ }
+ 
++MCRegister X86::X86MCLFIRewriter::getReg32(MCRegister Reg) const {
++  if (getX86MCRegisterClass(X86::GR32RegClassID).contains(Reg))
++    return Reg;
++  return RegInfo->getSubReg(Reg, X86::sub_32bit);
++}
++
++void X86::X86MCLFIRewriter::emitWithPrefixes(const MCInst &Inst,
++                                             MCStreamer &Out,
++                                             const MCSubtargetInfo &STI) {
++  for (const MCInst &Prefix : Prefixes)
++    Out.emitInstruction(Prefix, STI);
++  Prefixes.clear();
++  Out.emitInstruction(Inst, STI);
++}
++
++void X86::X86MCLFIRewriter::discardPrefixes() {
++  for (const MCInst &Prefix : Prefixes)
++    error(Prefix, "unsupported instruction prefix");
++  Prefixes.clear();
++}
++
+ // syscall
+ // ->
+ // .bundle_lock
+@@ -164,7 +219,7 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
+ //
+ // jmpq *(%rdi)
+ // ->
+-// movq (%rdi), %r11
++// movq %gs:(%edi), %r11
+ // .bundle_lock
+ // andl $-32, %r11d
+ // addq %r14, %r11
+@@ -173,6 +228,8 @@ void X86::X86MCLFIRewriter::emitSandboxBranchReg(MCRegister Reg,
+ void X86::X86MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
+                                                   MCStreamer &Out,
+                                                   const MCSubtargetInfo &STI) {
++  discardPrefixes();
++
+   MCRegister Target;
+   int MemIdx = X86II::getMemoryOperandIdx(InstInfo->get(Inst.getOpcode()));
+   if (MemIdx >= 0) {
+@@ -211,7 +268,7 @@ void X86::X86MCLFIRewriter::rewriteDirectCall(const MCInst &Inst,
+                                               MCStreamer &Out,
+                                               const MCSubtargetInfo &STI) {
+   Out.emitBundleLock(/*AlignToEnd=*/true, STI);
+-  Out.emitInstruction(Inst, STI);
++  emitWithPrefixes(Inst, Out, STI);
+   Out.emitBundleUnlock(STI);
+ }
+ 
+@@ -241,6 +298,8 @@ void X86::X86MCLFIRewriter::rewriteReturn(const MCInst &Inst, MCStreamer &Out,
+   if (Inst.getOpcode() != X86::RET64 && Inst.getOpcode() != X86::RETI64)
+     return error(Inst, "unsupported return instruction");
+ 
++  discardPrefixes();
++
+   Out.emitInstruction(MCInstBuilder(X86::POP64r).addReg(LFIScratchReg), STI);
+ 
+   if (Inst.getOpcode() == X86::RETI64) {
+@@ -282,8 +341,8 @@ bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
+ }
+ 
+ // Rewrite %fs-segment memory accesses to use the virtual thread pointer stored
+-// at TPOffset(%r15). The actual memory access is currently unsandboxed because
+-// load/store sandboxing is not yet supported. Example rewrites:
++// at TPOffset(%r15). The rewritten access is fed back through the rewriter so
++// that it is sandboxed like other memory accesses. Example rewrites:
+ //
+ // movq %fs:0, %rax
+ // ->
+@@ -292,17 +351,17 @@ bool X86::X86MCLFIRewriter::isFSAccess(const MCInst &Inst) {
+ // movq %fs:(%rdi), %rax
+ // ->
+ // movq 16(%r15), %rax
+-// movq (%rax, %rdi), %rax
++// movq %gs:(%eax,%edi), %rax
+ //
+ // movq %fs:8(%rdi, %rsi, 2), %rax
+ // ->
+ // movq 16(%r15), %rax
+ // leaq (%rax, %rdi), %rax
+-// movq 8(%rax, %rsi, 2), %rax
++// movq %gs:8(%eax, %esi, 2), %rax
+ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+                                             const MCSubtargetInfo &STI) {
+   int MemIdx = findFSMemOperand(Inst, *InstInfo);
+-  assert(MemIdx >= 0);
++  assert(MemIdx >= 0 && "expected an %fs memory operand");
+ 
+   MCRegister BaseReg = Inst.getOperand(MemIdx + X86::AddrBaseReg).getReg();
+   MCRegister IndexReg = Inst.getOperand(MemIdx + X86::AddrIndexReg).getReg();
+@@ -311,13 +370,14 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+   bool HasDisp = !Inst.getOperand(MemIdx + X86::AddrDisp).isImm() ||
+                  Inst.getOperand(MemIdx + X86::AddrDisp).getImm() != 0;
+ 
+-  // %fs:0 -> TPOffset(%r15)
++  // %fs:0 -> TPOffset(%r15). The context register always points into the
++  // runtime's thread-local block, so this access is safe.
+   if (!HasBase && !HasIndex && !HasDisp) {
+     MCInst Modified(Inst);
+     Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(LFITPReg);
+     Modified.getOperand(MemIdx + X86::AddrDisp).setImm(TPOffset);
+     Modified.getOperand(MemIdx + X86::AddrSegmentReg).setReg(X86::NoRegister);
+-    return Out.emitInstruction(Modified, STI);
++    return emitWithPrefixes(Modified, Out, STI);
+   }
+ 
+   if (!isGR64OrNone(BaseReg) || !isGR64OrNone(IndexReg) ||
+@@ -349,7 +409,7 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+   // ->
+   // movq 16(%r15), %rax
+   // leaq (%rax,%rdi), %rax
+-  // movq 8(%rax,%rsi,2), %rax
++  // movq %gs:8(%eax,%esi,2), %rax
+   if (HasBase && HasIndex) {
+     Out.emitInstruction(MCInstBuilder(X86::LEA64r)
+                             .addReg(TPDest)
+@@ -367,13 +427,463 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+   // movq %fs:(%rdi), %rax
+   // ->
+   // movq 16(%r15), %rax
+-  // movq (%rax,%rdi), %rax
++  // movq %gs:(%eax,%edi), %rax
+   MCInst Modified(Inst);
+   Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(TPDest);
+   if (HasBase && !HasIndex)
+     Modified.getOperand(MemIdx + X86::AddrIndexReg).setReg(BaseReg);
+   Modified.getOperand(MemIdx + X86::AddrSegmentReg).setReg(X86::NoRegister);
++  doRewriteInst(Modified, Out, STI);
++}
++
++// Return true if Reg always contains an address within the sandbox.
++static bool isSandboxBaseReg(MCRegister Reg) {
++  return Reg == LFIBaseReg || Reg == X86::RSP || Reg == X86::RIP;
++}
++
++// Return true if Inst reads or writes memory through a pointer register
++// instead of an addressing mode, and so cannot be sandboxed by rewriting its
++// operands.
++static bool hasImplicitMemPointer(unsigned Opcode) {
++  switch (Opcode) {
++  // xlat loads from (%rbx,%al).
++  case X86::XLAT:
++  // maskmov stores to (%rdi).
++  case X86::MASKMOVDQU:
++  case X86::MASKMOVDQU64:
++  case X86::VMASKMOVDQU:
++  case X86::VMASKMOVDQU64:
++  case X86::MMX_MASKMOVQ:
++  case X86::MMX_MASKMOVQ64:
++  // clzero zeroes the cache line at (%rax).
++  case X86::CLZERO32r:
++  case X86::CLZERO64r:
++  // movdir64b and enqcmd store to the address in their register operand.
++  case X86::MOVDIR64B32:
++  case X86::MOVDIR64B64:
++  case X86::MOVDIR64B32_EVEX:
++  case X86::MOVDIR64B64_EVEX:
++  case X86::ENQCMD32:
++  case X86::ENQCMD64:
++  case X86::ENQCMD32_EVEX:
++  case X86::ENQCMD64_EVEX:
++  case X86::ENQCMDS32:
++  case X86::ENQCMDS64:
++  case X86::ENQCMDS32_EVEX:
++  case X86::ENQCMDS64_EVEX:
++    return true;
++  default:
++    return false;
++  }
++}
++
++// Return true if Inst is a bit test of memory with a register bit offset. The
++// offset is added to the address of the memory operand, so the bit it accesses
++// may be beyond the address computed by the addressing mode.
++static bool isBitTestWithRegOffset(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::BT16mr:
++  case X86::BT32mr:
++  case X86::BT64mr:
++  case X86::BTC16mr:
++  case X86::BTC32mr:
++  case X86::BTC64mr:
++  case X86::BTR16mr:
++  case X86::BTR32mr:
++  case X86::BTR64mr:
++  case X86::BTS16mr:
++  case X86::BTS32mr:
++  case X86::BTS64mr:
++  case X86::LOCK_BTC_RM16rm:
++  case X86::LOCK_BTC_RM32rm:
++  case X86::LOCK_BTC_RM64rm:
++  case X86::LOCK_BTR_RM16rm:
++  case X86::LOCK_BTR_RM32rm:
++  case X86::LOCK_BTR_RM64rm:
++  case X86::LOCK_BTS_RM16rm:
++  case X86::LOCK_BTS_RM32rm:
++  case X86::LOCK_BTS_RM64rm:
++    return true;
++  default:
++    return false;
++  }
++}
++
++// Return true if Inst has a memory operand that is not dereferenced.
++static bool ignoresMemOperand(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::LEA16r:
++  case X86::LEA32r:
++  case X86::LEA64r:
++  case X86::LEA64_32r:
++  case X86::NOOPW:
++  case X86::NOOPL:
++  case X86::NOOPQ:
++    return true;
++  default:
++    return false;
++  }
++}
++
++// Return true if the index register of the memory operand at MemIdx is a
++// general-purpose register, and so can be truncated along with the base.
++static bool hasGPRIndex(const MCInst &Inst, int MemIdx) {
++  MCRegister Index = Inst.getOperand(MemIdx + X86::AddrIndexReg).getReg();
++  return Index && getX86MCRegisterClass(X86::GR64RegClassID).contains(Index);
++}
++
++// Return true if the memory operand at MemIdx uses a 32-bit address size,
++// which is selected by a 32-bit base or index register.
++static bool has32BitAddress(const MCInst &Inst, int MemIdx) {
++  MCRegister Base = Inst.getOperand(MemIdx + X86::AddrBaseReg).getReg();
++  MCRegister Index = Inst.getOperand(MemIdx + X86::AddrIndexReg).getReg();
++  const MCRegisterClass &GR32 = getX86MCRegisterClass(X86::GR32RegClassID);
++  return Base == X86::EIP || GR32.contains(Base) || Index == X86::EIZ ||
++         GR32.contains(Index);
++}
++
++// Rewrite the addressing mode of the memory operand at MemIdx so that the
++// access it performs stays inside the sandbox.
++//
++// movq 8(%rax,%rcx,4), %rdi
++// ->
++// movq %gs:8(%eax,%ecx,4), %rdi
++void X86::X86MCLFIRewriter::sandboxMemOperand(MCInst &Inst, int MemIdx) const {
++  MCOperand &Base = Inst.getOperand(MemIdx + X86::AddrBaseReg);
++  MCOperand &Scale = Inst.getOperand(MemIdx + X86::AddrScaleAmt);
++  MCOperand &Index = Inst.getOperand(MemIdx + X86::AddrIndexReg);
++  MCOperand &Segment = Inst.getOperand(MemIdx + X86::AddrSegmentReg);
++
++  // %riz only encodes the absence of an index register, so drop it and handle
++  // the access as one without an index.
++  if (Index.getReg() == X86::RIZ) {
++    Index.setReg(X86::NoRegister);
++    Scale.setImm(1);
++  }
++
++  // A base register that always points into the sandbox needs no rewriting, as
++  // long as there is no index register.
++  if (isSandboxBaseReg(Base.getReg()) && !Index.getReg())
++    return;
++
++  // An absolute address has no register to truncate, so make it relative to
++  // the sandbox base instead.
++  if (!Base.getReg() && !Index.getReg()) {
++    Base.setReg(LFIBaseReg);
++    return;
++  }
++
++  // If there is no Base and the Index is not a GPR, then we use r14d (all
++  // zeroes) as the base for the rewritten addressing mode.
++  bool GPRIndex = hasGPRIndex(Inst, MemIdx);
++
++  Segment.setReg(LFIBaseSeg);
++  if (Base.getReg())
++    Base.setReg(getReg32(Base.getReg()));
++  else if (!GPRIndex)
++    Base.setReg(getReg32(LFIBaseReg));
++  if (GPRIndex)
++    Index.setReg(getReg32(Index.getReg()));
++}
++
++void X86::X86MCLFIRewriter::sandboxMemAccess(MCInst &Inst) const {
++  if (ignoresMemOperand(Inst.getOpcode()))
++    return;
++
++  int MemIdx = X86II::getMemoryOperandIdx(InstInfo->get(Inst.getOpcode()));
++  if (MemIdx >= 0)
++    sandboxMemOperand(Inst, MemIdx);
++}
++
++void X86::X86MCLFIRewriter::rewriteMemAccess(const MCInst &Inst,
++                                             MCStreamer &Out,
++                                             const MCSubtargetInfo &STI) {
++  MCInst Sandboxed(Inst);
++  sandboxMemAccess(Sandboxed);
++  emitWithPrefixes(Sandboxed, Out, STI);
++}
++
++namespace {
++struct StringOpPointers {
++  bool UsesDest;
++  bool UsesSrc;
++};
++} // namespace
++
++static std::optional<StringOpPointers> getStringOpPointers(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::STOSB:
++  case X86::STOSW:
++  case X86::STOSL:
++  case X86::STOSQ:
++  case X86::REP_STOSB_64:
++  case X86::REP_STOSW_64:
++  case X86::REP_STOSD_64:
++  case X86::REP_STOSQ_64:
++  case X86::SCASB:
++  case X86::SCASW:
++  case X86::SCASL:
++  case X86::SCASQ:
++    return StringOpPointers{true, false};
++  case X86::MOVSB:
++  case X86::MOVSW:
++  case X86::MOVSL:
++  case X86::MOVSQ:
++  case X86::REP_MOVSB_64:
++  case X86::REP_MOVSW_64:
++  case X86::REP_MOVSD_64:
++  case X86::REP_MOVSQ_64:
++  case X86::CMPSB:
++  case X86::CMPSW:
++  case X86::CMPSL:
++  case X86::CMPSQ:
++    return StringOpPointers{true, true};
++  case X86::LODSB:
++  case X86::LODSW:
++  case X86::LODSL:
++  case X86::LODSQ:
++    return StringOpPointers{false, true};
++  default:
++    return std::nullopt;
++  }
++}
++
++static void emitStringPtrFixup(MCRegister Reg, MCRegister Reg32,
++                               MCStreamer &Out, const MCSubtargetInfo &STI) {
++  Out.emitInstruction(MCInstBuilder(X86::MOV32rr).addReg(Reg32).addReg(Reg32),
++                      STI);
++
++  Out.emitInstruction(MCInstBuilder(X86::LEA64r)
++                          .addReg(Reg)
++                          .addReg(LFIBaseReg)
++                          .addImm(1)
++                          .addReg(Reg)
++                          .addImm(0)
++                          .addReg(X86::NoRegister),
++                      STI);
++}
++
++// rep movsq
++// ->
++// .bundle_lock
++// movl %edi, %edi
++// leaq (%r14,%rdi), %rdi
++// movl %esi, %esi
++// leaq (%r14,%rsi), %rsi
++// rep movsq
++// .bundle_unlock
++void X86::X86MCLFIRewriter::rewriteStringOperation(const MCInst &Inst,
++                                                   MCStreamer &Out,
++                                                   const MCSubtargetInfo &STI) {
++  std::optional<StringOpPointers> Ptrs = getStringOpPointers(Inst.getOpcode());
++  assert(Ptrs && "expected a string instruction");
++
++  // The guards below sandbox the full 64-bit %rdi and %rsi, so the access must
++  // use them with a 64-bit address size and no %fs segment override.
++  for (const MCOperand &Op : Inst) {
++    if (!Op.isReg())
++      continue;
++    if (Op.getReg() == X86::EDI || Op.getReg() == X86::ESI)
++      return error(Inst, "unsupported address size for string instruction");
++    if (Op.getReg() == X86::FS)
++      return error(Inst, "unsupported segment override for string instruction");
++  }
++
++  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
++
++  if (Ptrs->UsesDest)
++    emitStringPtrFixup(X86::RDI, X86::EDI, Out, STI);
++  if (Ptrs->UsesSrc)
++    emitStringPtrFixup(X86::RSI, X86::ESI, Out, STI);
++
++  emitWithPrefixes(Inst, Out, STI);
++
++  Out.emitBundleUnlock(STI);
++}
++
++// The register form of an instruction that modifies the stack and reads its
++// source from memory, if there is one.
++static std::optional<unsigned> memToRegOpcode(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::MOV64rm:
++    return X86::MOV64rr;
++  case X86::ADD64rm:
++    return X86::ADD64rr;
++  case X86::SUB64rm:
++    return X86::SUB64rr;
++  case X86::AND64rm:
++    return X86::AND64rr;
++  case X86::OR64rm:
++    return X86::OR64rr;
++  case X86::XOR64rm:
++    return X86::XOR64rr;
++  default:
++    return std::nullopt;
++  }
++}
++
++// The 32-bit form of a 64-bit instruction, if it has one that can be used to
++// modify the stack pointer.
++static std::optional<unsigned> demote64BitOpcode(unsigned Opcode) {
++  switch (Opcode) {
++  case X86::MOV64rr:
++    return X86::MOV32rr;
++  case X86::MOV64ri32:
++    return X86::MOV32ri;
++  case X86::LEA64r:
++    return X86::LEA64_32r;
++  case X86::ADD64rr:
++    return X86::ADD32rr;
++  case X86::ADD64ri8:
++    return X86::ADD32ri8;
++  case X86::ADD64ri32:
++    return X86::ADD32ri;
++  case X86::SUB64rr:
++    return X86::SUB32rr;
++  case X86::SUB64ri8:
++    return X86::SUB32ri8;
++  case X86::SUB64ri32:
++    return X86::SUB32ri;
++  case X86::AND64rr:
++    return X86::AND32rr;
++  case X86::AND64ri8:
++    return X86::AND32ri8;
++  case X86::AND64ri32:
++    return X86::AND32ri;
++  case X86::OR64rr:
++    return X86::OR32rr;
++  case X86::OR64ri8:
++    return X86::OR32ri8;
++  case X86::OR64ri32:
++    return X86::OR32ri;
++  case X86::XOR64rr:
++    return X86::XOR32rr;
++  case X86::XOR64ri8:
++    return X86::XOR32ri8;
++  case X86::XOR64ri32:
++    return X86::XOR32ri;
++  default:
++    return std::nullopt;
++  }
++}
++
++MCRegister X86::X86MCLFIRewriter::getWrittenStackReg(const MCInst &Inst) const {
++  const MCInstrDesc &Desc = InstInfo->get(Inst.getOpcode());
++  for (unsigned I = 0, E = Desc.getNumDefs(); I < E; ++I) {
++    const MCOperand &Op = Inst.getOperand(I);
++    if (Op.isReg() && RegInfo->regsOverlap(Op.getReg(), X86::RSP))
++      return Op.getReg();
++  }
++  return X86::NoRegister;
++}
++
++// Emit leaq (%rsp,%r14), %rsp
++static void emitStackFixup(MCStreamer &Out, const MCSubtargetInfo &STI) {
++  Out.emitInstruction(MCInstBuilder(X86::LEA64r)
++                          .addReg(X86::RSP)
++                          .addReg(X86::RSP)
++                          .addImm(1)
++                          .addReg(LFIBaseReg)
++                          .addImm(0)
++                          .addReg(X86::NoRegister),
++                      STI);
++}
++
++// addq $8, %rsp
++// ->
++// .bundle_lock
++// addl $8, %esp
++// leaq (%rsp,%r14), %rsp
++// .bundle_unlock
++void X86::X86MCLFIRewriter::rewriteStackModification(
++    MCRegister StackReg, const MCInst &Inst, MCStreamer &Out,
++    const MCSubtargetInfo &STI) {
++  if (StackReg != X86::RSP)
++    return error(Inst, "unsupported modification of the stack pointer");
++
++  discardPrefixes();
++
++  // popq %rsp loads through the stack pointer that it overwrites, so it cannot
++  // simply be demoted. Pop into the scratch register instead, and move the
++  // result into %esp.
++  if (Inst.getOpcode() == X86::POP64r) {
++    Out.emitInstruction(MCInstBuilder(X86::POP64r).addReg(LFIScratchReg), STI);
++
++    Out.emitBundleLock(/*AlignToEnd=*/false, STI);
++    Out.emitInstruction(
++        MCInstBuilder(X86::MOV32rr).addReg(X86::ESP).addReg(X86::R11D), STI);
++    emitStackFixup(Out, STI);
++    Out.emitBundleUnlock(STI);
++    return;
++  }
++
++  // movq 8(%rdi), %rsp
++  // ->
++  // movq %gs:8(%edi), %r11
++  // .bundle_lock
++  // movl %r11d, %esp
++  // leaq (%rsp,%r14), %rsp
++  // .bundle_unlock
++  int MemIdx = X86II::getMemoryOperandIdx(InstInfo->get(Inst.getOpcode()));
++  if (MemIdx >= 0 && !ignoresMemOperand(Inst.getOpcode())) {
++    std::optional<unsigned> RegOpcode = memToRegOpcode(Inst.getOpcode());
++    if (!RegOpcode)
++      return error(Inst, "unsupported modification of the stack pointer");
++
++    MCInstBuilder Load(X86::MOV64rm);
++    Load.addReg(LFIScratchReg);
++    for (unsigned I = 0; I < X86::AddrNumOperands; ++I)
++      Load.addOperand(Inst.getOperand(MemIdx + I));
++    Load.setLoc(Inst.getLoc());
++    doRewriteInst(Load, Out, STI);
++
++    MCInstBuilder RegForm(*RegOpcode);
++    for (int I = 0; I < MemIdx; ++I)
++      RegForm.addOperand(Inst.getOperand(I));
++    RegForm.addReg(LFIScratchReg);
++    RegForm.setLoc(Inst.getLoc());
++    return doRewriteInst(RegForm, Out, STI);
++  }
++
++  std::optional<unsigned> Opcode = demote64BitOpcode(Inst.getOpcode());
++  if (!Opcode)
++    return error(Inst, "unsupported modification of the stack pointer");
++
++  MCInst Modified(Inst);
++  Modified.setOpcode(*Opcode);
++
++  ArrayRef<MCOperandInfo> OpInfo = InstInfo->get(*Opcode).operands();
++  for (unsigned I = 0, E = std::min<unsigned>(OpInfo.size(),
++                                              Modified.getNumOperands());
++       I < E; ++I) {
++    MCOperand &Op = Modified.getOperand(I);
++    if (OpInfo[I].OperandType != MCOI::OPERAND_REGISTER || !Op.isReg())
++      continue;
++    if (getX86MCRegisterClass(X86::GR64RegClassID).contains(Op.getReg()))
++      Op.setReg(RegInfo->getSubReg(Op.getReg(), X86::sub_32bit));
++  }
++
++  Out.emitBundleLock(/*AlignToEnd=*/false, STI);
+   Out.emitInstruction(Modified, STI);
++  emitStackFixup(Out, STI);
++  Out.emitBundleUnlock(STI);
++}
++
++// leave
++// ->
++// .bundle_lock
++// movl %ebp, %esp
++// leaq (%rsp,%r14), %rsp
++// .bundle_unlock
++// popq %rbp
++void X86::X86MCLFIRewriter::rewriteLeave(const MCInst &Inst, MCStreamer &Out,
++                                         const MCSubtargetInfo &STI) {
++  doRewriteInst(MCInstBuilder(X86::MOV64rr)
++                    .addReg(X86::RSP)
++                    .addReg(X86::RBP)
++                    .setLoc(Inst.getLoc()),
++                Out, STI);
++  Out.emitInstruction(MCInstBuilder(X86::POP64r).addReg(X86::RBP), STI);
+ }
+ 
+ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+@@ -381,9 +891,27 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+   if (!STI.hasFeature(X86::Is64Bit))
+     return error(Inst, "LFI only supports 64-bit mode");
+ 
+-  if (mayModifyRegister(Inst, LFIBaseReg) || mayModifyRegister(Inst, LFITPReg))
++  // Hold a stand-alone prefix back, so it can be applied to the rewritten
++  // instruction.
++  if (isPrefix(Inst, *InstInfo)) {
++    if (!isSupportedPrefix(Inst))
++      return error(Inst, "unsupported instruction prefix");
++    Prefixes.push_back(Inst);
++    return;
++  }
++
++  // A lock prefix is only valid on an instruction that writes memory, and
++  // would otherwise be dropped by the rewrites below.
++  if ((Inst.getFlags() & X86::IP_HAS_LOCK) && !mayStore(Inst))
++    return error(Inst, "unsupported lock prefix");
++
++  if (mayModifyRegister(Inst, LFIBaseReg) ||
++      mayModifyRegister(Inst, LFITPReg) || mayModifyRegister(Inst, LFIBaseSeg))
+     return error(Inst, "illegal modification of reserved LFI register");
+ 
++  if (isWriteSegmentBase(Inst.getOpcode()))
++    return error(Inst, "illegal modification of reserved segment base");
++
+   if (isSyscall(Inst))
+     return rewriteSyscall(Inst, Out, STI);
+ 
+@@ -403,10 +931,45 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return rewriteIndirectBranch(Inst, Out, STI);
+   }
+ 
++  for (const MCOperand &Op : Inst)
++    if (Op.isReg() && Op.getReg() == LFIBaseSeg)
++      return error(Inst, "invalid use of reserved segment register %gs");
++
++  if (MCRegister StackReg = getWrittenStackReg(Inst))
++    return rewriteStackModification(StackReg, Inst, Out, STI);
++
++  // These accesses cannot be sandboxed by rewriting the addressing mode. The
++  // moffs form of mov encodes an absolute address in the instruction instead
++  // of an addressing mode.
++  if ((InstInfo->get(Inst.getOpcode()).TSFlags & X86II::FormMask) ==
++          X86II::RawFrmMemOffs ||
++      hasImplicitMemPointer(Inst.getOpcode()))
++    return error(Inst, "unsupported memory access");
++
++  if (isBitTestWithRegOffset(Inst.getOpcode()))
++    return error(Inst, "unsupported bit test with a register bit offset");
++
+   if (isFSAccess(Inst))
+     return rewriteFSAccess(Inst, Out, STI);
+ 
+-  Out.emitInstruction(Inst, STI);
++  // The compiler never generates 32-bit addressing in LP64 mode.
++  int MemIdx = X86II::getMemoryOperandIdx(InstInfo->get(Inst.getOpcode()));
++  if (MemIdx >= 0 && !ignoresMemOperand(Inst.getOpcode()) &&
++      has32BitAddress(Inst, MemIdx))
++    return error(Inst, "unsupported 32-bit address size");
++
++  if (getStringOpPointers(Inst.getOpcode()))
++    return rewriteStringOperation(Inst, Out, STI);
++
++  if (Inst.getOpcode() == X86::LEAVE64)
++    return rewriteLeave(Inst, Out, STI);
++
++  if (Inst.getOpcode() == X86::ENTER &&
++      (!Inst.getOperand(1).isImm() ||
++       static_cast<uint64_t>(Inst.getOperand(1).getImm()) > 1))
++    return error(Inst, "unsupported nesting level for enter");
++
++  rewriteMemAccess(Inst, Out, STI);
+ }
+ 
+ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
+@@ -417,8 +980,19 @@ bool X86::X86MCLFIRewriter::rewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return false;
+   Guard = true;
+ 
++  size_t PrefixesBefore = Prefixes.size();
++
+   doRewriteInst(Inst, Out, STI);
+ 
++  if (Prefixes.size() == PrefixesBefore)
++    discardPrefixes();
++
+   Guard = false;
+   return true;
+ }
++
++void X86::X86MCLFIRewriter::onLabel(const MCSymbol *Symbol, MCStreamer &Out) {
++  discardPrefixes();
++}
++
++void X86::X86MCLFIRewriter::finish(MCStreamer &Out) { discardPrefixes(); }
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.h b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.h
+index e182d3e6df38e..f65027c7d604f 100644
+--- a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.h
++++ b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.h
+@@ -13,13 +13,14 @@
+ #ifndef LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
+ #define LLVM_LIB_TARGET_X86_MCTARGETDESC_X86MCLFIREWRITER_H
+ 
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/MC/MCInst.h"
+ #include "llvm/MC/MCInstrInfo.h"
+ #include "llvm/MC/MCLFIRewriter.h"
+ #include "llvm/MC/MCRegisterInfo.h"
+ 
+ namespace llvm {
+ class MCContext;
+-class MCInst;
+ class MCStreamer;
+ class MCSubtargetInfo;
+ 
+@@ -36,13 +37,32 @@ public:
+   bool rewriteInst(const MCInst &Inst, MCStreamer &Out,
+                    const MCSubtargetInfo &STI) override;
+ 
++  void onLabel(const MCSymbol *Symbol, MCStreamer &Out) override;
++  void finish(MCStreamer &Out) override;
++
+ private:
+   /// Recursion guard to prevent infinite loops when emitting instructions.
+   bool Guard = false;
+ 
++  /// Prefixes written on their own line, held back so that they can be emitted
++  /// immediately before the instruction they apply to.
++  SmallVector<MCInst, 2> Prefixes;
++
+   void doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+                      const MCSubtargetInfo &STI);
+ 
++  /// Emit the prefixes that were held back, followed by Inst.
++  void emitWithPrefixes(const MCInst &Inst, MCStreamer &Out,
++                        const MCSubtargetInfo &STI);
++
++  /// Report and drop the prefixes that were held back, for when the
++  /// instruction they would apply to does not take them.
++  void discardPrefixes();
++
++  /// Return the 32-bit subregister of Reg, or Reg itself if it already
++  /// is a 32-bit register.
++  MCRegister getReg32(MCRegister Reg) const;
++
+   void rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
+                       const MCSubtargetInfo &STI);
+ 
+@@ -61,6 +81,28 @@ private:
+   bool isFSAccess(const MCInst &Inst);
+   void rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+                        const MCSubtargetInfo &STI);
++
++  /// Rewrite the addressing mode of the memory operand at MemIdx so that
++  /// the access it performs stays inside the sandbox.
++  void sandboxMemOperand(MCInst &Inst, int MemIdx) const;
++
++  /// Apply sandboxMemOperand to the memory operand of Inst, if it has one
++  /// that it dereferences.
++  void sandboxMemAccess(MCInst &Inst) const;
++
++  void rewriteMemAccess(const MCInst &Inst, MCStreamer &Out,
++                        const MCSubtargetInfo &STI);
++  void rewriteStringOperation(const MCInst &Inst, MCStreamer &Out,
++                              const MCSubtargetInfo &STI);
++
++  /// Return the stack pointer register that Inst writes as an explicit
++  /// operand, or NoRegister if it does not write one.
++  MCRegister getWrittenStackReg(const MCInst &Inst) const;
++
++  void rewriteStackModification(MCRegister StackReg, const MCInst &Inst,
++                                MCStreamer &Out, const MCSubtargetInfo &STI);
++  void rewriteLeave(const MCInst &Inst, MCStreamer &Out,
++                    const MCSubtargetInfo &STI);
+ };
+ 
+ } // namespace X86
+diff --git a/llvm/lib/Target/X86/X86ISelLowering.cpp b/llvm/lib/Target/X86/X86ISelLowering.cpp
+index 5f5898e1cf582..4d081b7ecbf43 100644
+--- a/llvm/lib/Target/X86/X86ISelLowering.cpp
++++ b/llvm/lib/Target/X86/X86ISelLowering.cpp
+@@ -32913,6 +32913,11 @@ X86TargetLowering::shouldExpandLogicAtomicRMWInIR(
+                     : AtomicExpansionKind::CmpXChg;
+   }
+ 
++  // Bit test accesses scaled by a register offset are not supported by LFI, so
++  // we use the CmpXChg pattern instead.
++  if (Subtarget.isLFI())
++    return AtomicExpansionKind::CmpXChg;
++
+   assert(BitChange.second == ShiftBit || BitChange.second == NotShiftBit);
+ 
+   auto BitTested = FindSingleBitChange(I->getOperand(OtherIdx));
+diff --git a/llvm/test/CodeGen/X86/lfi-atomic-bit-test.ll b/llvm/test/CodeGen/X86/lfi-atomic-bit-test.ll
+new file mode 100644
+index 0000000000000..157c04cc56121
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/lfi-atomic-bit-test.ll
+@@ -0,0 +1,42 @@
++; NOTE: Assertions have been autogenerated by utils/update_llc_test_checks.py
++; RUN: llc < %s -mtriple=x86_64_lfi | FileCheck %s
++
++; LFI cannot sandbox a bit test of memory with a register bit offset, so this
++; uses a cmpxchg loop instead of lock btsq %reg, (mem).
++define i64 @or_shl1(ptr %p, i64 %c) {
++; CHECK-LABEL: or_shl1:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:    movq %rsi, %rcx
++; CHECK-NEXT:    movl $1, %edx
++; CHECK-NEXT:    # kill: def $cl killed $cl killed $rcx
++; CHECK-NEXT:    shlq %cl, %rdx
++; CHECK-NEXT:    movq (%rdi), %rax
++; CHECK-NEXT:    .p2align 4
++; CHECK-NEXT:  .LBB0_1: # %atomicrmw.start
++; CHECK-NEXT:    # =>This Inner Loop Header: Depth=1
++; CHECK-NEXT:    movq %rax, %rcx
++; CHECK-NEXT:    orq %rdx, %rcx
++; CHECK-NEXT:    lock cmpxchgq %rcx, (%rdi)
++; CHECK-NEXT:    jne .LBB0_1
++; CHECK-NEXT:  # %bb.2: # %atomicrmw.end
++; CHECK-NEXT:    andq %rdx, %rax
++; CHECK-NEXT:    retq
++  %shl = shl i64 1, %c
++  %old = atomicrmw or ptr %p, i64 %shl monotonic
++  %and = and i64 %old, %shl
++  ret i64 %and
++}
++
++; A bit test with an immediate bit offset is still used.
++define i64 @or_const(ptr %p) {
++; CHECK-LABEL: or_const:
++; CHECK:       # %bb.0:
++; CHECK-NEXT:    xorl %eax, %eax
++; CHECK-NEXT:    lock btsq $4, (%rdi)
++; CHECK-NEXT:    setb %al
++; CHECK-NEXT:    shll $4, %eax
++; CHECK-NEXT:    retq
++  %old = atomicrmw or ptr %p, i64 16 monotonic
++  %and = and i64 %old, 16
++  ret i64 %and
++}
+diff --git a/llvm/test/CodeGen/X86/lfi-rep-string.ll b/llvm/test/CodeGen/X86/lfi-rep-string.ll
+new file mode 100644
+index 0000000000000..7ddde40c69c21
+--- /dev/null
++++ b/llvm/test/CodeGen/X86/lfi-rep-string.ll
+@@ -0,0 +1,25 @@
++; RUN: llc < %s -mtriple=x86_64_lfi -filetype=obj -o %t.o
++; RUN: llvm-objdump -d --no-show-raw-insn %t.o | FileCheck %s
++
++define void @copy(ptr %a, ptr %b) {
++; CHECK-LABEL: <copy>:
++; CHECK:      movl %edi, %edi
++; CHECK-NEXT: leaq (%r14,%rdi), %rdi
++; CHECK-NEXT: movl %esi, %esi
++; CHECK-NEXT: leaq (%r14,%rsi), %rsi
++; CHECK-NEXT: rep {{.*}}movsb
++  call void @llvm.memcpy.inline.p0.p0.i64(ptr %a, ptr %b, i64 262144, i1 false)
++  ret void
++}
++
++define void @fill(ptr %a, i8 %v) minsize {
++; CHECK-LABEL: <fill>:
++; CHECK:      movl %edi, %edi
++; CHECK-NEXT: leaq (%r14,%rdi), %rdi
++; CHECK-NEXT: rep {{.*}}stosb
++  call void @llvm.memset.inline.p0.i64(ptr %a, i8 %v, i64 262144, i1 false)
++  ret void
++}
++
++declare void @llvm.memcpy.inline.p0.p0.i64(ptr, ptr, i64, i1)
++declare void @llvm.memset.inline.p0.i64(ptr, i8, i64, i1)
+diff --git a/llvm/test/MC/X86/LFI/control-flow.s b/llvm/test/MC/X86/LFI/control-flow.s
+index 28763f13c5a46..c589c3e9fb5af 100644
+--- a/llvm/test/MC/X86/LFI/control-flow.s
++++ b/llvm/test/MC/X86/LFI/control-flow.s
+@@ -8,7 +8,7 @@ jmpq *%rax
+ // CHECK-NEXT: .bundle_unlock
+ 
+ jmpq *(%rdi)
+-// CHECK:      movq (%rdi), %r11
++// CHECK:      movq %gs:(%edi), %r11
+ // CHECK-NEXT: .bundle_lock
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -16,7 +16,7 @@ jmpq *(%rdi)
+ // CHECK-NEXT: .bundle_unlock
+ 
+ jmpq *8(%rdi,%rsi,4)
+-// CHECK:      movq 8(%rdi,%rsi,4), %r11
++// CHECK:      movq %gs:8(%edi,%esi,4), %r11
+ // CHECK-NEXT: .bundle_lock
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -35,7 +35,7 @@ jmpq *foo(%rip)
+ // resolved against the virtual thread pointer.
+ jmpq *%fs:(%rdi)
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: movq (%r11,%rdi), %r11
++// CHECK-NEXT: movq %gs:(%r11d,%edi), %r11
+ // CHECK-NEXT: .bundle_lock
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -50,7 +50,7 @@ notrack jmpq *%rax
+ // CHECK-NEXT: .bundle_unlock
+ 
+ notrack callq *(%rdx)
+-// CHECK:      movq (%rdx), %r11
++// CHECK:      movq %gs:(%edx), %r11
+ // CHECK-NEXT: .bundle_lock align_to_end
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -65,7 +65,7 @@ callq *%rcx
+ // CHECK-NEXT: .bundle_unlock
+ 
+ callq *(%rdx)
+-// CHECK:      movq (%rdx), %r11
++// CHECK:      movq %gs:(%edx), %r11
+ // CHECK-NEXT: .bundle_lock align_to_end
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -93,7 +93,10 @@ rep ret
+ 
+ retq $16
+ // CHECK:      popq %r11
+-// CHECK-NEXT: addq $16, %rsp
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: addl $16, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
+ // CHECK-NEXT: .bundle_lock
+ // CHECK-NEXT: andl $-32, %r11d
+ // CHECK-NEXT: addq %r14, %r11
+@@ -116,7 +119,7 @@ data16 jmp foo
+ // CHECK-NEXT: jmp foo
+ 
+ data16 callq foo
+-// CHECK:      data16
+-// CHECK-NEXT: .bundle_lock align_to_end
++// CHECK:      .bundle_lock align_to_end
++// CHECK-NEXT: data16
+ // CHECK-NEXT: callq foo
+ // CHECK-NEXT: .bundle_unlock
+diff --git a/llvm/test/MC/X86/LFI/memory-errors.s b/llvm/test/MC/X86/LFI/memory-errors.s
+new file mode 100644
+index 0000000000000..63b99c353cadf
+--- /dev/null
++++ b/llvm/test/MC/X86/LFI/memory-errors.s
+@@ -0,0 +1,176 @@
++// RUN: not llvm-mc -triple x86_64_lfi -mattr=+clzero,+movdir64b,+enqcmd %s 2>&1 | FileCheck %s
++
++movq %gs:(%rax), %rbx
++// CHECK: error: invalid use of reserved segment register %gs
++
++movq %gs:8, %rbx
++// CHECK: error: invalid use of reserved segment register %gs
++
++movw %ax, %gs
++// CHECK: error: illegal modification of reserved LFI register
++
++wrgsbase %rax
++// CHECK: error: illegal modification of reserved segment base
++
++wrgsbasel %eax
++// CHECK: error: illegal modification of reserved segment base
++
++wrfsbase %rax
++// CHECK: error: illegal modification of reserved segment base
++
++wrfsbasel %eax
++// CHECK: error: illegal modification of reserved segment base
++
++movabsq 0x123456789abcdef, %rax
++// CHECK: error: unsupported memory access
++
++movabsb %al, 0x123456789abcdef
++// CHECK: error: unsupported memory access
++
++xlatb
++// CHECK: error: unsupported memory access
++
++maskmovdqu %xmm1, %xmm0
++// CHECK: error: unsupported memory access
++
++xchgq %rax, %rsp
++// CHECK: error: unsupported modification of the stack pointer
++
++shlq $1, %rsp
++// CHECK: error: unsupported modification of the stack pointer
++
++movw %ax, %sp
++// CHECK: error: unsupported modification of the stack pointer
++
++movl %eax, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++addl $8, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++xchgl %eax, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++shll $1, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++cmpxchgl %ecx, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++xchgq %rsp, %fs:0
++// CHECK: error: unsupported modification of the stack pointer
++
++movl %fs:0, %esp
++// CHECK: error: unsupported modification of the stack pointer
++
++btq %rax, (%rdi)
++// CHECK: error: unsupported bit test with a register bit offset
++
++btsq %rax, (%rdi)
++// CHECK: error: unsupported bit test with a register bit offset
++
++lock btsq %rax, (%rdi)
++// CHECK: error: unsupported bit test with a register bit offset
++
++btrl %eax, %fs:(%rdi)
++// CHECK: error: unsupported bit test with a register bit offset
++
++btq %rax, %fs:0
++// CHECK: error: unsupported bit test with a register bit offset
++
++btsq %rax, %fs:0
++// CHECK: error: unsupported bit test with a register bit offset
++
++gs movq (%rsp), %rax
++// CHECK: error: unsupported instruction prefix
++
++fs movq (%rsp), %rax
++// CHECK: error: unsupported instruction prefix
++
++addr32 movq (%rsp), %rax
++// CHECK: error: unsupported instruction prefix
++
++rex64 movq %rdi, %rsp
++// CHECK: error: unsupported instruction prefix
++
++data16 addq $8, %rsp
++// CHECK: error: unsupported instruction prefix
++
++data16
++leave
++// CHECK: error: unsupported instruction prefix
++
++data16
++retq $8
++// CHECK: error: unsupported instruction prefix
++
++lock
++jmpq *(%rdi)
++// CHECK: error: unsupported instruction prefix
++
++lock jmpq *(%rdi)
++// CHECK: error: unsupported lock prefix
++
++movl (%edi), %eax
++// CHECK: error: unsupported 32-bit address size
++
++movq 8(%eax,%ecx,4), %rbx
++// CHECK: error: unsupported 32-bit address size
++
++movq (%eax,%eiz), %rbx
++// CHECK: error: unsupported 32-bit address size
++
++movq (,%eiz,1), %rbx
++// CHECK: error: unsupported 32-bit address size
++
++movq (%esp), %rax
++// CHECK: error: unsupported 32-bit address size
++
++movq foo(%eip), %rax
++// CHECK: error: unsupported 32-bit address size
++
++jmpq *(%eax)
++// CHECK: error: unsupported 32-bit address size
++
++vgatherdpd %xmm3, (%eax,%xmm2,8), %xmm0
++// CHECK: error: unsupported 32-bit address size
++
++movsq (%esi), %es:(%edi)
++// CHECK: error: unsupported address size for string instruction
++
++stosq %rax, %es:(%edi)
++// CHECK: error: unsupported address size for string instruction
++
++movsq %fs:(%rsi), %es:(%rdi)
++// CHECK: error: unsupported segment override for string instruction
++
++lodsq %fs:(%rsi), %rax
++// CHECK: error: unsupported segment override for string instruction
++
++enter $16, $2
++// CHECK: error: unsupported nesting level for enter
++
++clzero
++// CHECK: error: unsupported memory access
++
++movdir64b (%rax), %rbx
++// CHECK: error: unsupported memory access
++
++enqcmd (%rax), %rbx
++// CHECK: error: unsupported memory access
++
++movdir64b %fs:0, %rbx
++// CHECK: error: unsupported memory access
++
++enqcmd %fs:0, %rbx
++// CHECK: error: unsupported memory access
++
++.code32
++
++lock
++// CHECK: error: LFI only supports 64-bit mode
++
++.code64
++
++lock
++// CHECK: error: unsupported instruction prefix
+diff --git a/llvm/test/MC/X86/LFI/memory.s b/llvm/test/MC/X86/LFI/memory.s
+new file mode 100644
+index 0000000000000..bd5cfcd249ed7
+--- /dev/null
++++ b/llvm/test/MC/X86/LFI/memory.s
+@@ -0,0 +1,162 @@
++// RUN: llvm-mc -triple x86_64_lfi %s | FileCheck %s
++
++movq (%rax), %rdi
++// CHECK: movq %gs:(%eax), %rdi
++
++movq %rcx, (%rax)
++// CHECK: movq %rcx, %gs:(%eax)
++
++movq 8(%rax), %rdi
++// CHECK: movq %gs:8(%eax), %rdi
++
++movq -8(%rax), %rdi
++// CHECK: movq %gs:-8(%eax), %rdi
++
++movq (%rax,%rdi), %rcx
++// CHECK: movq %gs:(%eax,%edi), %rcx
++
++movq 16(%rax,%rdi,4), %rcx
++// CHECK: movq %gs:16(%eax,%edi,4), %rcx
++
++movq (,%rdi,8), %rcx
++// CHECK: movq %gs:(,%edi,8), %rcx
++
++movl (%rax), %edi
++// CHECK: movl %gs:(%eax), %edi
++
++movw (%rax), %di
++// CHECK: movw %gs:(%eax), %di
++
++movb (%rax), %dil
++// CHECK: movb %gs:(%eax), %dil
++
++movb (%rax), %ah
++// CHECK: movb %gs:(%eax), %ah
++
++addq $1, (%rax)
++// CHECK: addq $1, %gs:(%eax)
++
++incq (%rax)
++// CHECK: incq %gs:(%eax)
++
++xchgq %rax, (%rcx)
++// CHECK: xchgq %rax, %gs:(%ecx)
++
++lock incq (%rax)
++// CHECK: lock {{.*}}incq %gs:(%eax)
++
++lock
++addq $1, (%rax)
++// CHECK:      lock
++// CHECK-NEXT: addq $1, %gs:(%eax)
++
++movq (%rsp), %rax
++// CHECK: movq (%rsp), %rax
++
++movq 8(%rsp), %rax
++// CHECK: movq 8(%rsp), %rax
++
++movq %rax, -8(%rsp)
++// CHECK: movq %rax, -8(%rsp)
++
++movq foo(%rip), %rax
++// CHECK: movq foo(%rip), %rax
++
++movq %rax, foo(%rip)
++// CHECK: movq %rax, foo(%rip)
++
++movq (%r14), %rax
++// CHECK: movq (%r14), %rax
++
++movq 8(%r14), %rax
++// CHECK: movq 8(%r14), %rax
++
++movq (%rsp,%rax), %rcx
++// CHECK: movq %gs:(%esp,%eax), %rcx
++
++movq (%r14,%rax), %rcx
++// CHECK: movq %gs:(%r14d,%eax), %rcx
++
++movq 4096, %rax
++// CHECK: movq 4096(%r14), %rax
++
++vextractf64x2 $1, %zmm0, (%rax)
++// CHECK: vextractf64x2 $1, %zmm0, %gs:(%eax)
++
++vextracti32x8 $1, %zmm0, 16(%rax,%rcx,4)
++// CHECK: vextracti32x8 $1, %zmm0, %gs:16(%eax,%ecx,4)
++
++tileloaddrs 291(%rbp,%rax,4), %tmm3
++// CHECK: tileloaddrs %gs:291(%ebp,%eax,4), %tmm3
++
++movq (%rax,%riz,1), %rbx
++// CHECK: movq %gs:(%eax), %rbx
++
++movq (,%riz,1), %rbx
++// CHECK: movq (%r14), %rbx
++
++movq 8(%rsp,%riz,8), %rbx
++// CHECK: movq 8(%rsp), %rbx
++
++leaq (%rax), %rdi
++// CHECK: leaq (%rax), %rdi
++
++leaq 8(%rax,%rcx,4), %rdi
++// CHECK: leaq 8(%rax,%rcx,4), %rdi
++
++leal 4(%eax), %edx
++// CHECK: leal 4(%eax), %edx
++
++nopw (%rax)
++// CHECK: nopw (%rax)
++
++nopl (%rax,%rcx,4)
++// CHECK: nopl (%rax,%rcx,4)
++
++movaps (%rdi), %xmm0
++// CHECK: movaps %gs:(%edi), %xmm0
++
++movups %xmm1, 16(%rsi,%rdx,4)
++// CHECK: movups %xmm1, %gs:16(%esi,%edx,4)
++
++flds (%rax)
++// CHECK: flds %gs:(%eax)
++
++fstpl 8(%rsp)
++// CHECK: fstpl 8(%rsp)
++
++vgatherdpd %xmm3, (%rax,%xmm2,8), %xmm0
++// CHECK: vgatherdpd %xmm3, %gs:(%eax,%xmm2,8), %xmm0
++
++vgatherqps %xmm3, (%rdi,%xmm2,4), %xmm0
++// CHECK: vgatherqps %xmm3, %gs:(%edi,%xmm2,4), %xmm0
++
++vpgatherdd (%rax,%ymm2,4), %ymm0 {%k1}
++// CHECK: vpgatherdd %gs:(%eax,%ymm2,4), %ymm0 {%k1}
++
++vpscatterdd %ymm0, 16(%rax,%ymm2,4) {%k1}
++// CHECK: vpscatterdd %ymm0, %gs:16(%eax,%ymm2,4) {%k1}
++
++vgatherpf0dps (%rax,%zmm2,4) {%k1}
++// CHECK: vgatherpf0dps %gs:(%eax,%zmm2,4) {%k1}
++
++vgatherdpd %xmm3, (,%xmm2,8), %xmm0
++// CHECK: vgatherdpd %xmm3, %gs:(%r14d,%xmm2,8), %xmm0
++
++vgatherdpd %xmm3, (%r14,%xmm2,8), %xmm0
++// CHECK: vgatherdpd %xmm3, %gs:(%r14d,%xmm2,8), %xmm0
++
++pushq %rax
++// CHECK: pushq %rax
++
++pushq (%rax)
++// CHECK: pushq %gs:(%eax)
++
++popq (%rax)
++// CHECK: popq %gs:(%eax)
++
++btq $3, (%rdi)
++// CHECK: btq $3, %gs:(%edi)
++
++lock btsq $3, (%rdi)
++// CHECK: lock btsq $3, %gs:(%edi)
+diff --git a/llvm/test/MC/X86/LFI/stack.s b/llvm/test/MC/X86/LFI/stack.s
+new file mode 100644
+index 0000000000000..31f9fc2e7e77b
+--- /dev/null
++++ b/llvm/test/MC/X86/LFI/stack.s
+@@ -0,0 +1,115 @@
++// RUN: llvm-mc -triple x86_64_lfi %s | FileCheck %s
++
++movq %rdi, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++addq $8, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: addl $8, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++subq $16, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: subl $16, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++addq %rax, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: addl %eax, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++andq $-16, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: andl $-16, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++orq $8, %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: orl $8, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++leaq 8(%rax), %rsp
++// CHECK:      .bundle_lock
++// CHECK-NEXT: leal 8(%rax), %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++movq (%rax), %rsp
++// CHECK:      movq %gs:(%eax), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: movl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++addq 8(%rdi), %rsp
++// CHECK:      movq %gs:8(%edi), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: addl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++andq (%rsp), %rsp
++// CHECK:      movq (%rsp), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: andl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++popq %rsp
++// CHECK:      popq %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: movl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++leave
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %ebp, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++// CHECK-NEXT: popq %rbp
++
++pushq %rax
++// CHECK: pushq %rax
++
++popq %rax
++// CHECK: popq %rax
++
++pushq %rsp
++// CHECK: pushq %rsp
++
++enter $16, $0
++// CHECK: enter $16, $0
++
++enter $16, $1
++// CHECK: enter $16, $1
++
++movq %fs:0, %rsp
++// CHECK:      movq 16(%r15), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: movl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++addq %fs:0, %rsp
++// CHECK:      movq 16(%r15), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: addl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
++
++movq %fs:(%rdi), %rsp
++// CHECK:      movq 16(%r15), %r11
++// CHECK-NEXT: movq %gs:(%r11d,%edi), %r11
++// CHECK-NEXT: .bundle_lock
++// CHECK-NEXT: movl %r11d, %esp
++// CHECK-NEXT: leaq (%rsp,%r14), %rsp
++// CHECK-NEXT: .bundle_unlock
+diff --git a/llvm/test/MC/X86/LFI/string.s b/llvm/test/MC/X86/LFI/string.s
+new file mode 100644
+index 0000000000000..217be7f24550e
+--- /dev/null
++++ b/llvm/test/MC/X86/LFI/string.s
+@@ -0,0 +1,74 @@
++// RUN: llvm-mc -triple x86_64_lfi %s | FileCheck %s
++
++stosq
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: stosq
++// CHECK-NEXT: .bundle_unlock
++
++stosb
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: stosb
++// CHECK-NEXT: .bundle_unlock
++
++movsq
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: movl %esi, %esi
++// CHECK-NEXT: leaq (%r14,%rsi), %rsi
++// CHECK-NEXT: movsq
++// CHECK-NEXT: .bundle_unlock
++
++cmpsl
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: movl %esi, %esi
++// CHECK-NEXT: leaq (%r14,%rsi), %rsi
++// CHECK-NEXT: cmpsl
++// CHECK-NEXT: .bundle_unlock
++
++scasb
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: scasb
++// CHECK-NEXT: .bundle_unlock
++
++lodsq
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %esi, %esi
++// CHECK-NEXT: leaq (%r14,%rsi), %rsi
++// CHECK-NEXT: lodsq
++// CHECK-NEXT: .bundle_unlock
++
++rep stosq
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: rep {{.*}}stosq
++// CHECK-NEXT: .bundle_unlock
++
++repne cmpsb
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: movl %esi, %esi
++// CHECK-NEXT: leaq (%r14,%rsi), %rsi
++// CHECK-NEXT: repne {{.*}}cmpsb
++// CHECK-NEXT: .bundle_unlock
++
++rep
++movsb
++// CHECK:      .bundle_lock
++// CHECK-NEXT: movl %edi, %edi
++// CHECK-NEXT: leaq (%r14,%rdi), %rdi
++// CHECK-NEXT: movl %esi, %esi
++// CHECK-NEXT: leaq (%r14,%rsi), %rsi
++// CHECK-NEXT: rep
++// CHECK-NEXT: movsb
++// CHECK-NEXT: .bundle_unlock
+diff --git a/llvm/test/MC/X86/LFI/thread-pointer.s b/llvm/test/MC/X86/LFI/thread-pointer.s
+index bc03b1e601af7..08eea47481649 100644
+--- a/llvm/test/MC/X86/LFI/thread-pointer.s
++++ b/llvm/test/MC/X86/LFI/thread-pointer.s
+@@ -14,83 +14,83 @@ addq %fs:0, %rax
+ 
+ movq %fs:(%rdi), %rax
+ // CHECK:      movq 16(%r15), %rax
+-// CHECK-NEXT: movq (%rax,%rdi), %rax
++// CHECK-NEXT: movq %gs:(%eax,%edi), %rax
+ 
+ movq %fs:(%rcx), %rdx
+ // CHECK:      movq 16(%r15), %rdx
+-// CHECK-NEXT: movq (%rdx,%rcx), %rdx
++// CHECK-NEXT: movq %gs:(%edx,%ecx), %rdx
+ 
+ // base == dest, falls back to %r11
+ movq %fs:(%rax), %rax
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: movq (%r11,%rax), %rax
++// CHECK-NEXT: movq %gs:(%r11d,%eax), %rax
+ 
+ movq %rax, %fs:(%rdi)
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: movq %rax, (%r11,%rdi)
++// CHECK-NEXT: movq %rax, %gs:(%r11d,%edi)
+ 
+ movq %fs:8(%rdi,%rsi,2), %rax
+ // CHECK:      movq 16(%r15), %rax
+ // CHECK-NEXT: leaq (%rax,%rdi), %rax
+-// CHECK-NEXT: movq 8(%rax,%rsi,2), %rax
++// CHECK-NEXT: movq %gs:8(%eax,%esi,2), %rax
+ 
+ movq %fs:(%rax,%rbx,4), %rcx
+ // CHECK:      movq 16(%r15), %rcx
+ // CHECK-NEXT: leaq (%rcx,%rax), %rcx
+-// CHECK-NEXT: movq (%rcx,%rbx,4), %rcx
++// CHECK-NEXT: movq %gs:(%ecx,%ebx,4), %rcx
+ 
+ movq %rax, %fs:8(%rdi,%rsi,2)
+ // CHECK:      movq 16(%r15), %r11
+ // CHECK-NEXT: leaq (%r11,%rdi), %r11
+-// CHECK-NEXT: movq %rax, 8(%r11,%rsi,2)
++// CHECK-NEXT: movq %rax, %gs:8(%r11d,%esi,2)
+ 
+ movq %fs:foo, %rax
+ // CHECK:      movq 16(%r15), %rax
+-// CHECK-NEXT: movq foo(%rax), %rax
++// CHECK-NEXT: movq %gs:foo(%eax), %rax
+ 
+ movq %fs:foo@TPOFF, %rax
+ // CHECK:      movq 16(%r15), %rax
+-// CHECK-NEXT: movq foo@TPOFF(%rax), %rax
++// CHECK-NEXT: movq %gs:foo@TPOFF(%eax), %rax
+ 
+ movq %fs:foo(%rdi), %rax
+ // CHECK:      movq 16(%r15), %rax
+-// CHECK-NEXT: movq foo(%rax,%rdi), %rax
++// CHECK-NEXT: movq %gs:foo(%eax,%edi), %rax
+ 
+ movq %fs:foo@TPOFF(%rdi,%rsi,2), %rax
+ // CHECK:      movq 16(%r15), %rax
+ // CHECK-NEXT: leaq (%rax,%rdi), %rax
+-// CHECK-NEXT: movq foo@TPOFF(%rax,%rsi,2), %rax
++// CHECK-NEXT: movq %gs:foo@TPOFF(%eax,%esi,2), %rax
+ 
+ movq %rcx, %fs:foo
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: movq %rcx, foo(%r11)
++// CHECK-NEXT: movq %rcx, %gs:foo(%r11d)
+ 
+ cmpq %fs:(%rdi), %rax
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: cmpq (%r11,%rdi), %rax
++// CHECK-NEXT: cmpq %gs:(%r11d,%edi), %rax
+ 
+ cmpq %fs:(%rbx,%rcx), %rax
+ // CHECK:      movq 16(%r15), %r11
+ // CHECK-NEXT: leaq (%r11,%rbx), %r11
+-// CHECK-NEXT: cmpq (%r11,%rcx), %rax
++// CHECK-NEXT: cmpq %gs:(%r11d,%ecx), %rax
+ 
+ cmpq %fs:8(%rdi,%rsi,2), %rax
+ // CHECK:      movq 16(%r15), %r11
+ // CHECK-NEXT: leaq (%r11,%rdi), %r11
+-// CHECK-NEXT: cmpq 8(%r11,%rsi,2), %rax
++// CHECK-NEXT: cmpq %gs:8(%r11d,%esi,2), %rax
+ 
+ subq %fs:(%rdi), %rax
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: subq (%r11,%rdi), %rax
++// CHECK-NEXT: subq %gs:(%r11d,%edi), %rax
+ 
+ cmoveq %fs:(%rdi), %rax
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: cmoveq (%r11,%rdi), %rax
++// CHECK-NEXT: cmoveq %gs:(%r11d,%edi), %rax
+ 
+ andnq %fs:(%rdi), %rax, %rbx
+ // CHECK:      movq 16(%r15), %rbx
+-// CHECK-NEXT: andnq (%rbx,%rdi), %rax, %rbx
++// CHECK-NEXT: andnq %gs:(%ebx,%edi), %rax, %rbx
+ 
+ andnq %fs:(%rdi), %rax, %rax
+ // CHECK:      movq 16(%r15), %r11
+-// CHECK-NEXT: andnq (%r11,%rdi), %rax, %rax
++// CHECK-NEXT: andnq %gs:(%r11d,%edi), %rax, %rax
+-- 
+2.56.0.611.g1030f0b940-goog
+

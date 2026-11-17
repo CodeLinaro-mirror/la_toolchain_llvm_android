@@ -1,0 +1,77 @@
+From 987ee202905055120a44348af86ca878c4f55722 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Wed, 21 Oct 2026 19:53:53 -0700
+Subject: [PATCH] [LFI][libunwind] Enable x86_64_lfi for compiler-rt and skip
+ reserved registers in libunwind (#232552)
+
+This enables `x86_64_lfi` as a CMake target in compiler-rt and skips
+LFI's reserved registers for libunwind's save/restore sequence.
+---
+ compiler-rt/cmake/builtin-config-ix.cmake | 2 +-
+ compiler-rt/lib/builtins/CMakeLists.txt   | 3 +++
+ libunwind/src/UnwindRegistersRestore.S    | 3 +++
+ libunwind/src/UnwindRegistersSave.S       | 3 +++
+ 4 files changed, 10 insertions(+), 1 deletion(-)
+
+diff --git a/compiler-rt/cmake/builtin-config-ix.cmake b/compiler-rt/cmake/builtin-config-ix.cmake
+index 082ade13c595a..a9b38620cbee8 100644
+--- a/compiler-rt/cmake/builtin-config-ix.cmake
++++ b/compiler-rt/cmake/builtin-config-ix.cmake
+@@ -83,7 +83,7 @@ set(ARM32 arm armhf armv4t armv5te armv6 armv6m armv7m armv7em armv7 armv7s armv
+ set(AVR avr)
+ set(HEXAGON hexagon)
+ set(X86 i386)
+-set(X86_64 x86_64)
++set(X86_64 x86_64 x86_64_lfi)
+ set(LOONGARCH64 loongarch64)
+ set(MIPS32 mips mipsel)
+ set(MIPS64 mips64 mips64el)
+diff --git a/compiler-rt/lib/builtins/CMakeLists.txt b/compiler-rt/lib/builtins/CMakeLists.txt
+index 838a9b8665630..ab9c707b3db44 100644
+--- a/compiler-rt/lib/builtins/CMakeLists.txt
++++ b/compiler-rt/lib/builtins/CMakeLists.txt
+@@ -438,6 +438,9 @@ if (NOT MSVC)
+   # Darwin x86_64 Haswell
+   set(x86_64h_SOURCES ${x86_64_SOURCES})
+ 
++  # x86_64 LFI
++  set(x86_64_lfi_SOURCES ${x86_64_SOURCES})
++
+   if (WIN32)
+     set(x86_64_SOURCES
+       ${x86_64_SOURCES}
+diff --git a/libunwind/src/UnwindRegistersRestore.S b/libunwind/src/UnwindRegistersRestore.S
+index b299bcd0a7594..6c9dcc48c309a 100644
+--- a/libunwind/src/UnwindRegistersRestore.S
++++ b/libunwind/src/UnwindRegistersRestore.S
+@@ -113,8 +113,11 @@ DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
+   movq   88(%rdi), %r11
+   movq   96(%rdi), %r12
+   movq  104(%rdi), %r13
++# Skip reloading r14/r15 under LFI; reserved by LFI ABI.
++#if !defined(__LFI__)
+   movq  112(%rdi), %r14
+   movq  120(%rdi), %r15
++#endif
+   # skip rflags
+   # skip cs
+   # skip fs
+diff --git a/libunwind/src/UnwindRegistersSave.S b/libunwind/src/UnwindRegistersSave.S
+index c51b5b8d17664..81d3200995289 100644
+--- a/libunwind/src/UnwindRegistersSave.S
++++ b/libunwind/src/UnwindRegistersSave.S
+@@ -145,8 +145,11 @@ DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+   movq  %r11, 88(PTR)
+   movq  %r12, 96(PTR)
+   movq  %r13,104(PTR)
++# Skip spilling r14/r15 under LFI; reserved by LFI ABI.
++#if !defined(__LFI__)
+   movq  %r14,112(PTR)
+   movq  %r15,120(PTR)
++#endif
+   movq  (%rsp),TMP
+   movq  TMP,128(PTR) # store return address as rip
+   # skip rflags
+-- 
+2.56.0.611.g1030f0b940-goog
+

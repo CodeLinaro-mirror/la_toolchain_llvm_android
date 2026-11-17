@@ -1,0 +1,244 @@
+From eb5b522d5bef7235d925d8c17a5b43d4f3acbb27 Mon Sep 17 00:00:00 2001
+From: Zachary Yedidia <zyedidia@gmail.com>
+Date: Mon, 16 Nov 2026 21:03:38 -0800
+Subject: [PATCH] [LFI] Use context register for runtime call offsets (#241549)
+
+Since all LFI targets use a context register, we can move the rtcall
+page to be offset from the context register instead of placed
+immediately before the sandbox (LFI used this design to avoid needing a
+context register in all configurations, a design we are no longer
+looking to support). This gives us a cleaner sandbox layout. The LFI
+runtime has support for ctxreg-based runtime calls.
+---
+ llvm/docs/LFI.md                              | 29 +++++++++++--------
+ .../MCTargetDesc/AArch64MCLFIRewriter.cpp     | 10 +++----
+ .../X86/MCTargetDesc/X86MCLFIRewriter.cpp     | 22 ++++++++------
+ llvm/test/MC/AArch64/LFI/sys.s                |  2 +-
+ llvm/test/MC/X86/LFI/syscall.s                |  2 +-
+ 5 files changed, 37 insertions(+), 28 deletions(-)
+
+diff --git a/llvm/docs/LFI.md b/llvm/docs/LFI.md
+index c456c93b0af8e..368df21d088b1 100644
+--- a/llvm/docs/LFI.md
++++ b/llvm/docs/LFI.md
+@@ -64,6 +64,11 @@ on AArch64 and `r15` on X86-64. The layout is as follows:
+ | 8 | 8 | Reserved for use by the LFI runtime. |
+ | 16 | 8 | Virtual thread pointer (used for TP access). |
+ 
++The runtime call table is stored directly below the context register block, so
++runtime call entrypoints are loaded from negative offsets from the context
++register. The table is read-only to the sandbox. The system call entrypoint is
++stored at offset -8.
++
+ ## Linker Support
+ 
+ In the initial version, LFI only supports static linking, and only supports
+@@ -436,11 +441,12 @@ and are not supported: the rewriter reports an error for them.
+ 
+ #### System instructions
+ 
+-System calls are rewritten into a sequence that loads the address of the first
+-runtime call entrypoint and jumps to it. The runtime call entrypoint table is
+-stored at a negative offset from the sandbox base, so it can be referenced by
+-`x27`. The rewrite also saves and restores the link register, since it is
+-used for branching into the runtime.
++System calls are rewritten into a sequence that loads the address of the
++system call runtime entrypoint and jumps to it. The runtime call entrypoint
++table is stored at a negative offset from the context register, so it can be
++referenced by `x25` (see [Context Register](#context-register)). The rewrite
++also saves and restores the link register, since it is used for branching into
++the runtime.
+ 
+ :::{list-table}
+ :header-rows: 1
+@@ -452,7 +458,7 @@ used for branching into the runtime.
+     ```
+   - ```gas
+     mov x26, x30
+-    ldur x30, [x27, #-8]
++    ldur x30, [x25, #-8]
+     blr x30
+     add x30, x27, w26, uxtw
+     ```
+@@ -599,8 +605,7 @@ The X86-64 LFI target is `x86_64_lfi`.
+ 
+ The X86-64 LFI target reserves the following registers:
+ 
+-- `r14`: always holds the sandbox base address. Also used as the runtime call
+-  table pointer (the runtime call table is stored at the sandbox base).
++- `r14`: always holds the sandbox base address.
+ - `gs`: always holds the sandbox base address (used as a segment register for
+   memory access sandboxing).
+ - `rsp`: always holds an address within the sandbox.
+@@ -895,9 +900,9 @@ access, which traps if it exits the sandbox, so they are not rewritten.
+ 
+ System calls are rewritten into a sequence that loads the return address into
+ the scratch register and jumps to the runtime call handler. The runtime call
+-handler table is stored at the address pointed to by `r14`. The `r11`
+-register stores the return address (marked by the label `.Ltmp` in the
+-block below).
++handler table is stored at a negative offset from the context register `r15`
++(see [Context Register](#context-register)). The `r11` register stores the
++return address (marked by the label `.Ltmp` in the block below).
+ 
+ :::{list-table}
+ :header-rows: 1
+@@ -909,7 +914,7 @@ block below).
+     ```
+   - ```gas
+     leaq .Ltmp(%rip), %r11
+-    jmpq *-8(%r14)
++    jmpq *-8(%r15)
+     .Ltmp:
+     ```
+ :::
+diff --git a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+index c8603ae3e6235..b3f391271ce34 100644
+--- a/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
++++ b/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MCLFIRewriter.cpp
+@@ -87,8 +87,8 @@ static constexpr MCRegister LFICtxReg = AArch64::X25;
+ // 64-bit loads), so a value of 2 means an actual byte offset of 16.
+ static constexpr unsigned LFITPOffset = 2;
+ 
+-// Byte offset from the sandbox base register where the syscall handler address
+-// is stored (negative because it is below the sandbox base).
++// Byte offset from the context register where the syscall handler address is
++// stored.
+ static constexpr int LFISyscallOffset = -8;
+ 
+ static bool isSyscall(const MCInst &Inst) {
+@@ -552,7 +552,7 @@ void AArch64MCLFIRewriter::rewriteAuthenticatedBranchOrCall(
+ // svc #0
+ // ->
+ // mov x26, x30
+-// ldur x30, [x27, #-8]
++// ldur x30, [x25, #-8]
+ // blr x30
+ // add x30, x27, w26, uxtw
+ void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
+@@ -560,10 +560,10 @@ void AArch64MCLFIRewriter::rewriteSyscall(const MCInst &, MCStreamer &Out,
+   // Save LR to scratch.
+   emitMov(LFIScratchReg, AArch64::LR, Out, STI);
+ 
+-  // Load syscall handler address from negative offset from sandbox base.
++  // Load syscall handler address from negative offset from context register.
+   emitInst(MCInstBuilder(AArch64::LDURXi)
+                .addReg(AArch64::LR)
+-               .addReg(LFIBaseReg)
++               .addReg(LFICtxReg)
+                .addImm(LFISyscallOffset),
+            Out, STI);
+ 
+diff --git a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
+index b052e2e22b808..7d1503abba260 100644
+--- a/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
++++ b/llvm/lib/Target/X86/MCTargetDesc/X86MCLFIRewriter.cpp
+@@ -28,7 +28,7 @@ using namespace llvm;
+ // LFI reserved registers.
+ static constexpr MCRegister LFIBaseReg = X86::R14;
+ static constexpr MCRegister LFIScratchReg = X86::R11;
+-static constexpr MCRegister LFITPReg = X86::R15;
++static constexpr MCRegister LFICtxReg = X86::R15;
+ 
+ // Segment register whose base always holds the sandbox base address.
+ static constexpr MCRegister LFIBaseSeg = X86::GS;
+@@ -37,6 +37,10 @@ static constexpr MCRegister LFIBaseSeg = X86::GS;
+ // thread pointer is stored.
+ static constexpr int TPOffset = 16;
+ 
++// Byte offset from the context register where the syscall handler address is
++// stored.
++static constexpr int SyscallOffset = -8;
++
+ static bool isPrefix(const MCInst &Inst, const MCInstrInfo &InstInfo) {
+   return X86II::isPrefix(InstInfo.get(Inst.getOpcode()).TSFlags);
+ }
+@@ -152,7 +156,7 @@ void X86::X86MCLFIRewriter::discardPrefixes() {
+ // ->
+ // .bundle_lock
+ // leaq .Ltmp(%rip), %r11
+-// jmpq *(%r14)
++// jmpq *-8(%r15)
+ // .Ltmp:
+ // .bundle_unlock
+ void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
+@@ -172,12 +176,12 @@ void X86::X86MCLFIRewriter::rewriteSyscall(const MCInst &Inst, MCStreamer &Out,
+           .addReg(X86::NoRegister),
+       STI);
+ 
+-  // jmpq *-8(%r14)
++  // jmpq *-8(%r15)
+   Out.emitInstruction(MCInstBuilder(X86::JMP64m)
+-                          .addReg(LFIBaseReg)
++                          .addReg(LFICtxReg)
+                           .addImm(1)
+                           .addReg(X86::NoRegister)
+-                          .addImm(-8)
++                          .addImm(SyscallOffset)
+                           .addReg(X86::NoRegister),
+                       STI);
+ 
+@@ -245,7 +249,7 @@ void X86::X86MCLFIRewriter::rewriteIndirectBranch(const MCInst &Inst,
+   } else {
+     Target = Inst.getOperand(0).getReg();
+ 
+-    if (Target == LFIBaseReg || Target == LFITPReg || Target == X86::RSP)
++    if (Target == LFIBaseReg || Target == LFICtxReg || Target == X86::RSP)
+       return error(Inst, "indirect branch through reserved register");
+   }
+ 
+@@ -327,7 +331,7 @@ static void emitTPLoad(MCRegister Reg, MCStreamer &Out,
+                        const MCSubtargetInfo &STI) {
+   Out.emitInstruction(MCInstBuilder(X86::MOV64rm)
+                           .addReg(Reg)
+-                          .addReg(LFITPReg)
++                          .addReg(LFICtxReg)
+                           .addImm(1)
+                           .addReg(X86::NoRegister)
+                           .addImm(TPOffset)
+@@ -374,7 +378,7 @@ void X86::X86MCLFIRewriter::rewriteFSAccess(const MCInst &Inst, MCStreamer &Out,
+   // runtime's thread-local block, so this access is safe.
+   if (!HasBase && !HasIndex && !HasDisp) {
+     MCInst Modified(Inst);
+-    Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(LFITPReg);
++    Modified.getOperand(MemIdx + X86::AddrBaseReg).setReg(LFICtxReg);
+     Modified.getOperand(MemIdx + X86::AddrDisp).setImm(TPOffset);
+     Modified.getOperand(MemIdx + X86::AddrSegmentReg).setReg(X86::NoRegister);
+     return emitWithPrefixes(Modified, Out, STI);
+@@ -906,7 +910,7 @@ void X86::X86MCLFIRewriter::doRewriteInst(const MCInst &Inst, MCStreamer &Out,
+     return error(Inst, "unsupported lock prefix");
+ 
+   if (mayModifyRegister(Inst, LFIBaseReg) ||
+-      mayModifyRegister(Inst, LFITPReg) || mayModifyRegister(Inst, LFIBaseSeg))
++      mayModifyRegister(Inst, LFICtxReg) || mayModifyRegister(Inst, LFIBaseSeg))
+     return error(Inst, "illegal modification of reserved LFI register");
+ 
+   if (isWriteSegmentBase(Inst.getOpcode()))
+diff --git a/llvm/test/MC/AArch64/LFI/sys.s b/llvm/test/MC/AArch64/LFI/sys.s
+index 045c333962537..2b2ee22b644f4 100644
+--- a/llvm/test/MC/AArch64/LFI/sys.s
++++ b/llvm/test/MC/AArch64/LFI/sys.s
+@@ -2,7 +2,7 @@
+ 
+ svc #0
+ // CHECK:      mov x26, x30
+-// CHECK-NEXT: ldur x30, [x27, #-8]
++// CHECK-NEXT: ldur x30, [x25, #-8]
+ // CHECK-NEXT: blr x30
+ // CHECK-NEXT: add x30, x27, w26, uxtw
+ 
+diff --git a/llvm/test/MC/X86/LFI/syscall.s b/llvm/test/MC/X86/LFI/syscall.s
+index 7b47bfe96f8ff..ddf5ad829fa22 100644
+--- a/llvm/test/MC/X86/LFI/syscall.s
++++ b/llvm/test/MC/X86/LFI/syscall.s
+@@ -3,6 +3,6 @@
+ syscall
+ // CHECK:      .bundle_lock
+ // CHECK-NEXT: leaq .Ltmp0(%rip), %r11
+-// CHECK-NEXT: jmpq *-8(%r14)
++// CHECK-NEXT: jmpq *-8(%r15)
+ // CHECK-NEXT: .Ltmp0:
+ // CHECK-NEXT: .bundle_unlock
+-- 
+2.56.0.611.g1030f0b940-goog
+
