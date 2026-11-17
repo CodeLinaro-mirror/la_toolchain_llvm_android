@@ -1,0 +1,89 @@
+From 2517f566169acbd155f38d87aa8ad56d91c4fca9 Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Tue, 17 Nov 2026 12:59:02 -0800
+Subject: [PATCH] RuntimeLibcalls: Allow fp128 sincosl on x86_64-linux-android
+ (#242486)
+
+On x86_64-linux-android, long double is fp128 rather than x87 fp80 as
+on GNU targets, so sincosl provides SINCOS_F128 rather than SINCOS_F80.
+Remove the x86 LibraryExclusion and x87-only guard for sincosl to fix
+`error: no libcall available for fsincos`.
+
+Link:
+https://android.googlesource.com/platform/bionic/+/refs/heads/main/libm/upstream-freebsd/lib/msun/src/s_sincosl.c#47
+Assisted-by: Gemini
+---
+ llvm/include/llvm/IR/RuntimeLibcalls.td       |  3 +--
+ .../CodeGen/X86/fp128-libcalls-longdouble.ll  | 22 +++++++++++++++++++
+ .../CodeGen/X86/fp80-math-no-libcall-error.ll |  7 ++++++
+ 3 files changed, 30 insertions(+), 2 deletions(-)
+
+diff --git a/llvm/include/llvm/IR/RuntimeLibcalls.td b/llvm/include/llvm/IR/RuntimeLibcalls.td
+index d1e2e74421647..141ff178610f4 100644
+--- a/llvm/include/llvm/IR/RuntimeLibcalls.td
++++ b/llvm/include/llvm/IR/RuntimeLibcalls.td
+@@ -3687,8 +3687,7 @@ def X86SystemLibrary
+       (add LibraryRef<CompilerRtLibgcc,
+                       !listconcat(WindowsDivRemMulLibcallOverrides,
+                                   [__powitf2_f128])>,
+-           // x86 has no fp128 sincosl, only the x87 one.
+-           LibraryRef<Libm, [sincosl_f128]>,
++           Libm,
+            LibraryRef<Libc, !listconcat(MemChkLibcalls, [bzero])>,
+            ExceptionRuntime, SafeStackRuntime)>;
+ 
+diff --git a/llvm/test/CodeGen/X86/fp128-libcalls-longdouble.ll b/llvm/test/CodeGen/X86/fp128-libcalls-longdouble.ll
+index 767da1ee190f1..90e970d026735 100644
+--- a/llvm/test/CodeGen/X86/fp128-libcalls-longdouble.ll
++++ b/llvm/test/CodeGen/X86/fp128-libcalls-longdouble.ll
+@@ -98,6 +98,27 @@ define fp128 @Test128Ldexp(fp128 %x, i32 %exp) nounwind {
+   ret fp128 %r
+ }
+ 
++define dso_local void @Test128SinCos(fp128 %x, ptr %s, ptr %c) nounwind {
++; ANDROID-LABEL: Test128SinCos:
++; ANDROID:       # %bb.0:
++; ANDROID-NEXT:    pushq %rbx
++; ANDROID-NEXT:    subq $16, %rsp
++; ANDROID-NEXT:    movq %rsi, %rbx
++; ANDROID-NEXT:    movq %rsp, %rsi
++; ANDROID-NEXT:    callq sincosl@PLT
++; ANDROID-NEXT:    movaps (%rsp), %xmm0
++; ANDROID-NEXT:    movaps %xmm0, (%rbx)
++; ANDROID-NEXT:    addq $16, %rsp
++; ANDROID-NEXT:    popq %rbx
++; ANDROID-NEXT:    retq
++  %sincos = tail call { fp128, fp128 } @llvm.sincos.f128(fp128 %x)
++  %sin = extractvalue { fp128, fp128 } %sincos, 0
++  %cos = extractvalue { fp128, fp128 } %sincos, 1
++  store fp128 %sin, ptr %s, align 16
++  store fp128 %cos, ptr %c, align 16
++  ret void
++}
++
+ declare fp128 @llvm.maxnum.f128(fp128, fp128)
+ declare fp128 @llvm.minnum.f128(fp128, fp128)
+ declare fp128 @llvm.sqrt.f128(fp128)
+@@ -105,3 +126,4 @@ declare fp128 @llvm.sin.f128(fp128)
+ declare fp128 @llvm.pow.f128(fp128, fp128)
+ declare fp128 @llvm.rint.f128(fp128)
+ declare fp128 @llvm.ldexp.f128.i32(fp128, i32)
++declare { fp128, fp128 } @llvm.sincos.f128(fp128)
+diff --git a/llvm/test/CodeGen/X86/fp80-math-no-libcall-error.ll b/llvm/test/CodeGen/X86/fp80-math-no-libcall-error.ll
+index 38991855dcb5b..4768f078b9012 100644
+--- a/llvm/test/CodeGen/X86/fp80-math-no-libcall-error.ll
++++ b/llvm/test/CodeGen/X86/fp80-math-no-libcall-error.ll
+@@ -102,3 +102,10 @@ define { x86_fp80, i32 } @test_frexp(x86_fp80 %x) nounwind {
+   %r = call { x86_fp80, i32 } @llvm.frexp.f80.i32(x86_fp80 %x)
+   ret { x86_fp80, i32 } %r
+ }
++
++; CHECK: error: no libcall available for fcos
++; CHECK: error: no libcall available for fsin
++define { x86_fp80, x86_fp80 } @test_sincos(x86_fp80 %x) nounwind {
++  %r = call { x86_fp80, x86_fp80 } @llvm.sincos.f80(x86_fp80 %x)
++  ret { x86_fp80, x86_fp80 } %r
++}
+-- 
+2.56.0.611.g1030f0b940-goog
+

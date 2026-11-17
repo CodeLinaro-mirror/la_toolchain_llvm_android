@@ -1094,6 +1094,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[BACKPORT] RuntimeLibcalls: Allow fp128 sincosl on x86_64-linux-android (#242486)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/2517f566169acbd155f38d87aa8ad56d91c4fca9.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 647159
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
