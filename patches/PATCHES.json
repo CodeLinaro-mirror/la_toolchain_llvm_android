@@ -1178,6 +1178,20 @@
     {
         "metadata": {
             "info": [],
+            "title": "[UPSTREAM] [libc++] Destroy the elements of a vector in reverse order (#243091)"
+        },
+        "platforms": [
+            "android"
+        ],
+        "rel_patch_path": "cherry/ca41fe006f5a5eb9c769db118e08a2d24f894ad5.patch",
+        "version_range": {
+            "from": 639965,
+            "until": 647338
+        }
+    },
+    {
+        "metadata": {
+            "info": [],
             "title": "Increase max allocation size to allow BOLTing clang and rustc"
         },
         "platforms": [
