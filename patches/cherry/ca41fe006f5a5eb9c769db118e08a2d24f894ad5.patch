@@ -1,0 +1,142 @@
+From ca41fe006f5a5eb9c769db118e08a2d24f894ad5 Mon Sep 17 00:00:00 2001
+From: Nikolas Klauser <nikolasklauser@berlin.de>
+Date: Wed, 18 Nov 2026 15:51:47 +0100
+Subject: [PATCH] [libc++] Destroy the elements of a vector in reverse order
+ (#243091)
+
+While the destruction order of the elements in a vector isn't prescribed
+by the standard, a lot of programs rely on the elements being destroyed
+in reverse order. This assumption was broken by #217631. Since there is
+no other reason to prefer a particular direction, users being broken by
+this is a good reason to undo the change in behaviour.
+
+This adds a test in `libcxx/`, since it's simply documenting the current
+behaviour to avoid changing it accidentally. We may change the behaviour
+in the future if there is a reason to do so.
+---
+ libcxx/include/__memory/destroy.h             |  8 +++
+ .../__memory/uninitialized_algorithms.h       |  3 +-
+ libcxx/include/__vector/vector.h              |  2 +-
+ .../sequences/vector/destroy.pass.cpp         | 57 +++++++++++++++++++
+ 4 files changed, 67 insertions(+), 3 deletions(-)
+ create mode 100644 libcxx/test/libcxx/containers/sequences/vector/destroy.pass.cpp
+
+diff --git a/libcxx/include/__memory/destroy.h b/libcxx/include/__memory/destroy.h
+index 69a252ba1331..90882f63ac0d 100644
+--- a/libcxx/include/__memory/destroy.h
++++ b/libcxx/include/__memory/destroy.h
+@@ -50,6 +50,14 @@ __allocator_destroy(_Alloc& __alloc, _Iter __first, _Sent __last) {
+     allocator_traits<_Alloc>::destroy(__alloc, std::addressof(*__first));
+ }
+ 
++template <class _Alloc, class _Iter>
++_LIBCPP_CONSTEXPR_SINCE_CXX20 void __allocator_destroy_backward(_Alloc& __alloc, _Iter __first, _Iter __last) {
++  while (__first != __last) {
++    --__last;
++    allocator_traits<_Alloc>::destroy(__alloc, std::addressof(*__last));
++  }
++}
++
+ #if _LIBCPP_STD_VER >= 17
+ template <class _ForwardIterator>
+ _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX20 void destroy(_ForwardIterator __first, _ForwardIterator __last) {
+diff --git a/libcxx/include/__memory/uninitialized_algorithms.h b/libcxx/include/__memory/uninitialized_algorithms.h
+index 630afee426b3..ca464719fde6 100644
+--- a/libcxx/include/__memory/uninitialized_algorithms.h
++++ b/libcxx/include/__memory/uninitialized_algorithms.h
+@@ -15,7 +15,6 @@
+ #include <__config>
+ #include <__fwd/memory.h>
+ #include <__iterator/iterator_traits.h>
+-#include <__iterator/reverse_iterator.h>
+ #include <__memory/addressof.h>
+ #include <__memory/allocator_traits.h>
+ #include <__memory/construct_at.h>
+@@ -371,7 +370,7 @@ public:
+       : __alloc_(__alloc), __first_(__first), __last_(__last) {}
+ 
+   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR_SINCE_CXX14 void operator()() const {
+-    std::__allocator_destroy(__alloc_, std::reverse_iterator<_Iter>(__last_), std::reverse_iterator<_Iter>(__first_));
++    std::__allocator_destroy_backward(__alloc_, __first_, __last_);
+   }
+ 
+ private:
+diff --git a/libcxx/include/__vector/vector.h b/libcxx/include/__vector/vector.h
+index f47bd7690fcb..407834d822e8 100644
+--- a/libcxx/include/__vector/vector.h
++++ b/libcxx/include/__vector/vector.h
+@@ -772,7 +772,7 @@ private:
+ 
+   _LIBCPP_CONSTEXPR_SINCE_CXX20 _LIBCPP_HIDE_FROM_ABI void __destruct_at_end(pointer __new_last) _NOEXCEPT {
+     size_type __old_size = size();
+-    std::__allocator_destroy(__layout_.__alloc(), __new_last, __layout_.__end_ptr());
++    std::__allocator_destroy_backward(__layout_.__alloc(), __new_last, __layout_.__end_ptr());
+     __layout_.__set_bound_using_pointer(__new_last);
+     __annotate_shrink(__old_size);
+   }
+diff --git a/libcxx/test/libcxx/containers/sequences/vector/destroy.pass.cpp b/libcxx/test/libcxx/containers/sequences/vector/destroy.pass.cpp
+new file mode 100644
+index 000000000000..f0f875df6fb8
+--- /dev/null
++++ b/libcxx/test/libcxx/containers/sequences/vector/destroy.pass.cpp
+@@ -0,0 +1,57 @@
++//===----------------------------------------------------------------------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++// Ensure that all the elements in the vector are destroyed in reverse order on destruction.
++
++// UNSUPPORTED: c++03
++
++#include <algorithm>
++#include <array>
++#include <cassert>
++#include <cstddef>
++#include <vector>
++
++#include "test_macros.h"
++
++struct DestroyTracker {
++  TEST_CONSTEXPR_CXX20 DestroyTracker(size_t& tracker) : index_(tracker++), tracker_(tracker) {}
++
++  TEST_CONSTEXPR_CXX20 DestroyTracker(const DestroyTracker& other)
++      : index_(other.tracker_++), tracker_(other.tracker_) {}
++
++  TEST_CONSTEXPR_CXX20 DestroyTracker& operator=(const DestroyTracker&) { return *this; }
++  TEST_CONSTEXPR_CXX20 ~DestroyTracker() {
++    --tracker_;
++    assert(tracker_ == index_);
++  }
++
++  size_t index_;
++  size_t& tracker_;
++};
++
++TEST_CONSTEXPR_CXX20 bool test() {
++  size_t tracker = 0;
++  {
++    std::vector<DestroyTracker> vec;
++    vec.reserve(10);
++    for (size_t i = 0; i != 10; ++i)
++      vec.emplace_back(tracker);
++  }
++  assert(tracker == 0);
++
++  return true;
++}
++
++int main(int, char**) {
++  test();
++#if TEST_STD_VER >= 20
++  static_assert(test());
++#endif
++
++  return 0;
++}
+-- 
+2.56.1.703.gf848ed807c-goog
+
